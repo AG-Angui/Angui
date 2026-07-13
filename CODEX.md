@@ -7,7 +7,7 @@
 - 项目名称：安归。
 - 场景：面向失智老人走失搜救的 AI + 地图协同。
 - 当前阶段：MVP 工程初始化；React 前端应用壳和 Rust/Actix Web 健康检查 API 已可运行。
-- 前端：`frontend/`，React 19 + TypeScript + Vite。
+- 前端：`frontend/`，React 19 + TypeScript + Vite + HeroUI 3 + Tailwind CSS 4。
 - 后端：仓库根目录，Rust 2024 + Actix Web；不要重新创建 `backend/` 目录。
 - 产品需求：[docs/PRODUCT.md](./docs/PRODUCT.md)。
 - 文档入口：[docs/README.md](./docs/README.md)。
@@ -20,7 +20,7 @@
 2. 检查仓库结构、已有改动和适用的代理说明文件。
 3. 确认请求属于文档、原型、实现、诊断还是发布工作，不擅自扩大范围。
 4. 涉及权限、隐私、定位、真实数据、AI 决策或对外分发时，先阅读 `docs/SECURITY_AND_PRIVACY.md` 和 `DISTRIBUTION.md`。
-5. 使用既定的 React/Vite 与 Rust/Actix Web 技术栈；数据库、AI、地图等尚未决定的部分优先实现框架无关的接口约束，或明确列出假设。
+5. 使用既定的 React/Vite/HeroUI/Tailwind 与 Rust/Actix Web 技术栈；数据库、AI、地图等尚未决定的部分优先实现框架无关的接口约束，或明确列出假设。
 
 ## 3. 需求优先级
 

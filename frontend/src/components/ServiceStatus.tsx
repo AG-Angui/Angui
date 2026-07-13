@@ -1,4 +1,5 @@
-import { CircleAlert, CircleCheck, LoaderCircle, RefreshCw } from 'lucide-react'
+import { Button, Chip, Spinner, Tooltip } from '@heroui/react'
+import { CircleAlert, CircleCheck, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { getHealth, type HealthResponse } from '../api/health'
 
@@ -33,39 +34,44 @@ export function ServiceStatus({ compact = false }: ServiceStatusProps) {
     void checkHealth()
   }, [checkHealth])
 
-  const content = {
-    checking: {
-      icon: <LoaderCircle className="status-spinner" size={16} aria-hidden="true" />,
-      label: '正在连接后端',
-      className: 'service-checking',
-    },
-    online: {
-      icon: <CircleCheck size={16} aria-hidden="true" />,
-      label: `服务在线${state.status === 'online' && !compact ? ` · v${state.health.version}` : ''}`,
-      className: 'service-online',
-    },
-    offline: {
-      icon: <CircleAlert size={16} aria-hidden="true" />,
-      label: '后端未连接',
-      className: 'service-offline',
-    },
-  }[state.status]
+  if (state.status === 'checking') {
+    return (
+      <Chip color="accent" size="sm" variant="soft">
+        <Spinner size="sm" color="accent" aria-hidden="true" />
+        <Chip.Label>正在连接后端</Chip.Label>
+      </Chip>
+    )
+  }
+
+  if (state.status === 'online') {
+    return (
+      <Chip color="success" size="sm" variant="soft">
+        <CircleCheck size={15} aria-hidden="true" />
+        <Chip.Label>
+          服务在线{compact ? '' : ` · v${state.health.version}`}
+        </Chip.Label>
+      </Chip>
+    )
+  }
 
   return (
-    <div className={`service-status ${content.className}`} role="status">
-      {content.icon}
-      <span>{content.label}</span>
-      {state.status === 'offline' && (
-        <button
-          type="button"
-          className="icon-button"
-          onClick={() => void checkHealth()}
+    <div className="flex items-center gap-1.5" role="status">
+      <Chip color="danger" size="sm" variant="soft">
+        <CircleAlert size={15} aria-hidden="true" />
+        <Chip.Label>后端未连接</Chip.Label>
+      </Chip>
+      <Tooltip delay={300}>
+        <Button
+          isIconOnly
+          size="sm"
+          variant="ghost"
+          onPress={() => void checkHealth()}
           aria-label="重新检查后端连接"
-          title="重新检查后端连接"
         >
           <RefreshCw size={15} aria-hidden="true" />
-        </button>
-      )}
+        </Button>
+        <Tooltip.Content>重新检查后端连接</Tooltip.Content>
+      </Tooltip>
     </div>
   )
 }

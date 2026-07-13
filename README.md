@@ -45,7 +45,7 @@
 
 ## 技术架构
 
-- 前端：React 19 + TypeScript + Vite，位于 `frontend/`。
+- 前端：React 19 + TypeScript + Vite + HeroUI 3 + Tailwind CSS 4，位于 `frontend/`。
 - 后端：Rust 2024 + Actix Web，位于仓库根目录的 `src/`。
 - 当前接口：`GET /api/health`，用于前后端连接检查。
 - 数据：尚未接入；MVP 可评估 SQLite，后续评估 PostgreSQL，文件可评估对象存储。

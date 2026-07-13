@@ -1,6 +1,14 @@
 # 安归前端
 
-React + TypeScript + Vite 前端，位于仓库的 `frontend/` 目录。当前包含多角色应用壳、响应式导航、工作区空状态以及后端健康检查联调。
+React + TypeScript + Vite 前端，位于仓库的 `frontend/` 目录。组件与可访问交互使用 HeroUI 3，布局和响应式样式使用 Tailwind CSS 4。当前包含多角色应用壳、响应式导航、工作区空状态以及后端健康检查联调。
+
+## UI 基线
+
+- HeroUI：卡片、状态标签、按钮、加载状态和 Tooltip。
+- Tailwind CSS：页面布局、响应式断点、间距、颜色和排版。
+- Lucide React：导航、指标和空状态图标。
+- React Router：总览、家属端、指挥端和志愿者端路由。
+- 品牌标识：直接复用仓库根目录 `assets/brand/angui-mark.svg`。
 
 ## 运行
 
