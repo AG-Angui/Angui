@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">安归仓库社交预览</title>
+  <desc id="description">安归品牌标识与面向失智老人走失搜救的 AI 地图协同系统介绍。</desc>
+  <rect width="1280" height="640" fill="#F5F7F8"/>
+  <path d="M0 0h18v640H0z" fill="#176B58"/>
+
+  <g transform="translate(104 112) scale(.40625)">
+    <rect x="32" y="32" width="960" height="960" rx="224" fill="#176B58"/>
+    <path
+      fill="#FFFFFF"
+      d="M512 128c-187.8 0-340 148.6-340 332 0 244.2 270.8 430.7 318.8 461.5a39.4 39.4 0 0 0 42.4 0C581.2 890.7 852 704.2 852 460c0-183.4-152.2-332-340-332Z"
+    />
+    <circle cx="512" cy="452" r="194" fill="#176B58"/>
+    <path
+      fill="#FFFFFF"
+      d="m512 302-166 137.7a24 24 0 0 0 15.3 42.5H388V598a30 30 0 0 0 30 30h188a30 30 0 0 0 30-30V482.2h26.7a24 24 0 0 0 15.3-42.5L512 302Z"
+    />
+    <rect x="484" y="510" width="56" height="118" rx="18" fill="#F4A261"/>
+    <circle cx="526" cy="569" r="7" fill="#176B58"/>
+  </g>
+
+  <g font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif">
+    <text x="570" y="246" fill="#176B58" font-size="24" font-weight="700" letter-spacing="0">AI + 地图协同搜救系统</text>
+    <text x="566" y="366" fill="#182230" font-size="116" font-weight="800" letter-spacing="0">安归</text>
+    <text x="570" y="432" fill="#475467" font-size="30" font-weight="600" letter-spacing="0">让线索更清楚，让协同更安全</text>
+    <text x="570" y="486" fill="#667085" font-size="22" font-weight="400" letter-spacing="0">面向失智老人走失搜救的 AI + 地图协同系统</text>
+  </g>
+</svg>

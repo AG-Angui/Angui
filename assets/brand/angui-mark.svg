@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">安归品牌标识</title>
+  <desc id="description">绿色背景上的白色定位标记，中心是一座带暖色门的房屋，象征守护、定位与平安归家。</desc>
+  <rect width="1024" height="1024" fill="#176B58"/>
+  <path
+    fill="#FFFFFF"
+    d="M512 128c-187.8 0-340 148.6-340 332 0 244.2 270.8 430.7 318.8 461.5a39.4 39.4 0 0 0 42.4 0C581.2 890.7 852 704.2 852 460c0-183.4-152.2-332-340-332Z"
+  />
+  <circle cx="512" cy="452" r="194" fill="#176B58"/>
+  <path
+    fill="#FFFFFF"
+    d="m512 302-166 137.7a24 24 0 0 0 15.3 42.5H388V598a30 30 0 0 0 30 30h188a30 30 0 0 0 30-30V482.2h26.7a24 24 0 0 0 15.3-42.5L512 302Z"
+  />
+  <rect x="484" y="510" width="56" height="118" rx="18" fill="#F4A261"/>
+  <circle cx="526" cy="569" r="7" fill="#176B58"/>
+</svg>

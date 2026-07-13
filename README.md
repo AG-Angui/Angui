@@ -19,6 +19,7 @@
 - 行为准则：[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 - 分发规范：[DISTRIBUTION.md](./DISTRIBUTION.md)
 - Codex 协作说明：[CODEX.md](./CODEX.md)
+- 品牌图标与仓库图像：[assets/brand/README.md](./assets/brand/README.md)
 
 ## MVP 场景
 
