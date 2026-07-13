@@ -21,6 +21,7 @@
 - 行为准则：[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 - 分发规范：[DISTRIBUTION.md](./DISTRIBUTION.md)
 - Codex 协作说明：[CODEX.md](./CODEX.md)
+- CI、AI 评审与分支预览配置：[.github/WORKFLOWS.md](./.github/WORKFLOWS.md)
 - 品牌图标与仓库图像：[assets/brand/README.md](./assets/brand/README.md)
 
 ## MVP 场景
@@ -121,6 +122,12 @@ npm run migrate:status
 这些命令都读取 `DATABASE_URL`。后端配置示例见 `.env.example`，前端配置示例见 `frontend/.env.example`。程序读取系统环境变量，不会自动加载 `.env` 文件。
 
 当前 API 中的 `demo:family` 与 `demo:commander` 仅是写入审计事件的开发占位身份，不是正式认证或授权机制。不要把它们用于真实数据或对外环境。
+
+## 自动化与分支预览
+
+GitHub Actions 已配置 Rust/前端质量门禁、PostgreSQL/MySQL 迁移检查、可选 Gemini PR 评审、可选本地 OpenAI-compatible API 评审，以及可选 GHCR 分支镜像和远程预览。镜像构建与部署默认关闭，只有设置对应仓库变量后才会运行；远程部署还需要明确配置 SSH/GHCR 凭据。详细变量、密钥、配额和自托管 runner 边界见 [.github/WORKFLOWS.md](./.github/WORKFLOWS.md)。
+
+预览容器会先显式运行 `migration up`，成功后才启动 API；应用本身仍不会自动修改数据库结构。
 
 任何真实密钥、真实案件数据和个人信息都不得提交到仓库。
 

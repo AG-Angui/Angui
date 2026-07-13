@@ -1,0 +1,247 @@
+name: preview
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  delete:
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+concurrency:
+  group: preview-${{ github.event.workflow_run.head_branch || github.event.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (vars.PREVIEW_BUILD_ENABLED == 'true' || vars.PREVIEW_DEPLOY_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      api_image: ${{ steps.meta.outputs.api_image }}
+      web_image: ${{ steps.meta.outputs.web_image }}
+      preview_slug: ${{ steps.meta.outputs.preview_slug }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # Runtime packaging stays trusted; application artifacts come from
+          # the successful CI run identified below.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Download backend artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: angui-linux-${{ github.event.workflow_run.head_sha }}
+          path: .preview/backend
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: angui-frontend-${{ github.event.workflow_run.head_sha }}
+          path: .preview/frontend
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Compute image tags
+        id: meta
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          slug="$(printf '%s' "${HEAD_BRANCH}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-48)"
+          if [ -z "${slug}" ]; then
+            slug="branch"
+          fi
+          short_sha="${HEAD_SHA:0:12}"
+          {
+            echo "preview_slug=${slug}"
+            echo "api_image=ghcr.io/${repository}-api:sha-${short_sha}"
+            echo "web_image=ghcr.io/${repository}-web:sha-${short_sha}"
+            echo "api_branch_image=ghcr.io/${repository}-api:branch-${slug}"
+            echo "web_branch_image=ghcr.io/${repository}-web:branch-${slug}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build and push backend
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: deploy/preview/Dockerfile.backend
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.api_image }}
+            ${{ steps.meta.outputs.api_branch_image }}
+          cache-from: type=gha,scope=angui-backend
+          cache-to: type=gha,mode=max,scope=angui-backend
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: deploy/preview/Dockerfile.frontend
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.web_image }}
+            ${{ steps.meta.outputs.web_branch_image }}
+          cache-from: type=gha,scope=angui-frontend
+          cache-to: type=gha,mode=max,scope=angui-frontend
+
+  deploy:
+    needs: build
+    if: needs.build.result == 'success' && vars.PREVIEW_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: preview
+    steps:
+      # Deployment commands and Compose stay on the trusted default branch.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Prepare preview metadata
+        id: preview
+        shell: bash
+        env:
+          PREVIEW_SLUG: ${{ needs.build.outputs.preview_slug }}
+          PREVIEW_BASE_PORT: ${{ vars.PREVIEW_BASE_PORT || '20000' }}
+          PREVIEW_PUBLIC_HOST: ${{ vars.PREVIEW_PUBLIC_HOST }}
+          PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'http' }}
+          DEPLOY_HOST: ${{ secrets.PREVIEW_SSH_HOST }}
+        run: |
+          set -euo pipefail
+          hash="$(printf '%s' "${PREVIEW_SLUG}" | cksum | awk '{print $1}')"
+          port="$((PREVIEW_BASE_PORT + hash % 10000))"
+          public_host="${PREVIEW_PUBLIC_HOST:-${DEPLOY_HOST}}"
+          url="${PREVIEW_SCHEME}://${public_host}:${port}"
+          {
+            echo "port=${port}"
+            echo "url=${url}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PREVIEW_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PREVIEW_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PREVIEW_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_HOST}"
+          test -n "${SSH_PRIVATE_KEY}"
+          install -m 700 -d "${HOME}/.ssh"
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > "${HOME}/.ssh/id_ed25519"
+          chmod 600 "${HOME}/.ssh/id_ed25519"
+          ssh-keyscan -p "${SSH_PORT}" -H "${SSH_HOST}" >> "${HOME}/.ssh/known_hosts"
+
+      - name: Deploy preview
+        shell: bash
+        env:
+          API_IMAGE: ${{ needs.build.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.build.outputs.web_image }}
+          PREVIEW_SLUG: ${{ needs.build.outputs.preview_slug }}
+          PREVIEW_PORT: ${{ steps.preview.outputs.port }}
+          PREVIEW_ORIGIN: ${{ steps.preview.outputs.url }}
+          SSH_HOST: ${{ secrets.PREVIEW_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PREVIEW_SSH_PORT || '22' }}
+          SSH_USER: ${{ secrets.PREVIEW_SSH_USER }}
+          GHCR_USERNAME: ${{ secrets.PREVIEW_GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.PREVIEW_GHCR_TOKEN }}
+          PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/opt/angui-previews' }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_USER}"
+          test -n "${GHCR_USERNAME}"
+          test -n "${GHCR_TOKEN}"
+          remote="${SSH_USER}@${SSH_HOST}"
+          remote_dir="${PREVIEW_ROOT}/${PREVIEW_SLUG}"
+
+          printf '%s' "${GHCR_TOKEN}" | ssh -p "${SSH_PORT}" "${remote}" \
+            "docker login ghcr.io --username '${GHCR_USERNAME}' --password-stdin"
+          ssh -p "${SSH_PORT}" "${remote}" "mkdir -p '${remote_dir}'"
+          scp -P "${SSH_PORT}" deploy/preview/compose.yml "${remote}:${remote_dir}/compose.yml"
+
+          {
+            printf 'API_IMAGE=%s\n' "${API_IMAGE}"
+            printf 'WEB_IMAGE=%s\n' "${WEB_IMAGE}"
+            printf 'PREVIEW_PORT=%s\n' "${PREVIEW_PORT}"
+            printf 'PREVIEW_ORIGIN=%s\n' "${PREVIEW_ORIGIN}"
+          } > preview.env
+          scp -P "${SSH_PORT}" preview.env "${remote}:${remote_dir}/.env"
+
+          ssh -p "${SSH_PORT}" "${remote}" \
+            "cd '${remote_dir}' && docker compose --env-file .env pull && docker compose --env-file .env up -d --remove-orphans"
+          ssh -p "${SSH_PORT}" "${remote}" \
+            "for attempt in \$(seq 1 30); do curl -fsS 'http://127.0.0.1:${PREVIEW_PORT}/healthz' && exit 0; sleep 2; done; docker compose -f '${remote_dir}/compose.yml' --env-file '${remote_dir}/.env' logs; exit 1"
+
+      - name: Write preview URL
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+        run: echo "Preview deployed at ${PREVIEW_URL}" >> "${GITHUB_STEP_SUMMARY}"
+
+  cleanup:
+    if: >-
+      github.event_name == 'delete' &&
+      github.event.ref_type == 'branch' &&
+      vars.PREVIEW_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Compute preview slug
+        id: meta
+        shell: bash
+        env:
+          DELETED_BRANCH: ${{ github.event.ref }}
+        run: |
+          slug="$(printf '%s' "${DELETED_BRANCH}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-48)"
+          echo "preview_slug=${slug:-branch}" >> "${GITHUB_OUTPUT}"
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PREVIEW_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PREVIEW_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PREVIEW_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "${HOME}/.ssh"
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > "${HOME}/.ssh/id_ed25519"
+          chmod 600 "${HOME}/.ssh/id_ed25519"
+          ssh-keyscan -p "${SSH_PORT}" -H "${SSH_HOST}" >> "${HOME}/.ssh/known_hosts"
+
+      - name: Stop deleted branch preview
+        shell: bash
+        env:
+          PREVIEW_SLUG: ${{ steps.meta.outputs.preview_slug }}
+          SSH_HOST: ${{ secrets.PREVIEW_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PREVIEW_SSH_PORT || '22' }}
+          SSH_USER: ${{ secrets.PREVIEW_SSH_USER }}
+          PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/opt/angui-previews' }}
+        run: |
+          set -euo pipefail
+          remote="${SSH_USER}@${SSH_HOST}"
+          remote_dir="${PREVIEW_ROOT}/${PREVIEW_SLUG}"
+          ssh -p "${SSH_PORT}" "${remote}" \
+            "if [ -f '${remote_dir}/compose.yml' ]; then cd '${remote_dir}' && docker compose --env-file .env down --volumes --remove-orphans; fi"

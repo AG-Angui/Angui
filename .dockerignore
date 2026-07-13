@@ -1,0 +1,12 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+target
+frontend/node_modules
+frontend/dist
+data/*
+!data/.gitkeep
+docs
+*.md

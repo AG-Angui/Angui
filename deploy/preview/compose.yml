@@ -1,0 +1,37 @@
+services:
+  migrate:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    restart: "no"
+    command: ["migration", "up"]
+    environment:
+      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - angui-data:/app/data
+
+  api:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ANGUI_HOST: 0.0.0.0
+      ANGUI_PORT: 8080
+      ANGUI_FRONTEND_ORIGIN: ${PREVIEW_ORIGIN:?PREVIEW_ORIGIN is required}
+      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - angui-data:/app/data
+
+  web:
+    image: ${WEB_IMAGE:?WEB_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - ${PREVIEW_BIND_ADDRESS:-0.0.0.0}:${PREVIEW_PORT:?PREVIEW_PORT is required}:80
+
+volumes:
+  angui-data:

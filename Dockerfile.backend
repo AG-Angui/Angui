@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1.97-bookworm AS builder
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY migration/Cargo.toml migration/Cargo.toml
+COPY migration/src migration/src
+COPY migration/sql migration/sql
+COPY src src
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --locked --release --package angui --bin angui \
+    && cargo build --locked --release --package migration --bin migration
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 angui \
+    && install -d -o angui -g angui /app/data
+
+WORKDIR /app
+COPY --from=builder /app/target/release/angui /usr/local/bin/angui
+COPY --from=builder /app/target/release/migration /usr/local/bin/migration
+
+ENV ANGUI_HOST=0.0.0.0 \
+    ANGUI_PORT=8080 \
+    ANGUI_FRONTEND_ORIGIN=http://localhost:8080 \
+    DATABASE_URL=sqlite://data/angui.db?mode=rwc \
+    RUST_LOG=info
+
+USER angui
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=5 \
+  CMD curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null || exit 1
+
+CMD ["angui"]
