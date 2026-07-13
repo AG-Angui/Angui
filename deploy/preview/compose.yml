@@ -9,11 +9,24 @@ services:
     volumes:
       - angui-data:/app/data
 
+  bootstrap:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    restart: "no"
+    command: ["angui-admin", "bootstrap-demo"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      ANGUI_DEMO_PASSWORD: ${PREVIEW_DEMO_PASSWORD:?PREVIEW_DEMO_PASSWORD is required}
+    volumes:
+      - angui-data:/app/data
+
   api:
     image: ${API_IMAGE:?API_IMAGE is required}
     restart: unless-stopped
     depends_on:
-      migrate:
+      bootstrap:
         condition: service_completed_successfully
     environment:
       ANGUI_HOST: 0.0.0.0

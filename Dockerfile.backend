@@ -12,6 +12,7 @@ COPY src src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo build --locked --release --package angui --bin angui \
+    && cargo build --locked --release --package angui --bin angui-admin \
     && cargo build --locked --release --package migration --bin migration
 
 FROM debian:bookworm-slim AS runtime
@@ -23,6 +24,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=builder /app/target/release/angui /usr/local/bin/angui
+COPY --from=builder /app/target/release/angui-admin /usr/local/bin/angui-admin
 COPY --from=builder /app/target/release/migration /usr/local/bin/migration
 
 ENV ANGUI_HOST=0.0.0.0 \

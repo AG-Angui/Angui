@@ -9,35 +9,103 @@ migration, reports status, performs a full refresh, and checks status again for
 both server databases. Cargo and npm caches are enabled, and successful
 binaries/bundles are retained for seven days.
 
-## Gemini reviewer
+## Pull request quality
 
-Create a Google AI Studio API key and add it as the repository secret
-`GEMINI_API_KEY`. The default model is `gemini-2.5-flash`; override it with the
-repository variable `GEMINI_REVIEW_MODEL`. `GEMINI_API_BASE` is optional.
+`quality-pr.yml` is the Rust/Actions adaptation of the reference repository's
+Go-oriented workflow. It checks `cargo fmt` and validates GitHub Actions syntax,
+expressions, and job wiring with actionlint. Clippy, tests, and release builds
+remain in `ci.yml` so Rust is not compiled twice merely to produce inline
+review comments.
 
-The workflow uses `pull_request_target` so fork pull requests can be reviewed,
-but it checks out only the trusted default branch. Pull request code is fetched
-as plain diff text and is never executed. The reviewer updates one persistent
-PR comment instead of creating a new comment for every commit.
+`zizmor.yml` audits workflow security whenever `.github/workflows/**` changes.
+It checks dangerous triggers, token permissions, action pinning, template
+injection, and other GitHub Actions security smells.
 
-Gemini's free API tier has model-specific request/token quotas and can change.
-For a small repository, one review per PR update normally fits; very large or
-frequently updated diffs may hit rate limits. `REVIEW_MAX_DIFF_CHARS` defaults
-to `120000` and can be lowered to control token use.
+OpenAPI linting is intentionally not enabled yet because the repository has no
+OpenAPI document or generator. Add it when a committed `openapi.yaml` or
+equivalent generated contract becomes part of the project.
 
-## Local API reviewer
+CodeQL is intentionally not enabled while the repository remains UNLICENSED.
+GitHub currently supports Rust, JavaScript/TypeScript, and Actions analysis, but
+private/non-open-source use requires an appropriate GitHub Code Security or
+Advanced Security license. Revisit CodeQL after adopting an OSI-approved
+license for a public repository or enabling the paid product.
 
-Install a Linux x64 self-hosted GitHub runner on a machine that can reach the
-local API. Configure:
+## Gemini Code Assist GitHub app
 
-- Secret `LOCAL_REVIEW_API_BASE`: OpenAI-compatible base URL, for example
-  `http://127.0.0.1:8000/v1`.
-- Secret `LOCAL_REVIEW_API_KEY`: optional bearer token.
-- Variable `LOCAL_REVIEW_MODEL`: optional model name; defaults to
+There is no repository-managed Gemini review workflow. Gemini Code Assist can
+be installed as a GitHub integration and configured outside Actions. However,
+Google's current documentation says the consumer version will stop serving
+requests on July 17, 2026 and should not be newly installed. Use the enterprise
+Google Cloud integration or the custom API reviewer below for a durable setup.
+
+Official documentation:
+<https://docs.cloud.google.com/gemini/docs/code-review/review-repo-code>
+
+## Custom API reviewer
+
+`custom-api-review.yml` calls any reachable OpenAI-compatible API. It defaults
+to a GitHub-hosted runner; the API does not need to be local. Configure:
+
+- Secret `CUSTOM_REVIEW_API_BASE`: API base URL, for example
+  `https://ai.example.com/v1` or a full `/chat/completions` URL.
+- Secret `CUSTOM_REVIEW_API_KEY`: optional bearer token.
+- Variable `CUSTOM_REVIEW_MODEL`: optional model name; defaults to
   `qwen3-coder`.
+- Variable `CUSTOM_REVIEW_MAX_DIFF_CHARS`: optional diff limit; defaults to
+  `120000`.
+- Variable `CUSTOM_REVIEW_LABEL`: optional. When empty, review every non-draft
+  PR; when set, only review PRs carrying that label.
+- Variable `CUSTOM_REVIEW_RUNNER`: optional runner label. Defaults to
+  `ubuntu-latest`; set it to a self-hosted custom label such as `angui-review`
+  when the API is only reachable from a private network.
 
-Create and add the `local-review` label to a PR to enable this reviewer. It can
-also be run manually with a PR number.
+The workflow never checks out pull request code. It reads the diff through the
+GitHub API and updates one persistent PR comment. It can also be run manually
+with a PR number. The configured API receives the PR title, branch names, and up
+to the configured number of diff characters, so use a provider whose retention
+and training policy is acceptable for the repository.
+
+## Self-hosted runner
+
+Create a dedicated, non-root Linux user and open the repository's **Settings >
+Actions > Runners > New self-hosted runner** page. Select Linux/x64 and run the
+download and `config.sh` commands shown by GitHub; the registration token is
+short-lived, so copy it from that page instead of storing it in the repository.
+
+Add purpose-specific labels during registration, for example:
+
+```bash
+./config.sh --url https://github.com/AG-Angui/Angui \
+  --token '<short-lived-registration-token>' \
+  --labels angui-ci,angui-review \
+  --unattended
+sudo ./svc.sh install
+sudo ./svc.sh start
+sudo ./svc.sh status
+```
+
+For the custom reviewer, set `CUSTOM_REVIEW_RUNNER=angui-review`. A runner used
+for CI or previews also needs Docker Engine and Docker Compose v2. Keep runner
+workloads isolated from production services, do not mount the Docker socket
+into untrusted containers, and do not run fork-controlled code on a runner that
+holds deployment or API secrets.
+
+The workflows can be switched without editing YAML by setting repository
+variables:
+
+- `RUST_CI_RUNNER=angui-ci`
+- `DATABASE_CI_RUNNER=angui-ci`
+- `FRONTEND_CI_RUNNER=angui-ci`
+- `PREVIEW_BUILD_RUNNER=angui-ci`
+- `CUSTOM_REVIEW_RUNNER=angui-review`
+
+Leave any variable unset to keep that job on `ubuntu-latest`. The database job
+uses PostgreSQL and MySQL service containers, so a self-hosted database runner
+must be Linux and have a working Docker daemon. CI jobs force fork pull requests
+back to `ubuntu-latest` even when these variables are set, because they checkout
+and execute PR code. Repository-internal branches and push runs can use the
+self-hosted labels.
 
 ## Branch previews
 
@@ -52,10 +120,11 @@ The preview workflow downloads the release binary and frontend bundle from the
 successful CI run and only packages them into runtime images. It does not
 compile Rust a second time.
 
-The backend artifact and image contain both `angui` and `migration`. Compose
-runs the one-shot migration service against the branch preview's persistent
-SQLite volume before starting the API, keeping application startup separate
-from schema management.
+The backend artifact and image contain `angui`, `angui-admin`, and `migration`.
+Compose first runs the one-shot migration service, then explicitly bootstraps
+the `.invalid` demo accounts, and only then starts the API. Application startup
+therefore remains separate from schema and account initialization. Re-running
+the bootstrap revokes prior demo-account sessions.
 
 Required deployment secrets:
 
@@ -64,6 +133,8 @@ Required deployment secrets:
 - `PREVIEW_SSH_KEY`
 - `PREVIEW_GHCR_USERNAME`
 - `PREVIEW_GHCR_TOKEN` with `read:packages`
+- `PREVIEW_DEMO_PASSWORD` with 12-256 characters; used only by the explicit
+  one-shot demo account bootstrap service
 
 Optional configuration:
 

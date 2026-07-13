@@ -9,6 +9,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --chmod=0755 .preview/backend/angui /usr/local/bin/angui
+COPY --chmod=0755 .preview/backend/angui-admin /usr/local/bin/angui-admin
 COPY --chmod=0755 .preview/backend/migration /usr/local/bin/migration
 
 ENV ANGUI_HOST=0.0.0.0 \

@@ -1,15 +1,16 @@
 name: preview
 
-on:
+# workflow_run is intentional here: the privileged workflow never handles PR
+# runs, checks out only the trusted default branch for packaging/deployment,
+# and accepts artifacts solely from a successful push-triggered ci run.
+on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: [ci]
     types: [completed]
   delete:
 
 permissions:
-  actions: read
   contents: read
-  packages: write
 
 concurrency:
   group: preview-${{ github.event.workflow_run.head_branch || github.event.ref || github.run_id }}
@@ -22,8 +23,12 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       (vars.PREVIEW_BUILD_ENABLED == 'true' || vars.PREVIEW_DEPLOY_ENABLED == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PREVIEW_BUILD_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      packages: write
     outputs:
       api_image: ${{ steps.meta.outputs.api_image }}
       web_image: ${{ steps.meta.outputs.web_image }}
@@ -169,12 +174,14 @@ jobs:
           SSH_USER: ${{ secrets.PREVIEW_SSH_USER }}
           GHCR_USERNAME: ${{ secrets.PREVIEW_GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.PREVIEW_GHCR_TOKEN }}
+          PREVIEW_DEMO_PASSWORD: ${{ secrets.PREVIEW_DEMO_PASSWORD }}
           PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/opt/angui-previews' }}
         run: |
           set -euo pipefail
           test -n "${SSH_USER}"
           test -n "${GHCR_USERNAME}"
           test -n "${GHCR_TOKEN}"
+          test -n "${PREVIEW_DEMO_PASSWORD}"
           remote="${SSH_USER}@${SSH_HOST}"
           remote_dir="${PREVIEW_ROOT}/${PREVIEW_SLUG}"
 
@@ -188,6 +195,7 @@ jobs:
             printf 'WEB_IMAGE=%s\n' "${WEB_IMAGE}"
             printf 'PREVIEW_PORT=%s\n' "${PREVIEW_PORT}"
             printf 'PREVIEW_ORIGIN=%s\n' "${PREVIEW_ORIGIN}"
+            printf 'PREVIEW_DEMO_PASSWORD=%s\n' "${PREVIEW_DEMO_PASSWORD}"
           } > preview.env
           scp -P "${SSH_PORT}" preview.env "${remote}:${remote_dir}/.env"
 

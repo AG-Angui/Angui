@@ -1,0 +1,39 @@
+name: zizmor
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zizmor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit workflow security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        run: python3 -m pip install --user zizmor==1.26.1
+
+      - name: Audit GitHub Actions workflows
+        run: |
+          "${HOME}/.local/bin/zizmor" \
+            --persona=regular \
+            --no-online-audits \
+            --color=never \
+            -- .github/workflows
