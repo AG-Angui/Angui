@@ -48,7 +48,7 @@
 - 前端：React 19 + TypeScript + Vite + HeroUI 3 + Tailwind CSS 4，位于 `frontend/`。
 - 后端：Rust 2024 + Actix Web，位于仓库根目录的 `src/`。
 - 当前接口：`GET /api/health`，用于前后端连接检查。
-- 数据：尚未接入；MVP 可评估 SQLite，后续评估 PostgreSQL，文件可评估对象存储。
+- 数据：计划使用 SeaORM，支持 SQLite、PostgreSQL 和 MySQL；结构变更通过 `sea-orm-migration` 和编号 SQL 脚本管理。数据库代码尚未接入。
 - AI：通义千问/百炼 Agent 与 RAG，用于辅助问询、结构化、摘要、知识问答和案例整理。
 - 地图：高德地图 JS API/Web 服务 API，用于点位、POI、路线和轨迹展示。
 

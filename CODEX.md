@@ -20,7 +20,7 @@
 2. 检查仓库结构、已有改动和适用的代理说明文件。
 3. 确认请求属于文档、原型、实现、诊断还是发布工作，不擅自扩大范围。
 4. 涉及权限、隐私、定位、真实数据、AI 决策或对外分发时，先阅读 `docs/SECURITY_AND_PRIVACY.md` 和 `DISTRIBUTION.md`。
-5. 使用既定的 React/Vite/HeroUI/Tailwind 与 Rust/Actix Web 技术栈；数据库、AI、地图等尚未决定的部分优先实现框架无关的接口约束，或明确列出假设。
+5. 使用既定的 React/Vite/HeroUI/Tailwind、Rust/Actix Web 和 SeaORM 技术栈；AI、地图等尚未决定的部分优先实现框架无关的接口约束，或明确列出假设。
 
 ## 3. 需求优先级
 
@@ -59,6 +59,15 @@
 - 上传与日志默认按敏感输入处理，执行类型/大小限制和信息裁剪。
 - 新增依赖前检查用途、维护状态、许可证和安全影响。
 - 同步更新 README、配置示例、测试和相关文档。
+
+数据库实现必须遵守 `docs/DATABASE.md`：
+
+- ORM 使用 SeaORM，迁移使用 `sea-orm-migration`。
+- 同时支持 SQLite、PostgreSQL 和 MySQL，本地开发默认 SQLite。
+- 每次结构变化保留四位全局编号和功能名组成的 SQL，例如 `0001_create_cases.sql`。
+- 三种数据库方言使用相同迁移编号，分别保存在方言目录中。
+- 已合并或已执行的迁移不得重排、删除或原地修改；修正必须增加新编号。
+- 禁止以应用启动时自动建表或 schema synchronize 替代版本化迁移。
 
 ## 6. AI 功能实现准则
 
