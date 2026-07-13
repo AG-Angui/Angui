@@ -11,6 +11,14 @@ pub enum ApiError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("{0}")]
+    Unauthorized(String),
+    #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
+    RateLimited(String),
+    #[error("internal service error")]
+    Internal,
     #[error("database operation failed")]
     Database(#[from] DbErr),
 }
@@ -32,6 +40,10 @@ impl ResponseError for ApiError {
             Self::Validation(_) => StatusCode::BAD_REQUEST,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
+            Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -41,6 +53,10 @@ impl ResponseError for ApiError {
             Self::Validation(_) => "validation_error",
             Self::NotFound(_) => "not_found",
             Self::Conflict(_) => "conflict",
+            Self::Unauthorized(_) => "unauthorized",
+            Self::Forbidden(_) => "forbidden",
+            Self::RateLimited(_) => "rate_limited",
+            Self::Internal => "internal_error",
             Self::Database(_) => "database_error",
         };
 

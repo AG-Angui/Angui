@@ -6,13 +6,13 @@
 
 - 项目名称：安归。
 - 场景：面向失智老人走失搜救的 AI + 地图协同。
-- 当前阶段：MVP 纵向闭环开发；React 前端应用壳、Rust/Actix Web、SeaORM 迁移和首批案件/线索 API 已可运行。
+- 当前阶段：MVP 纵向闭环开发；React 工作台、Rust/Actix Web、SeaORM 迁移、可撤销会话认证和案件级 RBAC 已可运行。
 - 前端：`frontend/`，React 19 + TypeScript + Vite + HeroUI 3 + Tailwind CSS 4。
 - 后端：仓库根目录，Rust 2024 + Actix Web；不要重新创建 `backend/` 目录。
 - 产品需求：[docs/PRODUCT.md](./docs/PRODUCT.md)。
 - 文档入口：[docs/README.md](./docs/README.md)。
 
-当前可声称多角色前端应用壳、响应式导航、工作区空状态、健康检查、案件创建/查询、线索提交/人工审核、案件状态流转、事务审计和 SQLite 迁移已实现。PostgreSQL/MySQL 目前只完成编译支持和方言 SQL 留档，尚未连接真实服务验证。正式认证、角色授权、AI、RAG、地图、轨迹、任务和生产部署仍未实现。
+当前可声称登录/登出/会话撤销、家属/指挥/志愿者案件成员授权、服务端字段裁剪、案件创建/查询、成员添加、线索提交/人工审核、案件状态流转、事务审计和 SQLite 迁移已实现。PostgreSQL/MySQL 已完成编译支持、方言 SQL 和 CI 服务容器配置，但远端结果仍需实际查看。密码找回、MFA、账号审批、AI、RAG、地图、轨迹、任务和生产部署仍未实现。
 
 ## 2. 开始任务时
 
@@ -111,11 +111,12 @@ npm run test:backend
 npm run migrate:up
 npm run migrate:down
 npm run migrate:status
+npm run auth:bootstrap-demo
 npm run lint:frontend
 npm run build:frontend
 ```
 
-前端开发地址为 `http://127.0.0.1:5173`，后端默认监听 `http://127.0.0.1:8080`。迁移命令依赖 `DATABASE_URL`，应用启动时不得自动建表。当前 `demo:family` 和 `demo:commander` 只是审计占位字符串，不构成身份认证、授权或演示账号。当前没有浏览器端到端测试或模拟数据生成命令；需要这些能力时应在实现它们的同一变更中补充准确命令。
+前端开发地址为 `http://127.0.0.1:5173`，后端默认监听 `http://127.0.0.1:8080`。迁移命令依赖 `DATABASE_URL`，应用启动时不得自动建表或创建账号。`auth:bootstrap-demo` 还要求 12–256 个字符的 `ANGUI_DEMO_PASSWORD`，只允许为 `.invalid` 模拟账号初始化密码。当前没有密码找回、MFA 或浏览器自动化端到端测试；需要这些能力时应在实现它们的同一变更中补充准确命令。
 
 完成实现任务后，应运行与风险相称的验证并如实报告结果。若因环境、凭据或依赖无法运行，明确说明未验证内容，不能写成“应当可以”。
 

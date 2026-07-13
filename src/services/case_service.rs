@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
@@ -7,15 +9,19 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    entities::{audit_events, cases, clues, elder_profiles},
+    entities::{
+        audit_events, case_memberships, cases, clue_attributions, clues, elder_profiles, users,
+    },
     error::ApiError,
     models::{
-        CaseDetail, CaseListItem, ClueResponse, CreateCaseRequest, CreateClueRequest,
+        AddCaseMemberRequest, AuthenticatedUser, CaseDetail, CaseListItem, CaseMemberResponse,
+        ClueResponse, CreateCaseRequest, CreateClueRequest, ElderProfileResponse,
         ReviewClueRequest, UpdateCaseStatusRequest,
     },
 };
 
 const CASE_STATUSES: &[&str] = &["active", "resolved", "closed"];
+const CASE_ROLES: &[&str] = &["family", "commander", "volunteer"];
 const CLUE_REVIEW_STATUSES: &[&str] = &[
     "needs_verification",
     "confirmed",
@@ -24,8 +30,25 @@ const CLUE_REVIEW_STATUSES: &[&str] = &[
     "duplicate",
 ];
 
-pub async fn list_cases(db: &DatabaseConnection) -> Result<Vec<CaseListItem>, ApiError> {
+pub async fn list_cases(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<CaseListItem>, ApiError> {
+    let memberships = case_memberships::Entity::find()
+        .filter(case_memberships::Column::UserId.eq(&auth.id))
+        .all(db)
+        .await?;
+    let roles: HashMap<_, _> = memberships
+        .into_iter()
+        .map(|membership| (membership.case_id, membership.role))
+        .collect();
+
+    if roles.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let rows = cases::Entity::find()
+        .filter(cases::Column::Id.is_in(roles.keys().cloned()))
         .find_also_related(elder_profiles::Entity)
         .order_by_desc(cases::Column::CreatedAt)
         .all(db)
@@ -39,11 +62,16 @@ pub async fn list_cases(db: &DatabaseConnection) -> Result<Vec<CaseListItem>, Ap
                     case_model.id
                 )))
             })?;
+            let access_role = roles
+                .get(&case_model.id)
+                .cloned()
+                .ok_or(ApiError::Internal)?;
 
             Ok(CaseListItem {
                 id: case_model.id,
                 case_code: case_model.case_code,
                 status: case_model.status,
+                access_role,
                 display_name: profile.display_name,
                 last_seen_at: profile.last_seen_at,
                 last_seen_location: profile.last_seen_location,
@@ -54,35 +82,29 @@ pub async fn list_cases(db: &DatabaseConnection) -> Result<Vec<CaseListItem>, Ap
         .collect()
 }
 
-pub async fn get_case(db: &DatabaseConnection, case_id: &str) -> Result<CaseDetail, ApiError> {
-    let case_model = cases::Entity::find_by_id(case_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("case {case_id} was not found")))?;
-    let profile = elder_profiles::Entity::find()
-        .filter(elder_profiles::Column::CaseId.eq(case_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| {
-            ApiError::Database(sea_orm::DbErr::Custom("elder profile missing".into()))
-        })?;
-    let clue_models = clues::Entity::find()
-        .filter(clues::Column::CaseId.eq(case_id))
-        .order_by_desc(clues::Column::CreatedAt)
-        .all(db)
-        .await?;
-
-    Ok(CaseDetail::new(case_model, profile, clue_models))
+pub async fn get_case(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<CaseDetail, ApiError> {
+    let membership = membership_for_case(db, &auth.id, case_id).await?;
+    load_case_detail(db, auth, membership).await
 }
 
 pub async fn create_case(
     db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
     request: CreateCaseRequest,
 ) -> Result<CaseDetail, ApiError> {
     validate_case_request(&request)?;
+    if !matches!(auth.role.as_str(), "family" | "commander") {
+        return Err(ApiError::Forbidden(
+            "this account cannot create cases".to_owned(),
+        ));
+    }
 
     let transaction = db.begin().await?;
-    let now = now();
+    let timestamp = now();
     let case_id = new_id();
     let profile_id = new_id();
     let case_code = format!("AG-{}", case_id[..8].to_uppercase());
@@ -91,8 +113,8 @@ pub async fn create_case(
         id: Set(case_id.clone()),
         case_code: Set(case_code),
         status: Set("active".to_owned()),
-        created_at: Set(now.clone()),
-        updated_at: Set(now.clone()),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
     }
     .insert(&transaction)
     .await?;
@@ -108,16 +130,26 @@ pub async fn create_case(
         health_notes: Set(trim_optional(request.health_notes)),
         last_seen_at: Set(trim_optional(request.last_seen_at)),
         last_seen_location: Set(trim_optional(request.last_seen_location)),
-        created_at: Set(now.clone()),
-        updated_at: Set(now.clone()),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
     }
     .insert(&transaction)
+    .await?;
+
+    insert_membership(
+        &transaction,
+        &case_id,
+        &auth.id,
+        &auth.role,
+        Some(&auth.id),
+        &timestamp,
+    )
     .await?;
 
     write_audit(
         &transaction,
         Some(case_id.clone()),
-        "demo:family",
+        auth,
         "case.created",
         "case",
         case_id.clone(),
@@ -126,11 +158,12 @@ pub async fn create_case(
     .await?;
 
     transaction.commit().await?;
-    get_case(db, &case_id).await
+    get_case(db, auth, &case_id).await
 }
 
 pub async fn update_case_status(
     db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
     case_id: &str,
     request: UpdateCaseStatusRequest,
 ) -> Result<CaseDetail, ApiError> {
@@ -142,10 +175,11 @@ pub async fn update_case_status(
     }
 
     let transaction = db.begin().await?;
+    require_case_role(&transaction, &auth.id, case_id, &["commander"]).await?;
     let case_model = cases::Entity::find_by_id(case_id)
         .one(&transaction)
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("case {case_id} was not found")))?;
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
 
     if !case_transition_allowed(&case_model.status, &next_status) {
         return Err(ApiError::Conflict(format!(
@@ -163,7 +197,7 @@ pub async fn update_case_status(
     write_audit(
         &transaction,
         Some(case_id.to_owned()),
-        "demo:commander",
+        auth,
         "case.status_changed",
         "case",
         case_id.to_owned(),
@@ -172,20 +206,28 @@ pub async fn update_case_status(
     .await?;
 
     transaction.commit().await?;
-    get_case(db, case_id).await
+    get_case(db, auth, case_id).await
 }
 
 pub async fn create_clue(
     db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
     case_id: &str,
     request: CreateClueRequest,
 ) -> Result<ClueResponse, ApiError> {
     validate_clue_request(&request)?;
     let transaction = db.begin().await?;
+    require_case_role(
+        &transaction,
+        &auth.id,
+        case_id,
+        &["family", "commander", "volunteer"],
+    )
+    .await?;
     let case_model = cases::Entity::find_by_id(case_id)
         .one(&transaction)
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("case {case_id} was not found")))?;
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
 
     if case_model.status == "closed" {
         return Err(ApiError::Conflict(
@@ -209,10 +251,19 @@ pub async fn create_clue(
     .insert(&transaction)
     .await?;
 
+    let attribution = clue_attributions::ActiveModel {
+        clue_id: Set(clue_id.clone()),
+        submitted_by_user_id: Set(Some(auth.id.clone())),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+    }
+    .insert(&transaction)
+    .await?;
+
     write_audit(
         &transaction,
         Some(case_id.to_owned()),
-        "demo:family",
+        auth,
         "clue.submitted",
         "clue",
         clue_id,
@@ -221,11 +272,12 @@ pub async fn create_clue(
     .await?;
 
     transaction.commit().await?;
-    Ok(clue_model.into())
+    Ok(ClueResponse::new(clue_model, Some(attribution), &auth.id))
 }
 
 pub async fn review_clue(
     db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
     clue_id: &str,
     request: ReviewClueRequest,
 ) -> Result<ClueResponse, ApiError> {
@@ -240,7 +292,8 @@ pub async fn review_clue(
     let clue_model = clues::Entity::find_by_id(clue_id)
         .one(&transaction)
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("clue {clue_id} was not found")))?;
+        .ok_or_else(|| ApiError::NotFound("clue was not found".to_owned()))?;
+    require_case_role(&transaction, &auth.id, &clue_model.case_id, &["commander"]).await?;
     let previous_status = clue_model.status.clone();
     let case_id = clue_model.case_id.clone();
     let mut active = clue_model.into_active_model();
@@ -248,10 +301,30 @@ pub async fn review_clue(
     active.updated_at = Set(now());
     let updated = active.update(&transaction).await?;
 
+    let reviewed_at = now();
+    let attribution = if let Some(existing) = clue_attributions::Entity::find_by_id(clue_id)
+        .one(&transaction)
+        .await?
+    {
+        let mut active = existing.into_active_model();
+        active.reviewed_by_user_id = Set(Some(auth.id.clone()));
+        active.reviewed_at = Set(Some(reviewed_at));
+        active.update(&transaction).await?
+    } else {
+        clue_attributions::ActiveModel {
+            clue_id: Set(clue_id.to_owned()),
+            submitted_by_user_id: Set(None),
+            reviewed_by_user_id: Set(Some(auth.id.clone())),
+            reviewed_at: Set(Some(reviewed_at)),
+        }
+        .insert(&transaction)
+        .await?
+    };
+
     write_audit(
         &transaction,
         Some(case_id),
-        "demo:commander",
+        auth,
         "clue.reviewed",
         "clue",
         clue_id.to_owned(),
@@ -260,31 +333,225 @@ pub async fn review_clue(
     .await?;
 
     transaction.commit().await?;
-    Ok(updated.into())
+    Ok(ClueResponse::new(updated, Some(attribution), &auth.id))
+}
+
+pub async fn add_case_member(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    request: AddCaseMemberRequest,
+) -> Result<CaseMemberResponse, ApiError> {
+    let requested_role = request.role.trim().to_lowercase();
+    if !CASE_ROLES.contains(&requested_role.as_str()) {
+        return Err(ApiError::Validation("unsupported case role".to_owned()));
+    }
+    let email = request.email.trim().to_lowercase();
+    if email.is_empty() || email.len() > 320 || !email.contains('@') {
+        return Err(ApiError::Validation("email is invalid".to_owned()));
+    }
+
+    let transaction = db.begin().await?;
+    let acting_membership =
+        require_case_role(&transaction, &auth.id, case_id, &["family", "commander"]).await?;
+    if acting_membership.role == "family" && requested_role != "commander" {
+        return Err(ApiError::Forbidden(
+            "family members can only invite a commander".to_owned(),
+        ));
+    }
+    let target = users::Entity::find()
+        .filter(users::Column::Email.eq(&email))
+        .filter(users::Column::Status.eq("active"))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("active user was not found".to_owned()))?;
+    if target.role != requested_role {
+        return Err(ApiError::Validation(
+            "case role must match the user's account role".to_owned(),
+        ));
+    }
+    if case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(case_id))
+        .filter(case_memberships::Column::UserId.eq(&target.id))
+        .one(&transaction)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(
+            "user is already a member of this case".to_owned(),
+        ));
+    }
+
+    insert_membership(
+        &transaction,
+        case_id,
+        &target.id,
+        &requested_role,
+        Some(&auth.id),
+        &now(),
+    )
+    .await?;
+    write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "case.member_added",
+        "user",
+        target.id.clone(),
+        Some(json!({ "role": requested_role })),
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(CaseMemberResponse {
+        user_id: target.id,
+        email: target.email,
+        display_name: target.display_name,
+        role: target.role,
+    })
+}
+
+async fn load_case_detail(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    membership: case_memberships::Model,
+) -> Result<CaseDetail, ApiError> {
+    let case_model = cases::Entity::find_by_id(&membership.case_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    let profile = elder_profiles::Entity::find()
+        .filter(elder_profiles::Column::CaseId.eq(&membership.case_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Database(sea_orm::DbErr::Custom("elder profile missing".into()))
+        })?;
+    let clue_models = clues::Entity::find()
+        .filter(clues::Column::CaseId.eq(&membership.case_id))
+        .order_by_desc(clues::Column::CreatedAt)
+        .all(db)
+        .await?;
+    let clue_ids: Vec<_> = clue_models.iter().map(|clue| clue.id.clone()).collect();
+    let attributions: HashMap<_, _> = if clue_ids.is_empty() {
+        HashMap::new()
+    } else {
+        clue_attributions::Entity::find()
+            .filter(clue_attributions::Column::ClueId.is_in(clue_ids))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|attribution| (attribution.clue_id.clone(), attribution))
+            .collect()
+    };
+
+    let visible_clues = clue_models
+        .into_iter()
+        .filter_map(|clue| {
+            let attribution = attributions.get(&clue.id).cloned();
+            let own = attribution
+                .as_ref()
+                .and_then(|value| value.submitted_by_user_id.as_deref())
+                == Some(auth.id.as_str());
+            let visible = match membership.role.as_str() {
+                "commander" => true,
+                "family" => clue.status == "confirmed" || own,
+                "volunteer" => clue.status == "confirmed",
+                _ => false,
+            };
+            visible.then(|| ClueResponse::new(clue, attribution, &auth.id))
+        })
+        .collect();
+
+    let mut profile_response: ElderProfileResponse = profile.into();
+    if membership.role == "volunteer" {
+        profile_response.health_notes = None;
+    }
+
+    Ok(CaseDetail::new(
+        case_model,
+        profile_response,
+        visible_clues,
+        membership.role,
+    ))
+}
+
+async fn membership_for_case<C: ConnectionTrait>(
+    db: &C,
+    user_id: &str,
+    case_id: &str,
+) -> Result<case_memberships::Model, ApiError> {
+    case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(case_id))
+        .filter(case_memberships::Column::UserId.eq(user_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))
+}
+
+async fn require_case_role<C: ConnectionTrait>(
+    db: &C,
+    user_id: &str,
+    case_id: &str,
+    allowed_roles: &[&str],
+) -> Result<case_memberships::Model, ApiError> {
+    let membership = membership_for_case(db, user_id, case_id).await?;
+    if !allowed_roles.contains(&membership.role.as_str()) {
+        return Err(ApiError::Forbidden(
+            "this account cannot perform the requested case action".to_owned(),
+        ));
+    }
+    Ok(membership)
+}
+
+async fn insert_membership<C: ConnectionTrait>(
+    db: &C,
+    case_id: &str,
+    user_id: &str,
+    role: &str,
+    created_by_user_id: Option<&str>,
+    created_at: &str,
+) -> Result<(), ApiError> {
+    case_memberships::ActiveModel {
+        id: Set(new_id()),
+        case_id: Set(case_id.to_owned()),
+        user_id: Set(user_id.to_owned()),
+        role: Set(role.to_owned()),
+        created_by_user_id: Set(created_by_user_id.map(str::to_owned)),
+        created_at: Set(created_at.to_owned()),
+    }
+    .insert(db)
+    .await?;
+    Ok(())
 }
 
 async fn write_audit<C: ConnectionTrait>(
     db: &C,
     case_id: Option<String>,
-    actor: &str,
+    auth: &AuthenticatedUser,
     action: &str,
     entity_type: &str,
     entity_id: String,
     metadata: Option<serde_json::Value>,
 ) -> Result<(), ApiError> {
+    let metadata = metadata.map(|mut value| {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("actor_role".to_owned(), json!(auth.role));
+        }
+        value.to_string()
+    });
     audit_events::ActiveModel {
         id: Set(new_id()),
         case_id: Set(case_id),
-        actor: Set(actor.to_owned()),
+        actor: Set(auth.id.clone()),
         action: Set(action.to_owned()),
         entity_type: Set(entity_type.to_owned()),
         entity_id: Set(entity_id),
-        metadata_json: Set(metadata.map(|value| value.to_string())),
+        metadata_json: Set(metadata),
         created_at: Set(now()),
     }
     .insert(db)
     .await?;
-
     Ok(())
 }
 
@@ -351,14 +618,20 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use migration::{Migrator, MigratorTrait};
-    use sea_orm::{Database, EntityTrait, PaginatorTrait};
+    use sea_orm::{ColumnTrait, Database, EntityTrait, PaginatorTrait, QueryFilter};
 
-    use super::{create_case, create_clue, list_cases, review_clue, update_case_status};
+    use super::{
+        add_case_member, create_case, create_clue, get_case, list_cases, review_clue,
+        update_case_status,
+    };
     use crate::{
         entities::audit_events,
+        error::ApiError,
         models::{
-            CreateCaseRequest, CreateClueRequest, ReviewClueRequest, UpdateCaseStatusRequest,
+            AddCaseMemberRequest, CreateCaseRequest, CreateClueRequest, LoginRequest,
+            ReviewClueRequest, UpdateCaseStatusRequest,
         },
+        services::auth_service,
     };
 
     async fn database() -> sea_orm::DatabaseConnection {
@@ -368,15 +641,41 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should succeed");
+        auth_service::bootstrap_demo_users(&database, "demo-password-123")
+            .await
+            .expect("demo users should bootstrap");
         database
     }
 
+    async fn sign_in(
+        database: &sea_orm::DatabaseConnection,
+        email: &str,
+    ) -> crate::models::AuthenticatedUser {
+        let login = auth_service::login(
+            database,
+            LoginRequest {
+                email: email.to_owned(),
+                password: "demo-password-123".to_owned(),
+            },
+            8,
+        )
+        .await
+        .expect("login should succeed");
+        auth_service::authenticate(database, &login.token)
+            .await
+            .expect("session should authenticate")
+    }
+
     #[actix_web::test]
-    async fn case_and_clue_workflow_is_persisted_and_audited() {
+    async fn case_access_is_filtered_by_membership_and_role() {
         let database = database().await;
+        let family = sign_in(&database, "family@demo.invalid").await;
+        let commander = sign_in(&database, "commander@demo.invalid").await;
+        let volunteer = sign_in(&database, "volunteer@demo.invalid").await;
 
         let case = create_case(
             &database,
+            &family,
             CreateCaseRequest {
                 display_name: "模拟老人 A".to_owned(),
                 age: Some(76),
@@ -389,16 +688,38 @@ mod tests {
             },
         )
         .await
-        .expect("case creation should succeed");
+        .expect("family should create a case");
 
-        let cases = list_cases(&database)
-            .await
-            .expect("case listing should succeed");
-        assert_eq!(cases.len(), 1);
-        assert_eq!(cases[0].display_name, "模拟老人 A");
+        assert!(list_cases(&database, &commander).await.unwrap().is_empty());
+        assert!(list_cases(&database, &volunteer).await.unwrap().is_empty());
+
+        add_case_member(
+            &database,
+            &family,
+            &case.id,
+            AddCaseMemberRequest {
+                email: "commander@demo.invalid".to_owned(),
+                role: "commander".to_owned(),
+            },
+        )
+        .await
+        .expect("family should invite a commander");
+
+        add_case_member(
+            &database,
+            &commander,
+            &case.id,
+            AddCaseMemberRequest {
+                email: "volunteer@demo.invalid".to_owned(),
+                role: "volunteer".to_owned(),
+            },
+        )
+        .await
+        .expect("commander should add a volunteer");
 
         let clue = create_clue(
             &database,
+            &family,
             &case.id,
             CreateClueRequest {
                 source: "family".to_owned(),
@@ -408,35 +729,55 @@ mod tests {
             },
         )
         .await
-        .expect("clue creation should succeed");
-        assert_eq!(clue.status, "pending_review");
+        .expect("family should submit a clue");
+        assert!(clue.is_own_submission);
 
-        let reviewed = review_clue(
+        let family_view = get_case(&database, &family, &case.id).await.unwrap();
+        assert_eq!(family_view.clues.len(), 1);
+        let volunteer_view = get_case(&database, &volunteer, &case.id).await.unwrap();
+        assert!(volunteer_view.clues.is_empty());
+        assert!(volunteer_view.elder_profile.health_notes.is_none());
+
+        let family_review = review_clue(
             &database,
+            &family,
+            &clue.id,
+            ReviewClueRequest {
+                status: "confirmed".to_owned(),
+            },
+        )
+        .await;
+        assert!(matches!(family_review, Err(ApiError::Forbidden(_))));
+
+        review_clue(
+            &database,
+            &commander,
             &clue.id,
             ReviewClueRequest {
                 status: "confirmed".to_owned(),
             },
         )
         .await
-        .expect("clue review should succeed");
-        assert_eq!(reviewed.status, "confirmed");
+        .expect("commander should review clue");
+        let volunteer_view = get_case(&database, &volunteer, &case.id).await.unwrap();
+        assert_eq!(volunteer_view.clues.len(), 1);
 
-        let resolved = update_case_status(
+        update_case_status(
             &database,
+            &commander,
             &case.id,
             UpdateCaseStatusRequest {
                 status: "resolved".to_owned(),
             },
         )
         .await
-        .expect("case status update should succeed");
-        assert_eq!(resolved.status, "resolved");
+        .expect("commander should resolve case");
 
-        let audit_count = audit_events::Entity::find()
+        let case_audits = audit_events::Entity::find()
+            .filter(audit_events::Column::CaseId.eq(&case.id))
             .count(&database)
             .await
             .expect("audit count should succeed");
-        assert_eq!(audit_count, 4);
+        assert_eq!(case_audits, 6);
     }
 }

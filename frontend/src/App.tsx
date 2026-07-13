@@ -1,9 +1,33 @@
+import { Spinner } from '@heroui/react'
 import { Navigate, Route, Routes } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import type { UserRole } from './api/auth'
+import { useAuth } from './auth/useAuth'
 import { AppShell } from './components/AppShell'
+import { CaseWorkspacePage } from './pages/CaseWorkspacePage'
 import { DashboardPage } from './pages/DashboardPage'
-import { WorkspacePage } from './pages/WorkspacePage'
+import { LoginPage } from './pages/LoginPage'
+
+function RoleRoute({ role, children }: { role: UserRole; children: ReactNode }) {
+  const { user } = useAuth()
+  return user?.role === role ? children : <Navigate to="/" replace />
+}
 
 function App() {
+  const { user, isLoading } = useAuth()
+
+  if (isLoading) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-canvas" aria-label="正在恢复会话">
+        <Spinner size="lg" />
+      </main>
+    )
+  }
+
+  if (!user) {
+    return <LoginPage />
+  }
+
   return (
     <Routes>
       <Route element={<AppShell />}>
@@ -11,34 +35,25 @@ function App() {
         <Route
           path="family"
           element={
-            <WorkspacePage
-              context="家属端"
-              title="走失求助"
-              emptyTitle="当前没有进行中的求助"
-              emptyDescription="已提交并获得授权的案件会显示在这里。"
-            />
+            <RoleRoute role="family">
+              <CaseWorkspacePage mode="family" />
+            </RoleRoute>
           }
         />
         <Route
           path="command"
           element={
-            <WorkspacePage
-              context="指挥端"
-              title="案件指挥"
-              emptyTitle="当前没有活动案件"
-              emptyDescription="案件、待审核线索和任务态势会显示在这里。"
-            />
+            <RoleRoute role="commander">
+              <CaseWorkspacePage mode="commander" />
+            </RoleRoute>
           }
         />
         <Route
           path="volunteer"
           element={
-            <WorkspacePage
-              context="志愿者端"
-              title="我的任务"
-              emptyTitle="当前没有待执行任务"
-              emptyDescription="经指挥人员确认并分配给你的任务会显示在这里。"
-            />
+            <RoleRoute role="volunteer">
+              <CaseWorkspacePage mode="volunteer" />
+            </RoleRoute>
           }
         />
       </Route>

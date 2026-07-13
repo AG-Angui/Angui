@@ -4,6 +4,10 @@ mod m0001_create_cases;
 mod m0002_create_elder_profiles;
 mod m0003_create_clues;
 mod m0004_create_audit_events;
+mod m0005_create_users;
+mod m0006_create_auth_sessions;
+mod m0007_create_case_memberships;
+mod m0008_create_clue_attributions;
 
 use sea_orm_migration::sea_orm::DbBackend;
 
@@ -17,6 +21,10 @@ impl MigratorTrait for Migrator {
             Box::new(m0002_create_elder_profiles::Migration),
             Box::new(m0003_create_clues::Migration),
             Box::new(m0004_create_audit_events::Migration),
+            Box::new(m0005_create_users::Migration),
+            Box::new(m0006_create_auth_sessions::Migration),
+            Box::new(m0007_create_case_memberships::Migration),
+            Box::new(m0008_create_clue_attributions::Migration),
         ]
     }
 }

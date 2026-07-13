@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-本仓库目前处于 **MVP 纵向闭环开发阶段**。React 前端应用壳、Rust/Actix Web 后端、SeaORM 数据层、版本化迁移，以及案件创建、案件查询、线索提交、人工审核和案件状态流转 API 已经落地。任务、地图、AI、正式身份认证和生产部署仍属于后续实现范围；当前实现不能视为已经部署或经过真实搜救验证的产品。
+本仓库目前处于 **MVP 纵向闭环开发阶段**。React 工作台、Rust/Actix Web 后端、SeaORM 数据层、可撤销会话认证、案件级角色授权、版本化迁移，以及案件创建、查询、成员授权、线索提交、人工审核和状态流转已经落地。任务、地图、AI、密码找回、多因素认证和生产部署仍属于后续实现范围；当前实现不能视为已经部署或经过真实搜救验证的产品。
 
 - 需求整理入口：[docs/PRODUCT.md](./docs/PRODUCT.md)
 - 文档入口：[docs/README.md](./docs/README.md)
@@ -50,12 +50,13 @@
 
 - 前端：React 19 + TypeScript + Vite + HeroUI 3 + Tailwind CSS 4，位于 `frontend/`。
 - 后端：Rust 2024 + Actix Web，位于仓库根目录的 `src/`。
-- 当前接口：健康检查，以及案件创建/列表/详情、案件状态流转、线索提交和线索人工审核接口。
+- 当前接口：健康检查、登录/登出/当前用户，以及案件创建/列表/详情、成员授权、案件状态流转、线索提交和线索人工审核接口。
 - 数据：SeaORM 1.1 稳定版本线，编译支持 SQLite、PostgreSQL 和 MySQL；结构变更通过 `sea-orm-migration` 和三套同编号 SQL 脚本管理。
+- 认证：Argon2id 密码哈希、数据库会话、SHA-256 令牌哈希、8 小时默认有效期和服务端撤销；案件访问由 `case_memberships` 强制约束。
 - AI：通义千问/百炼 Agent 与 RAG，用于辅助问询、结构化、摘要、知识问答和案例整理。
 - 地图：高德地图 JS API/Web 服务 API，用于点位、POI、路线和轨迹展示。
 
-React、Rust/Actix Web 与首批 SeaORM 数据持久化已经进入仓库。当前只在 SQLite 上完成实际迁移和 HTTP 联调；PostgreSQL/MySQL 已提供驱动与方言 SQL，但尚未连接真实服务验证。AI、地图、任务和正式权限系统仍是计划能力，在代码、配置、测试和验证结果进入仓库前，不应在介绍材料中宣称已经完成。
+React、Rust/Actix Web、SeaORM 数据持久化和首批身份权限已经进入仓库。当前只在 SQLite 上完成实际迁移与认证/RBAC HTTP 联调；PostgreSQL/MySQL 已提供驱动、方言 SQL 和 CI 服务容器验证配置。AI、地图、任务和生产级账号生命周期仍是计划能力，在代码、配置、测试和验证结果进入仓库前，不应在介绍材料中宣称已经完成。
 
 ## 不可突破的安全边界
 
@@ -91,6 +92,21 @@ npm run migrate:up
 npm run migrate:status
 ```
 
+显式创建固定的低权限模拟账号。密码只通过当前终端环境变量提供，不写入仓库：
+
+```powershell
+$env:ANGUI_DEMO_PASSWORD = "replace-with-at-least-12-characters"
+npm run auth:bootstrap-demo
+```
+
+命令创建或更新以下保留域账号，并撤销它们之前的会话：
+
+```text
+family@demo.invalid
+commander@demo.invalid
+volunteer@demo.invalid
+```
+
 分别启动两个开发进程：
 
 ```powershell
@@ -121,13 +137,13 @@ npm run migrate:status
 
 这些命令都读取 `DATABASE_URL`。后端配置示例见 `.env.example`，前端配置示例见 `frontend/.env.example`。程序读取系统环境变量，不会自动加载 `.env` 文件。
 
-当前 API 中的 `demo:family` 与 `demo:commander` 仅是写入审计事件的开发占位身份，不是正式认证或授权机制。不要把它们用于真实数据或对外环境。
+前端令牌保存在浏览器当前标签页的 `sessionStorage`，服务端只保存令牌哈希。正式部署必须使用 HTTPS，并补充密码重置、多因素认证、持久化/分布式登录限流、账号审批和安全运营流程。演示账号只能处理虚构或充分脱敏的数据。
 
 ## 自动化与分支预览
 
-GitHub Actions 已配置 Rust/前端质量门禁、PostgreSQL/MySQL 迁移检查、可选 Gemini PR 评审、可选本地 OpenAI-compatible API 评审，以及可选 GHCR 分支镜像和远程预览。镜像构建与部署默认关闭，只有设置对应仓库变量后才会运行；远程部署还需要明确配置 SSH/GHCR 凭据。详细变量、密钥、配额和自托管 runner 边界见 [.github/WORKFLOWS.md](./.github/WORKFLOWS.md)。
+GitHub Actions 已配置 Rust/前端质量门禁、PostgreSQL/MySQL 迁移检查、可选 OpenAI-compatible 自定义 API 评审，以及可选 GHCR 分支镜像和远程预览。仓库不再托管独立 Gemini workflow；如需 Gemini，应按当前官方企业集成方式配置。镜像构建与部署默认关闭，只有设置对应仓库变量后才会运行；远程部署还需要明确配置 SSH/GHCR 凭据。详细变量、密钥、配额和自托管 runner 边界见 [.github/WORKFLOWS.md](./.github/WORKFLOWS.md)。
 
-预览容器会先显式运行 `migration up`，成功后才启动 API；应用本身仍不会自动修改数据库结构。
+预览容器会先显式运行 `migration up`，再通过 `angui-admin bootstrap-demo` 初始化 `.invalid` 模拟账号，全部成功后才启动 API；应用本身仍不会自动修改数据库结构或创建账号。
 
 任何真实密钥、真实案件数据和个人信息都不得提交到仓库。
 

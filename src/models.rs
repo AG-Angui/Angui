@@ -1,6 +1,37 @@
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{cases, clues, elder_profiles};
+use crate::entities::{cases, clue_attributions, clues, elder_profiles, users};
+
+#[derive(Clone, Debug)]
+pub struct AuthenticatedUser {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UserResponse {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoginResponse {
+    pub token: String,
+    pub expires_at: String,
+    pub user: UserResponse,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,11 +67,27 @@ pub struct ReviewClueRequest {
     pub status: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddCaseMemberRequest {
+    pub email: String,
+    pub role: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CaseMemberResponse {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CaseListItem {
     pub id: String,
     pub case_code: String,
     pub status: String,
+    pub access_role: String,
     pub display_name: String,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
@@ -53,6 +100,7 @@ pub struct CaseDetail {
     pub id: String,
     pub case_code: String,
     pub status: String,
+    pub access_role: String,
     pub elder_profile: ElderProfileResponse,
     pub clues: Vec<ClueResponse>,
     pub created_at: String,
@@ -83,6 +131,8 @@ pub struct ClueResponse {
     pub location_text: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub reviewed_at: Option<String>,
+    pub is_own_submission: bool,
 }
 
 impl From<elder_profiles::Model> for ElderProfileResponse {
@@ -101,8 +151,12 @@ impl From<elder_profiles::Model> for ElderProfileResponse {
     }
 }
 
-impl From<clues::Model> for ClueResponse {
-    fn from(model: clues::Model) -> Self {
+impl ClueResponse {
+    pub fn new(
+        model: clues::Model,
+        attribution: Option<clue_attributions::Model>,
+        viewer_user_id: &str,
+    ) -> Self {
         Self {
             id: model.id,
             case_id: model.case_id,
@@ -113,6 +167,23 @@ impl From<clues::Model> for ClueResponse {
             location_text: model.location_text,
             created_at: model.created_at,
             updated_at: model.updated_at,
+            reviewed_at: attribution
+                .as_ref()
+                .and_then(|attribution| attribution.reviewed_at.clone()),
+            is_own_submission: attribution
+                .and_then(|attribution| attribution.submitted_by_user_id)
+                .is_some_and(|user_id| user_id == viewer_user_id),
+        }
+    }
+}
+
+impl From<users::Model> for UserResponse {
+    fn from(model: users::Model) -> Self {
+        Self {
+            id: model.id,
+            email: model.email,
+            display_name: model.display_name,
+            role: model.role,
         }
     }
 }
@@ -120,15 +191,17 @@ impl From<clues::Model> for ClueResponse {
 impl CaseDetail {
     pub fn new(
         case_model: cases::Model,
-        elder_profile: elder_profiles::Model,
-        clue_models: Vec<clues::Model>,
+        elder_profile: ElderProfileResponse,
+        clues: Vec<ClueResponse>,
+        access_role: String,
     ) -> Self {
         Self {
             id: case_model.id,
             case_code: case_model.case_code,
             status: case_model.status,
-            elder_profile: elder_profile.into(),
-            clues: clue_models.into_iter().map(Into::into).collect(),
+            access_role,
+            elder_profile,
+            clues,
             created_at: case_model.created_at,
             updated_at: case_model.updated_at,
         }

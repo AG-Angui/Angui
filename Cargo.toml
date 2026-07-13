@@ -12,17 +12,22 @@ resolver = "2"
 [dependencies]
 actix-cors = "0.7.1"
 actix-web = "4.14.0"
+argon2 = "0.5.3"
 chrono = "0.4.42"
 env_logger = "0.11.11"
+futures-util = "0.3.32"
+hex = "0.4.3"
 sea-orm = { version = "1.1.19", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+sha2 = "0.10.9"
 thiserror = "2.0.18"
+tokio = { version = "1.52.0", features = ["macros", "rt-multi-thread", "sync"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 
 [dev-dependencies]
 migration = { path = "migration" }
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.52.0", features = ["macros", "rt-multi-thread"] }
 
 [profile.dev]
 debug = 0

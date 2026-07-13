@@ -1,17 +1,8 @@
-mod app_state;
-mod config;
-mod entities;
-mod error;
-mod models;
-mod routes;
-mod services;
-
 use std::io;
 
 use actix_cors::Cors;
 use actix_web::{App, HttpServer, http, middleware::Logger, web};
-use app_state::AppState;
-use config::Settings;
+use angui::{app_state::AppState, config::Settings, rate_limit::LoginRateLimiter, routes};
 use sea_orm::Database;
 
 #[actix_web::main]
@@ -24,7 +15,11 @@ async fn main() -> io::Result<()> {
     let database = Database::connect(&settings.database_url)
         .await
         .map_err(|error| io::Error::other(format!("database connection failed: {error}")))?;
-    let state = web::Data::new(AppState { db: database });
+    let state = web::Data::new(AppState {
+        db: database,
+        session_ttl_hours: settings.session_ttl_hours,
+        login_limiter: LoginRateLimiter::default(),
+    });
 
     HttpServer::new(move || {
         let cors = Cors::default()

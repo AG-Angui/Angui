@@ -12,6 +12,7 @@
     "test:backend": "cargo test --workspace --all-features --locked",
     "migrate:up": "cargo run -p migration -- up",
     "migrate:down": "cargo run -p migration -- down",
-    "migrate:status": "cargo run -p migration -- status"
+    "migrate:status": "cargo run -p migration -- status",
+    "auth:bootstrap-demo": "cargo run --bin angui-admin -- bootstrap-demo"
   }
 }

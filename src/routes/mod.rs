@@ -1,3 +1,4 @@
+mod auth;
 mod cases;
 mod clues;
 mod health;
@@ -8,6 +9,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/api")
             .service(health::get_health)
+            .configure(auth::configure)
             .configure(cases::configure)
             .configure(clues::configure),
     );
