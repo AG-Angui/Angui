@@ -1,0 +1,22 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+
+# Rust
+/target/
+
+# React / Vite
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

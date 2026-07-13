@@ -31,7 +31,17 @@
 5. 提交前运行项目规定的格式检查、静态检查和测试。
 6. 在评审说明中列出安全影响、AI 行为变化、第三方服务变化和未解决风险。
 
-仓库尚未建立工程栈和分支策略。确定后，应在本节补充准确命令和命名规范，不能保留猜测性的启动说明。
+仓库使用 React/Vite 前端与 Rust/Actix Web 后端。提交前至少运行与改动相关的命令：
+
+```powershell
+npm run format:backend
+npm run check:backend
+npm run test:backend
+npm run lint:frontend
+npm run build:frontend
+```
+
+当前尚未确定长期分支策略、数据库和端到端测试工具；相关能力确定后，应在同一变更中补充准确命令和规范。
 
 ## 变更质量要求
 

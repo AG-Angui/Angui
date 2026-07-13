@@ -1,0 +1,14 @@
+{
+  "name": "angui-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "lint:frontend": "npm --prefix frontend run lint",
+    "dev:backend": "cargo run",
+    "format:backend": "cargo fmt --all",
+    "check:backend": "cargo clippy --all-targets --all-features -- -D warnings",
+    "test:backend": "cargo test"
+  }
+}

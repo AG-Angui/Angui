@@ -6,11 +6,13 @@
 
 - 项目名称：安归。
 - 场景：面向失智老人走失搜救的 AI + 地图协同。
-- 当前阶段：需求拆分与 MVP 设计；尚未确定工程栈，尚无可运行应用。
+- 当前阶段：MVP 工程初始化；React 前端应用壳和 Rust/Actix Web 健康检查 API 已可运行。
+- 前端：`frontend/`，React 19 + TypeScript + Vite。
+- 后端：仓库根目录，Rust 2024 + Actix Web；不要重新创建 `backend/` 目录。
 - 产品需求：[docs/PRODUCT.md](./docs/PRODUCT.md)。
 - 文档入口：[docs/README.md](./docs/README.md)。
 
-除非仓库出现可运行代码、测试和验证记录，否则不得声称家属端、指挥端、志愿者端、AI、RAG、地图、轨迹或部署能力已经实现。
+当前只可声称多角色前端应用壳、响应式导航、工作区空状态和 `GET /api/health` 已实现。除非后续出现对应代码、测试和验证记录，否则不得声称真实案件流程、AI、RAG、地图、轨迹、权限或部署能力已经实现。
 
 ## 2. 开始任务时
 
@@ -18,7 +20,7 @@
 2. 检查仓库结构、已有改动和适用的代理说明文件。
 3. 确认请求属于文档、原型、实现、诊断还是发布工作，不擅自扩大范围。
 4. 涉及权限、隐私、定位、真实数据、AI 决策或对外分发时，先阅读 `docs/SECURITY_AND_PRIVACY.md` 和 `DISTRIBUTION.md`。
-5. 如果技术选型尚未决定，优先实现与框架无关的文档/接口约束，或明确列出假设；不要悄悄选择并宣称为项目既定方案。
+5. 使用既定的 React/Vite 与 Rust/Actix Web 技术栈；数据库、AI、地图等尚未决定的部分优先实现框架无关的接口约束，或明确列出假设。
 
 ## 3. 需求优先级
 
@@ -88,21 +90,20 @@
 
 ## 9. 命令与验证
 
-当前仓库没有构建系统，因此没有默认安装、格式化、测试或启动命令。代理不得虚构命令。
+当前工程命令：
 
-引入工程栈的首个变更必须在本节及 `README.md` 中补充：
-
-```text
-运行时版本：TBD
-安装依赖：TBD
-开发启动：TBD
-格式检查：TBD
-静态检查：TBD
-单元测试：TBD
-端到端测试：TBD
-生产构建：TBD
-模拟数据初始化：TBD
+```powershell
+npm install --prefix frontend
+npm run dev:backend
+npm run dev:frontend
+npm run format:backend
+npm run check:backend
+npm run test:backend
+npm run lint:frontend
+npm run build:frontend
 ```
+
+前端开发地址为 `http://127.0.0.1:5173`，后端默认监听 `http://127.0.0.1:8080`。当前没有数据库初始化、端到端测试、演示账号或模拟数据生成命令；需要这些能力时应在实现它们的同一变更中补充准确命令。
 
 完成实现任务后，应运行与风险相称的验证并如实报告结果。若因环境、凭据或依赖无法运行，明确说明未验证内容，不能写成“应当可以”。
 

@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-本仓库目前处于**需求梳理与 MVP 设计阶段**。现有内容以项目文档为主，尚不能视为已经实现、部署或经过真实搜救验证的产品。
+本仓库目前处于 **MVP 工程初始化阶段**。已经建立 React 前端应用壳、Rust/Actix Web 后端和健康检查联调；案件、线索、任务、地图、AI 与数据持久化仍属于后续实现范围，当前不能视为已经部署或经过真实搜救验证的产品。
 
 - 需求整理入口：[docs/PRODUCT.md](./docs/PRODUCT.md)
 - 文档入口：[docs/README.md](./docs/README.md)
@@ -42,15 +42,16 @@
 | 学习中心 | 提供手册、案例、防走失知识和理论题库 | 新人不可进入真实案件操作区 |
 | 管理后台 | 权限、配置、审计与案例脱敏 | 技术人员原则上不接触明文隐私 |
 
-## 技术方向（尚未定型）
+## 技术架构
 
-- 前端：响应式 Web、H5 或小程序原型。
-- 后端：FastAPI 或 Node.js，提供案件、线索、任务、用户和轨迹接口。
-- 数据：MVP 可使用 SQLite，后续评估 PostgreSQL；图片等文件可使用对象存储。
+- 前端：React 19 + TypeScript + Vite，位于 `frontend/`。
+- 后端：Rust 2024 + Actix Web，位于仓库根目录的 `src/`。
+- 当前接口：`GET /api/health`，用于前后端连接检查。
+- 数据：尚未接入；MVP 可评估 SQLite，后续评估 PostgreSQL，文件可评估对象存储。
 - AI：通义千问/百炼 Agent 与 RAG，用于辅助问询、结构化、摘要、知识问答和案例整理。
 - 地图：高德地图 JS API/Web 服务 API，用于点位、POI、路线和轨迹展示。
 
-技术选型仍属于候选方案。在代码、依赖、配置和验证结果进入仓库前，不应在介绍材料中宣称对应能力已经完成。
+React 与 Rust/Actix Web 已确定并进入仓库。数据、AI、地图等集成仍是候选方案，在代码、配置、测试和验证结果进入仓库前，不应在介绍材料中宣称对应能力已经完成。
 
 ## 不可突破的安全边界
 
@@ -66,14 +67,39 @@
 
 ## 本地开发
 
-项目尚未确定工程栈，因此当前没有可靠的安装、启动或测试命令。建立应用骨架时，应同步更新本节和 `CODEX.md`，至少写明：
+环境要求：
 
-- 运行时与版本；
-- 依赖安装命令；
-- 环境变量模板；
-- 数据库初始化方式；
-- 开发启动、构建、检查和测试命令；
-- 演示账号与模拟数据的生成方式。
+- Node.js 24 或项目依赖支持的活跃 LTS 版本；
+- npm 11；
+- Rust 1.97+ 与 Cargo。
+
+安装前端依赖：
+
+```powershell
+npm install --prefix frontend
+```
+
+分别启动两个开发进程：
+
+```powershell
+npm run dev:backend
+npm run dev:frontend
+```
+
+- 前端：`http://127.0.0.1:5173`
+- 后端健康检查：`http://127.0.0.1:8080/api/health`
+
+质量检查：
+
+```powershell
+npm run format:backend
+npm run check:backend
+npm run test:backend
+npm run lint:frontend
+npm run build:frontend
+```
+
+后端配置示例见 `.env.example`，前端配置示例见 `frontend/.env.example`。程序读取系统环境变量，不会自动加载 `.env` 文件。当前尚无数据库初始化、演示账号或模拟数据生成命令。
 
 任何真实密钥、真实案件数据和个人信息都不得提交到仓库。
 
