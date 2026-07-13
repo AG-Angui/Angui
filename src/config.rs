@@ -5,6 +5,7 @@ pub struct Settings {
     pub host: String,
     pub port: u16,
     pub frontend_origin: String,
+    pub database_url: String,
 }
 
 impl Settings {
@@ -16,11 +17,14 @@ impl Settings {
             .map_err(|_| format!("ANGUI_PORT must be a valid TCP port, got {port_value:?}"))?;
         let frontend_origin = env::var("ANGUI_FRONTEND_ORIGIN")
             .unwrap_or_else(|_| "http://localhost:5173".to_owned());
+        let database_url = env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "sqlite://data/angui.db?mode=rwc".to_owned());
 
         Ok(Self {
             host,
             port,
             frontend_origin,
+            database_url,
         })
     }
 
@@ -39,6 +43,7 @@ mod tests {
             host: "127.0.0.1".to_owned(),
             port: 8080,
             frontend_origin: "http://localhost:5173".to_owned(),
+            database_url: "sqlite::memory:".to_owned(),
         };
 
         assert_eq!(settings.address(), ("127.0.0.1".to_owned(), 8080));

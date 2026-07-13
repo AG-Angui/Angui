@@ -8,7 +8,10 @@
     "lint:frontend": "npm --prefix frontend run lint",
     "dev:backend": "cargo run",
     "format:backend": "cargo fmt --all",
-    "check:backend": "cargo clippy --all-targets --all-features -- -D warnings",
-    "test:backend": "cargo test"
+    "check:backend": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+    "test:backend": "cargo test --workspace --all-features --locked",
+    "migrate:up": "cargo run -p migration -- up",
+    "migrate:down": "cargo run -p migration -- down",
+    "migrate:status": "cargo run -p migration -- status"
   }
 }

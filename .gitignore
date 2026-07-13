@@ -7,6 +7,13 @@
 # Rust
 /target/
 
+# Local databases
+/data/*.db
+/data/*.db-*
+/data/*.sqlite
+/data/*.sqlite-*
+!/data/.gitkeep
+
 # React / Vite
 /frontend/node_modules/
 /frontend/dist/

@@ -6,12 +6,14 @@
 
 ## 当前状态
 
-本仓库目前处于 **MVP 工程初始化阶段**。已经建立 React 前端应用壳、Rust/Actix Web 后端和健康检查联调；案件、线索、任务、地图、AI 与数据持久化仍属于后续实现范围，当前不能视为已经部署或经过真实搜救验证的产品。
+本仓库目前处于 **MVP 纵向闭环开发阶段**。React 前端应用壳、Rust/Actix Web 后端、SeaORM 数据层、版本化迁移，以及案件创建、案件查询、线索提交、人工审核和案件状态流转 API 已经落地。任务、地图、AI、正式身份认证和生产部署仍属于后续实现范围；当前实现不能视为已经部署或经过真实搜救验证的产品。
 
 - 需求整理入口：[docs/PRODUCT.md](./docs/PRODUCT.md)
 - 文档入口：[docs/README.md](./docs/README.md)
 - 产品范围：[docs/PRODUCT.md](./docs/PRODUCT.md)
 - 技术架构草案：[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- API 说明：[docs/API.md](./docs/API.md)
+- 数据库与迁移规范：[docs/DATABASE.md](./docs/DATABASE.md)
 - 数据与 AI 规范：[docs/DATA_AND_AI.md](./docs/DATA_AND_AI.md)
 - 安全与隐私边界：[docs/SECURITY_AND_PRIVACY.md](./docs/SECURITY_AND_PRIVACY.md)
 - Demo 与初赛交付：[docs/DEMO_AND_DELIVERY.md](./docs/DEMO_AND_DELIVERY.md)
@@ -47,12 +49,12 @@
 
 - 前端：React 19 + TypeScript + Vite + HeroUI 3 + Tailwind CSS 4，位于 `frontend/`。
 - 后端：Rust 2024 + Actix Web，位于仓库根目录的 `src/`。
-- 当前接口：`GET /api/health`，用于前后端连接检查。
-- 数据：计划使用 SeaORM，支持 SQLite、PostgreSQL 和 MySQL；结构变更通过 `sea-orm-migration` 和编号 SQL 脚本管理。数据库代码尚未接入。
+- 当前接口：健康检查，以及案件创建/列表/详情、案件状态流转、线索提交和线索人工审核接口。
+- 数据：SeaORM 1.1 稳定版本线，编译支持 SQLite、PostgreSQL 和 MySQL；结构变更通过 `sea-orm-migration` 和三套同编号 SQL 脚本管理。
 - AI：通义千问/百炼 Agent 与 RAG，用于辅助问询、结构化、摘要、知识问答和案例整理。
 - 地图：高德地图 JS API/Web 服务 API，用于点位、POI、路线和轨迹展示。
 
-React 与 Rust/Actix Web 已确定并进入仓库。数据、AI、地图等集成仍是候选方案，在代码、配置、测试和验证结果进入仓库前，不应在介绍材料中宣称对应能力已经完成。
+React、Rust/Actix Web 与首批 SeaORM 数据持久化已经进入仓库。当前只在 SQLite 上完成实际迁移和 HTTP 联调；PostgreSQL/MySQL 已提供驱动与方言 SQL，但尚未连接真实服务验证。AI、地图、任务和正式权限系统仍是计划能力，在代码、配置、测试和验证结果进入仓库前，不应在介绍材料中宣称已经完成。
 
 ## 不可突破的安全边界
 
@@ -80,6 +82,14 @@ React 与 Rust/Actix Web 已确定并进入仓库。数据、AI、地图等集�
 npm install --prefix frontend
 ```
 
+创建本地数据库结构。应用启动时不会自动建表，必须显式执行迁移：
+
+```powershell
+$env:DATABASE_URL = "sqlite://data/angui.db?mode=rwc"
+npm run migrate:up
+npm run migrate:status
+```
+
 分别启动两个开发进程：
 
 ```powershell
@@ -100,7 +110,17 @@ npm run lint:frontend
 npm run build:frontend
 ```
 
-后端配置示例见 `.env.example`，前端配置示例见 `frontend/.env.example`。程序读取系统环境变量，不会自动加载 `.env` 文件。当前尚无数据库初始化、演示账号或模拟数据生成命令。
+数据库迁移命令：
+
+```powershell
+npm run migrate:up
+npm run migrate:down
+npm run migrate:status
+```
+
+这些命令都读取 `DATABASE_URL`。后端配置示例见 `.env.example`，前端配置示例见 `frontend/.env.example`。程序读取系统环境变量，不会自动加载 `.env` 文件。
+
+当前 API 中的 `demo:family` 与 `demo:commander` 仅是写入审计事件的开发占位身份，不是正式认证或授权机制。不要把它们用于真实数据或对外环境。
 
 任何真实密钥、真实案件数据和个人信息都不得提交到仓库。
 

@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | [PRODUCT.md](./PRODUCT.md) | 项目定位、用户、MVP 范围、验收标准与非目标 | 产品、设计、开发、评委 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 候选架构、模块边界、核心流程和工程原则 | 开发、架构、运维 |
+| [API.md](./API.md) | 当前案件/线索接口、状态机、错误和审计约束 | 前端、后端、测试 |
 | [DATABASE.md](./DATABASE.md) | SeaORM、SQLite/PostgreSQL/MySQL 和编号 SQL 迁移规范 | 后端、数据库、运维 |
 | [DATA_AND_AI.md](./DATA_AND_AI.md) | 数据对象、线索状态、AI 输出约束、知识库治理 | 后端、AI、数据、审核人员 |
 | [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) | 权限分级、隐私保护、定位安全、日志和事件响应 | 全体成员、安全评审人员 |

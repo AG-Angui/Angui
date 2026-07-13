@@ -11,10 +11,13 @@ MVP 以人工在环为基本原则。后续版本可以提高信息整理、风�
 - 单仓库结构，Rust 后端位于仓库根目录，React 前端单独位于 `frontend/`。
 - 前端使用 React 19、TypeScript、Vite、HeroUI 3、Tailwind CSS 4、React Router 和 Lucide 图标。
 - 后端使用 Rust 2024、Actix Web、Actix CORS、Serde 和 `env_logger`。
+- 数据层使用 SeaORM 1.1 稳定版本线，启用 SQLite、PostgreSQL 和 MySQL 驱动；迁移由独立的 `migration/` workspace crate 管理。
 - Vite 开发服务器将 `/api` 代理到 Actix 默认地址 `127.0.0.1:8080`。
-- 已实现 `GET /api/health` 和对应后端测试，前端会展示连接状态。
+- 已实现健康检查、案件创建/列表/详情、案件状态流转、线索提交和线索人工审核 API。
+- 案件、老人画像、线索和审计事件已建立 SeaORM Entity；关键写入与审计事件在同一数据库事务内提交。
+- SQLite 已完成迁移 `up -> down -> up`、业务事务测试和 HTTP 闭环联调。
 
-案件、身份权限、线索、任务、轨迹、AI、地图、文件和数据库模块仍属于计划架构。
+正式身份权限、任务、轨迹、AI、地图和文件模块仍属于计划架构。当前 Demo actor 只是开发占位，不构成认证或授权。
 
 核心原则：
 
@@ -103,7 +106,7 @@ MVP 以人工在环为基本原则。后续版本可以提高信息整理、风�
 
 ## 4. 数据存储基线
 
-数据库层已经确定以下工程约束，具体表结构将在案件纵向闭环实现时落地：
+数据库层已落地首批案件纵向闭环：
 
 - ORM：统一使用 SeaORM，不在业务服务中直接拼接 SQL。
 - 数据库兼容：同时支持 SQLite、PostgreSQL 和 MySQL；本地开发默认 SQLite，部署环境可按需要选择 PostgreSQL 或 MySQL。
@@ -112,11 +115,16 @@ MVP 以人工在环为基本原则。后续版本可以提高信息整理、风�
 - 方言隔离：SQLite、PostgreSQL、MySQL 使用相同编号和功能名，分别存放在各自目录中，不能用运行时字符串替换拼装方言 SQL。
 - 不可变更：迁移合并后不得重排编号、删除旧脚本或直接修改已经发布的脚本；修正必须新增迁移编号。
 - 禁止自动同步：应用启动时不得使用自动建表或 schema synchronize 替代版本化迁移。
+- 首批表：`cases`、`elder_profiles`、`clues`、`audit_events`。
+- 标识与时间：首版跨数据库基线使用字符串 UUID 和 RFC3339 UTC 时间，避免业务 Entity 被单一数据库原生 UUID/时间类型绑定；未来改为原生类型必须新增迁移。
+- 事务边界：`case.created`、`case.status_changed`、`clue.submitted`、`clue.reviewed` 与对应业务写入原子提交。
 - 文件：开发阶段使用受控本地目录；部署时评估带访问控制和生命周期规则的对象存储。
 - 缓存/任务队列：首版可不引入，确有异步 AI、附件处理或通知需求时再增加。
 - 向量检索：优先使用百炼知识库或独立适配的本地向量库，避免成为案件事实的唯一存储。
 
 完整的目录、命名、回滚和验证规则见 [DATABASE.md](./DATABASE.md)。
+
+PostgreSQL/MySQL 已完成依赖编译和方言 SQL 留档，但仍需在 CI 服务容器或真实测试实例中执行完整迁移与业务集成测试，不能以 SQLite 结果替代。
 
 敏感字段的加密、密钥托管、备份与删除能力必须在接入真实数据前完成。
 
