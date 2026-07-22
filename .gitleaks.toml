@@ -1,0 +1,10 @@
+title = "Angui Gitleaks allowlist"
+
+# This literal is a former README documentation placeholder, not a credential.
+# Keep the exception value-specific so all real secret patterns remain scanned.
+[allowlist]
+  description = "README documentation password placeholder"
+  regexTarget = "match"
+  regexes = [
+    '''replace-with-at-least-12-characters''',
+  ]
