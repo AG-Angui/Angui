@@ -1,0 +1,846 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: Angui API
+  version: 0.1.0
+  summary: Angui 搜救协作服务的认证、案件成员、案件和线索 API
+  description: |
+    本文档描述当前 Rust/Actix Web 服务实际注册的 HTTP API。
+
+    除健康检查和登录外，所有接口都要求使用服务端会话 Bearer token。
+    案件访问还取决于当前用户是否属于目标案件以及其案件角色。
+
+    重要授权规则：
+
+    - family 和 commander 可以创建案件；创建者会成为该案件的同角色成员。
+    - family 只能显式邀请全局角色为 commander 的活动账号。
+    - commander 可以添加 family、commander 或 volunteer，但请求角色必须与目标账号全局角色一致。
+    - commander 可以查看和审核案件内全部线索，并改变案件状态。
+    - family 可以查看已确认线索及本人提交的线索。
+    - volunteer 只能查看已确认线索，且 elder_profile.health_notes 会由服务端返回为 null。
+    - 没有案件成员关系时，案件资源通常返回 404，以减少资源 ID 枚举。
+
+    当前仍是 MVP API，不应处理真实搜救数据。正式部署必须使用 HTTPS。
+  contact:
+    name: AG-Angui
+    url: https://github.com/AG-Angui/Angui
+servers:
+  - url: http://127.0.0.1:8080
+    description: 本地 Actix Web 开发服务器
+tags:
+  - name: Health
+    description: 服务健康检查
+  - name: Authentication
+    description: 服务端会话登录、查询和撤销
+  - name: Cases
+    description: 案件、老人资料、案件成员和案件内线索
+  - name: Clues
+    description: 线索人工审核
+security:
+  - bearerAuth: []
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: 获取服务健康状态
+      description: 不访问认证会话，可用于进程和反向代理健康检查。
+      security: []
+      responses:
+        "200":
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                service: angui-api
+                version: 0.1.0
+
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: 使用邮箱和密码创建会话
+      description: |
+        登录成功后返回一次原始 Bearer token。数据库只保存 token 的 SHA-256 哈希。
+        登录失败会同时按客户端 IP 和客户端 IP + 规范化邮箱执行进程内限流。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            example:
+              email: family@demo.invalid
+              password: provided-out-of-band
+      responses:
+        "200":
+          description: 登录成功并创建服务端会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/me:
+    get:
+      tags: [Authentication]
+      operationId: getCurrentUser
+      summary: 获取当前认证用户
+      x-roles: [family, commander, volunteer, admin]
+      responses:
+        "200":
+          description: 当前活动账号
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: 撤销当前服务端会话
+      description: 成功后，当前 Bearer token 立即失效。
+      x-roles: [family, commander, volunteer, admin]
+      responses:
+        "204":
+          description: 会话已撤销，无响应正文
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/cases:
+    get:
+      tags: [Cases]
+      operationId: listCases
+      summary: 列出当前用户有成员关系的案件
+      description: 按案件创建时间倒序返回；没有案件成员关系时返回空数组。
+      x-roles: [family, commander, volunteer, admin]
+      responses:
+        "200":
+          description: 当前用户可访问的案件列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaseListItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [Cases]
+      operationId: createCase
+      summary: 创建案件和老人资料
+      description: |
+        family 或 commander 可以创建案件。服务端生成案件 UUID、AG- 前缀案件编号和 active 初始状态，
+        并把创建者加入案件。不会自动把其他 commander 加入案件。
+      x-roles: [family, commander]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCaseRequest"
+            example:
+              display_name: 模拟老人 A
+              age: 76
+              gender: female
+              physical_description: 短发，行动较慢
+              clothing_description: 蓝色外套
+              health_notes: 模拟认知障碍信息
+              last_seen_at: "2026-07-13T09:00:00Z"
+              last_seen_location: 模拟公园北门
+      responses:
+        "201":
+          description: 案件已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/cases/{case_id}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: getCase
+      summary: 获取案件详情、老人资料和当前角色可见线索
+      description: |
+        必须是案件成员。线索列表会根据案件角色裁剪；volunteer 的 health_notes 固定返回 null。
+      x-case-roles: [family, commander, volunteer]
+      responses:
+        "200":
+          description: 经过服务端角色裁剪的案件详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/cases/{case_id}/status:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    patch:
+      tags: [Cases]
+      operationId: updateCaseStatus
+      summary: 更新案件状态
+      description: |
+        仅案件 commander 可以操作。允许 active -> resolved、active -> closed、
+        resolved -> active、resolved -> closed，以及相同状态的幂等更新。closed 不能转回其他状态。
+      x-case-roles: [commander]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCaseStatusRequest"
+            example:
+              status: resolved
+      responses:
+        "200":
+          description: 更新后的案件详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/cases/{case_id}/clues:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      tags: [Cases]
+      operationId: createClue
+      summary: 向案件提交待审核线索
+      description: |
+        family、commander 和 volunteer 案件成员均可提交。服务端忽略客户端对状态的控制，
+        新线索始终写为 pending_review。closed 案件不能再添加线索。
+      x-case-roles: [family, commander, volunteer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClueRequest"
+            example:
+              source: family
+              content: 模拟线索：曾向市场方向步行
+              occurred_at: "2026-07-13T09:10:00Z"
+              location_text: 模拟公园北门
+      responses:
+        "201":
+          description: 待审核线索已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Clue"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/cases/{case_id}/members:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      tags: [Cases]
+      operationId: addCaseMember
+      summary: 按邮箱添加案件成员
+      description: |
+        family 只能邀请 commander。commander 可以添加 family、commander 或 volunteer。
+        请求中的案件角色必须与目标活动账号的全局角色一致，且目标账号不能已经属于该案件。
+      x-case-roles: [family, commander]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddCaseMemberRequest"
+            example:
+              email: volunteer@demo.invalid
+              role: volunteer
+      responses:
+        "201":
+          description: 案件成员已添加
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseMember"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/clues/{clue_id}/review:
+    parameters:
+      - $ref: "#/components/parameters/ClueId"
+    patch:
+      tags: [Clues]
+      operationId: reviewClue
+      summary: 人工审核线索
+      description: |
+        仅线索所属案件的 commander 可以操作。接口接受 needs_verification、confirmed、rejected、
+        expired 或 duplicate，不接受 pending_review 作为人工审核目标状态。
+      x-case-roles: [commander]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewClueRequest"
+            example:
+              status: confirmed
+      responses:
+        "200":
+          description: 审核后的线索
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Clue"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Angui session token
+      description: 登录接口返回的 angui_ 前缀服务端会话令牌。
+
+  parameters:
+    CaseId:
+      name: case_id
+      in: path
+      required: true
+      description: 案件 UUID。没有案件成员关系时通常按未找到处理。
+      schema:
+        type: string
+        format: uuid
+    ClueId:
+      name: clue_id
+      in: path
+      required: true
+      description: 线索 UUID。
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    ValidationError:
+      description: 请求字段、枚举值或业务输入无效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: validation_error
+              message: last_seen_location is required
+    Unauthorized:
+      description: 缺少会话、Authorization 头无效、会话已过期或已撤销
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: unauthorized
+              message: invalid or expired session
+    Forbidden:
+      description: 用户已认证，但账号角色或案件角色不允许该操作
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: forbidden
+              message: this account cannot perform the requested case action
+    NotFound:
+      description: 资源不存在，或当前用户没有相应案件成员关系
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: not_found
+              message: case was not found
+    Conflict:
+      description: 资源当前状态与请求冲突
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: conflict
+              message: new clues cannot be added to a closed case
+    RateLimited:
+      description: 当前进程记录的登录失败次数已超过限制
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: rate_limited
+              message: too many failed login attempts; try again later
+    InternalError:
+      description: 内部服务或数据库操作失败；不会返回内部 SQL
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            internal:
+              value:
+                error:
+                  code: internal_error
+                  message: internal service error
+            database:
+              value:
+                error:
+                  code: database_error
+                  message: database operation failed
+
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, version]
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: angui-api
+        version:
+          type: string
+          description: 当前 Cargo package 版本。
+          example: 0.1.0
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 320
+          description: 会被去除首尾空白并转换为小写；当前服务端仅检查非空、长度和包含 @。
+          example: family@demo.invalid
+        password:
+          type: string
+          minLength: 1
+          maxLength: 256
+          writeOnly: true
+          description: 登录密码。失败响应不会区分邮箱、账号状态或密码错误。
+
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [token, expires_at, user]
+      properties:
+        token:
+          type: string
+          pattern: "^angui_[0-9a-f]{64}$"
+          description: 只在登录响应中返回一次的原始会话令牌。
+          example: angui_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        expires_at:
+          type: string
+          format: date-time
+          description: 服务端会话过期时间。
+        user:
+          $ref: "#/components/schemas/User"
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, display_name, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          maxLength: 320
+        display_name:
+          type: string
+        role:
+          $ref: "#/components/schemas/UserRole"
+
+    UserRole:
+      type: string
+      enum: [family, commander, volunteer, admin]
+
+    CaseRole:
+      type: string
+      enum: [family, commander, volunteer]
+
+    CaseStatus:
+      type: string
+      enum: [active, resolved, closed]
+
+    ClueStatus:
+      type: string
+      enum:
+        - pending_review
+        - needs_verification
+        - confirmed
+        - rejected
+        - expired
+        - duplicate
+
+    ReviewClueStatus:
+      type: string
+      enum: [needs_verification, confirmed, rejected, expired, duplicate]
+
+    CreateCaseRequest:
+      type: object
+      additionalProperties: false
+      required: [display_name, last_seen_location]
+      properties:
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: 服务端去除首尾空白后必须为 1 到 120 个字符。
+        age:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 130
+        gender:
+          type: [string, "null"]
+        physical_description:
+          type: [string, "null"]
+        clothing_description:
+          type: [string, "null"]
+        health_notes:
+          type: [string, "null"]
+          description: 敏感字段；volunteer 获取案件详情时服务端固定返回 null。
+        last_seen_at:
+          type: [string, "null"]
+          description: 建议使用 RFC 3339；当前服务端只去除首尾空白，不解析时间格式。
+          example: "2026-07-13T09:00:00Z"
+        last_seen_location:
+          type: string
+          minLength: 1
+          description: 必填；只包含空白也会被拒绝。
+
+    UpdateCaseStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/CaseStatus"
+
+    CreateClueRequest:
+      type: object
+      additionalProperties: false
+      required: [source, content]
+      properties:
+        source:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: 服务端去除首尾空白后必须为 1 到 64 个字符。
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: 服务端去除首尾空白后必须为 1 到 4000 个字符。
+        occurred_at:
+          type: [string, "null"]
+          description: 建议使用 RFC 3339；当前服务端只去除首尾空白，不解析时间格式。
+        location_text:
+          type: [string, "null"]
+
+    ReviewClueRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/ReviewClueStatus"
+
+    AddCaseMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 320
+          description: 目标活动账号邮箱；服务端转换为小写并去除首尾空白。
+        role:
+          $ref: "#/components/schemas/CaseRole"
+
+    CaseMember:
+      type: object
+      additionalProperties: false
+      required: [user_id, email, display_name, role]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        role:
+          $ref: "#/components/schemas/CaseRole"
+
+    CaseListItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - case_code
+        - status
+        - access_role
+        - display_name
+        - last_seen_at
+        - last_seen_location
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        case_code:
+          type: string
+          pattern: "^AG-[0-9A-F]{8}$"
+        status:
+          $ref: "#/components/schemas/CaseStatus"
+        access_role:
+          $ref: "#/components/schemas/CaseRole"
+        display_name:
+          type: string
+        last_seen_at:
+          type: [string, "null"]
+        last_seen_location:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CaseDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - case_code
+        - status
+        - access_role
+        - elder_profile
+        - clues
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        case_code:
+          type: string
+          pattern: "^AG-[0-9A-F]{8}$"
+        status:
+          $ref: "#/components/schemas/CaseStatus"
+        access_role:
+          $ref: "#/components/schemas/CaseRole"
+        elder_profile:
+          $ref: "#/components/schemas/ElderProfile"
+        clues:
+          type: array
+          description: 根据当前案件角色裁剪后的线索列表，按创建时间倒序。
+          items:
+            $ref: "#/components/schemas/Clue"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ElderProfile:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - display_name
+        - age
+        - gender
+        - physical_description
+        - clothing_description
+        - health_notes
+        - last_seen_at
+        - last_seen_location
+      properties:
+        id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+        age:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 130
+        gender:
+          type: [string, "null"]
+        physical_description:
+          type: [string, "null"]
+        clothing_description:
+          type: [string, "null"]
+        health_notes:
+          type: [string, "null"]
+          description: volunteer 响应中为 null；其他角色按数据库值返回。
+        last_seen_at:
+          type: [string, "null"]
+        last_seen_location:
+          type: [string, "null"]
+
+    Clue:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - case_id
+        - status
+        - source
+        - content
+        - occurred_at
+        - location_text
+        - created_at
+        - updated_at
+        - reviewed_at
+        - is_own_submission
+      properties:
+        id:
+          type: string
+          format: uuid
+        case_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/ClueStatus"
+        source:
+          type: string
+          maxLength: 64
+        content:
+          type: string
+          maxLength: 4000
+        occurred_at:
+          type: [string, "null"]
+        location_text:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        reviewed_at:
+          type: [string, "null"]
+          format: date-time
+        is_own_submission:
+          type: boolean
+          description: 当前认证用户是否为该线索的提交者。
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_error
+            - unauthorized
+            - forbidden
+            - not_found
+            - conflict
+            - rate_limited
+            - internal_error
+            - database_error
+        message:
+          type: string
