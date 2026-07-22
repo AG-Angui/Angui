@@ -32,12 +32,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Cargo build data
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: ci
-          cache-on-failure: true
-
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -104,12 +98,6 @@ jobs:
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-
-      - name: Cache Cargo build data
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: database-ci
-          cache-on-failure: true
 
       - name: Exercise PostgreSQL migrations
         env:
