@@ -1,0 +1,176 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: angui-preview
+    timeout-minutes: 45
+    env:
+      RUSTUP_DIST_SERVER: https://rsproxy.cn
+      RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
+    outputs:
+      tag_slug: ${{ steps.meta.outputs.tag_slug }}
+      api_image: ${{ steps.meta.outputs.api_image }}
+      web_image: ${{ steps.meta.outputs.web_image }}
+      api_latest_image: ${{ steps.meta.outputs.api_latest_image }}
+      web_latest_image: ${{ steps.meta.outputs.web_latest_image }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: release
+          cache-on-failure: true
+
+      - name: Run release Rust checks and build
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
+          cargo build --workspace --all-features --release --locked
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+          registry-url: https://registry.npmmirror.com
+          mirror: https://npmmirror.com/mirrors/node
+
+      - name: Build release frontend
+        run: |
+          npm ci --prefix frontend
+          npm run lint:frontend
+          npm run build:frontend
+
+      - name: Stage release image contexts
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d .preview/backend .preview/frontend
+          install -m 755 target/release/angui .preview/backend/angui
+          install -m 755 target/release/angui-admin .preview/backend/angui-admin
+          install -m 755 target/release/migration .preview/backend/migration
+          cp -a frontend/dist/. .preview/frontend/
+
+      - name: Compute release metadata
+        id: meta
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          tag_slug="$(printf '%s' "${RELEASE_TAG}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-48)"
+          test -n "${tag_slug}"
+          {
+            echo "tag_slug=${tag_slug}"
+            echo "api_image=ghcr.io/${repository}-api:${RELEASE_TAG}"
+            echo "web_image=ghcr.io/${repository}-web:${RELEASE_TAG}"
+            echo "api_latest_image=ghcr.io/${repository}-api:latest"
+            echo "web_latest_image=ghcr.io/${repository}-web:latest"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build and push release backend image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: deploy/preview/Dockerfile.backend
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.api_image }}
+            ${{ steps.meta.outputs.api_latest_image }}
+
+      - name: Build and push release frontend image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: deploy/preview/Dockerfile.frontend
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.web_image }}
+            ${{ steps.meta.outputs.web_latest_image }}
+
+      - name: Upload permanent tag preview files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: angui-release-preview-${{ github.sha }}
+          path: .preview
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy-tag-preview:
+    needs: build-and-publish
+    if: vars.PREVIEW_DEPLOY_ENABLED == 'true'
+    runs-on: angui-preview
+    timeout-minutes: 20
+    environment:
+      name: ${{ vars.PREVIEW_ENVIRONMENT || 'preview' }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download release files for the persistent tag preview
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: angui-release-preview-${{ github.sha }}
+          path: .preview
+
+      - name: Deploy permanent tag preview locally
+        shell: bash
+        env:
+          TAG_SLUG: ${{ needs.build-and-publish.outputs.tag_slug }}
+          PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/var/github-runner/angui/previews' }}
+          PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
+          PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'https' }}
+          PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
+          PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
+          PREVIEW_DEMO_PASSWORD: ${{ secrets.PREVIEW_DEMO_PASSWORD }}
+          PREVIEW_REPOSITORY_DIR: ${{ github.workspace }}
+          PREVIEW_BACKEND_DIR: ${{ github.workspace }}/.preview/backend
+          PREVIEW_FRONTEND_DIR: ${{ github.workspace }}/.preview/frontend
+        run: |
+          set -euo pipefail
+          test -n "${PREVIEW_BASE_DOMAIN}"
+          export PREVIEW_ID="tag-${TAG_SLUG}"
+          export PREVIEW_PROJECT="tag-${TAG_SLUG}"
+          export PREVIEW_ROUTER="tag-${TAG_SLUG}"
+          export PREVIEW_HOST="tag-${TAG_SLUG}.${PREVIEW_BASE_DOMAIN}"
+          export PREVIEW_ORIGIN="${PREVIEW_SCHEME}://tag-${TAG_SLUG}.${PREVIEW_BASE_DOMAIN}"
+          chmod +x deploy/preview/deploy-local.sh
+          deploy/preview/deploy-local.sh deploy
+
+      - name: Write permanent tag preview URL
+        env:
+          PREVIEW_URL: ${{ vars.PREVIEW_SCHEME || 'https' }}://tag-${{ needs.build-and-publish.outputs.tag_slug }}.${{ vars.PREVIEW_BASE_DOMAIN }}
+        run: echo "Tag preview deployed at ${PREVIEW_URL}" >> "${GITHUB_STEP_SUMMARY}"

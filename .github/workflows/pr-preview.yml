@@ -1,26 +1,25 @@
-name: preview
+name: pr-preview
 
-# workflow_run is intentional: deployment uses the trusted default-branch
-# workflow and accepts artifacts only from a successful push-triggered CI run.
+# Only internal PRs are deployed. The deployment host never executes artifacts
+# from an external fork, even after its CI workflow succeeds.
 on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: [ci]
     types: [completed]
-  delete:
 
 permissions:
   contents: read
 
 concurrency:
-  group: preview-branch-${{ github.event.workflow_run.head_branch || github.event.ref || github.run_id }}
+  group: preview-pr-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   deploy:
     if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       vars.PREVIEW_DEPLOY_ENABLED == 'true'
     runs-on: angui-preview
     timeout-minutes: 25
@@ -32,7 +31,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          # Deployment tooling is always loaded from the trusted default branch.
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
@@ -52,27 +50,29 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ github.event.workflow_run.id }}
 
-      - name: Compute branch preview identity
+      - name: Compute pull request preview identity
         id: preview
         shell: bash
         env:
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
           PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'https' }}
         run: |
           set -euo pipefail
+          test -n "${PR_NUMBER}"
+          test -n "${HEAD_SHA}"
           test -n "${PREVIEW_BASE_DOMAIN}"
-          slug="$(printf '%s' "${HEAD_BRANCH}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-48)"
-          test -n "${slug}"
+          short_sha="${HEAD_SHA:0:12}"
           {
-            echo "id=branch-${slug}"
-            echo "project=branch-${slug}"
-            echo "router=branch-${slug}"
-            echo "host=${slug}.${PREVIEW_BASE_DOMAIN}"
-            echo "origin=${PREVIEW_SCHEME}://${slug}.${PREVIEW_BASE_DOMAIN}"
+            echo "id=pr-${PR_NUMBER}"
+            echo "project=pr-${PR_NUMBER}"
+            echo "router=pr-${PR_NUMBER}"
+            echo "host=pr-${PR_NUMBER}-${short_sha}.${PREVIEW_BASE_DOMAIN}"
+            echo "origin=${PREVIEW_SCHEME}://pr-${PR_NUMBER}-${short_sha}.${PREVIEW_BASE_DOMAIN}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Deploy branch preview locally
+      - name: Deploy pull request preview locally
         shell: bash
         env:
           PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/var/github-runner/angui/previews' }}
@@ -92,34 +92,7 @@ jobs:
           chmod +x deploy/preview/deploy-local.sh
           deploy/preview/deploy-local.sh deploy
 
-      - name: Write preview URL
+      - name: Write pull request preview URL
         env:
           PREVIEW_URL: ${{ steps.preview.outputs.origin }}
-        run: echo "Preview deployed at ${PREVIEW_URL}" >> "${GITHUB_STEP_SUMMARY}"
-
-  cleanup:
-    if: >-
-      github.event_name == 'delete' &&
-      github.event.ref_type == 'branch' &&
-      vars.PREVIEW_DEPLOY_ENABLED == 'true'
-    runs-on: angui-preview
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-
-      - name: Stop deleted branch preview
-        shell: bash
-        env:
-          DELETED_BRANCH: ${{ github.event.ref }}
-          PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/var/github-runner/angui/previews' }}
-        run: |
-          set -euo pipefail
-          slug="$(printf '%s' "${DELETED_BRANCH}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-48)"
-          test -n "${slug}"
-          export PREVIEW_ID="branch-${slug}"
-          export PREVIEW_PROJECT="branch-${slug}"
-          chmod +x deploy/preview/deploy-local.sh
-          deploy/preview/deploy-local.sh cleanup
+        run: echo "PR preview deployed at ${PREVIEW_URL}" >> "${GITHUB_STEP_SUMMARY}"

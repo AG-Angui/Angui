@@ -1,0 +1,85 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * 1,4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  rustsec:
+    name: RustSec advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Audit Cargo.lock
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
+        with:
+          token: ${{ github.token }}
+          working-directory: .
+
+  npm-audit:
+    name: npm high and critical advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+
+      - name: Audit frontend lockfile
+        # The lockfile uses npmmirror for package downloads, whose audit endpoint
+        # is not implemented. Audit against npm's official advisory endpoint.
+        run: >-
+          npm audit --prefix frontend --package-lock-only --audit-level=high
+          --registry=https://registry.npmjs.org
+
+  secrets:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan working tree or full history
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='8.30.1'
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          tool_dir="$(mktemp -d)"
+          trap 'rm -rf "${tool_dir}"' EXIT
+          curl -fsSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}" \
+            -o "${tool_dir}/${archive}"
+          printf '%s  %s\n' \
+            '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' \
+            "${archive}" | (cd "${tool_dir}" && sha256sum -c -)
+          tar -xzf "${tool_dir}/${archive}" -C "${tool_dir}"
+          gitleaks="${tool_dir}/gitleaks"
+          if [ "${GITHUB_EVENT_NAME}" = 'schedule' ]; then
+            "${gitleaks}" git . --log-opts='--all' --redact --no-banner
+          else
+            "${gitleaks}" dir . --redact --no-banner
+          fi

@@ -1,0 +1,37 @@
+name: pr-preview-cleanup
+
+# This workflow does not checkout or execute PR code. pull_request_target keeps
+# the cleanup definition on the trusted default branch.
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    if: vars.PREVIEW_DEPLOY_ENABLED == 'true'
+    runs-on: angui-preview
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Stop pull request preview
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/var/github-runner/angui/previews' }}
+        run: |
+          set -euo pipefail
+          export PREVIEW_ID="pr-${PR_NUMBER}"
+          export PREVIEW_PROJECT="pr-${PR_NUMBER}"
+          chmod +x deploy/preview/deploy-local.sh
+          deploy/preview/deploy-local.sh cleanup

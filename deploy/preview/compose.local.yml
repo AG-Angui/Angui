@@ -1,0 +1,74 @@
+services:
+  migrate:
+    image: ${PREVIEW_RUNTIME_IMAGE:?PREVIEW_RUNTIME_IMAGE is required}
+    restart: "no"
+    command: ["migration", "up"]
+    environment:
+      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./runtime/angui:/usr/local/bin/angui:ro
+      - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro
+      - ./runtime/migration:/usr/local/bin/migration:ro
+      - angui-data:/app/data
+
+  bootstrap:
+    image: ${PREVIEW_RUNTIME_IMAGE:?PREVIEW_RUNTIME_IMAGE is required}
+    restart: "no"
+    command: ["angui-admin", "bootstrap-demo"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      ANGUI_DEMO_PASSWORD: ${PREVIEW_DEMO_PASSWORD:?PREVIEW_DEMO_PASSWORD is required}
+    volumes:
+      - ./runtime/angui:/usr/local/bin/angui:ro
+      - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro
+      - ./runtime/migration:/usr/local/bin/migration:ro
+      - angui-data:/app/data
+
+  api:
+    image: ${PREVIEW_RUNTIME_IMAGE:?PREVIEW_RUNTIME_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ANGUI_HOST: 0.0.0.0
+      ANGUI_PORT: 8080
+      ANGUI_FRONTEND_ORIGIN: ${PREVIEW_ORIGIN:?PREVIEW_ORIGIN is required}
+      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./runtime/angui:/usr/local/bin/angui:ro
+      - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro
+      - ./runtime/migration:/usr/local/bin/migration:ro
+      - angui-data:/app/data
+
+  web:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${PREVIEW_PROXY_NETWORK:-angui-proxy}
+      - traefik.http.routers.${PREVIEW_ROUTER:?PREVIEW_ROUTER is required}.rule=Host(`${PREVIEW_HOST:?PREVIEW_HOST is required}`)
+      - traefik.http.routers.${PREVIEW_ROUTER:?PREVIEW_ROUTER is required}.entrypoints=web
+      - traefik.http.services.${PREVIEW_ROUTER:?PREVIEW_ROUTER is required}.loadbalancer.server.port=80
+    networks:
+      - default
+      - angui-proxy
+
+volumes:
+  angui-data:
+
+networks:
+  angui-proxy:
+    external: true
+    name: ${PREVIEW_PROXY_NETWORK:-angui-proxy}

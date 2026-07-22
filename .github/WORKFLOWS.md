@@ -31,6 +31,20 @@ private/non-open-source use requires an appropriate GitHub Code Security or
 Advanced Security license. Revisit CodeQL after adopting an OSI-approved
 license for a public repository or enabling the paid product.
 
+## Security checks
+
+`security.yml` runs on pull requests, pushes to `main`, manual dispatch, and
+weekly at 03:17 UTC on Monday. It fails on RustSec advisories in `Cargo.lock`,
+high or critical npm advisories in the frontend lockfile, and detected secrets.
+Routine runs scan the working tree; the weekly run scans all Git history.
+
+The frontend lockfile downloads packages through npmmirror, which does not
+implement npm's audit endpoint. The workflow intentionally sends only the npm
+audit request to `registry.npmjs.org`; ordinary CI dependency installation uses
+the configured Chinese mirror. Trivy image scanning belongs after preview images
+are enabled, and `cargo-deny` should be added after third-party license/source
+policy is defined.
+
 ## Gemini Code Assist GitHub app
 
 There is no repository-managed Gemini review workflow. Gemini Code Assist can
@@ -52,6 +66,11 @@ to a GitHub-hosted runner; the API does not need to be local. Configure:
 - Secret `CUSTOM_REVIEW_API_KEY`: optional bearer token.
 - Variable `CUSTOM_REVIEW_MODEL`: optional model name; defaults to
   `qwen3-coder`.
+- Variable `CUSTOM_REVIEW_API_STYLE`: optional. Defaults to `chat` for
+  OpenAI-compatible Chat Completions APIs. Set `responses` for OpenAI's
+  Responses API.
+- Variable `CUSTOM_REVIEW_REASONING_EFFORT`: optional Responses API reasoning
+  effort; defaults to `medium` and is ignored in `chat` mode.
 - Variable `CUSTOM_REVIEW_MAX_DIFF_CHARS`: optional diff limit; defaults to
   `120000`.
 - Variable `CUSTOM_REVIEW_LABEL`: optional. When empty, review every non-draft
@@ -66,6 +85,12 @@ with a PR number. The configured API receives the PR title, branch names, and up
 to the configured number of diff characters, so use a provider whose retention
 and training policy is acceptable for the repository.
 
+For OpenAI Responses API with GPT-5.6, configure
+`CUSTOM_REVIEW_API_BASE=https://api.openai.com/v1`,
+`CUSTOM_REVIEW_API_STYLE=responses`, and `CUSTOM_REVIEW_MODEL=gpt-5.6`.
+The workflow sends `instructions`, `input`, and `reasoning.effort`, and parses
+review text from `output[*].content[*]` entries of type `output_text`.
+
 ## Self-hosted runner
 
 Create a dedicated, non-root Linux user and open the repository's **Settings >
@@ -73,82 +98,110 @@ Actions > Runners > New self-hosted runner** page. Select Linux/x64 and run the
 download and `config.sh` commands shown by GitHub; the registration token is
 short-lived, so copy it from that page instead of storing it in the repository.
 
-Add purpose-specific labels during registration, for example:
+Register the runner with the CI and preview labels:
 
 ```bash
 ./config.sh --url https://github.com/AG-Angui/Angui \
   --token '<short-lived-registration-token>' \
-  --labels angui-ci,angui-review \
+  --labels angui-ci,angui-preview \
   --unattended
 sudo ./svc.sh install
 sudo ./svc.sh start
 sudo ./svc.sh status
 ```
 
-For the custom reviewer, set `CUSTOM_REVIEW_RUNNER=angui-review`. A runner used
-for CI or previews also needs Docker Engine and Docker Compose v2. Keep runner
-workloads isolated from production services, do not mount the Docker socket
-into untrusted containers, and do not run fork-controlled code on a runner that
-holds deployment or API secrets.
+The `angui-ci` label runs the CI workflow. The `angui-preview` label deploys
+previews locally on this server and builds release images only when a `v*` tag
+is pushed. A runner used for CI or previews needs Docker Engine and Docker
+Compose v2. The database CI job starts PostgreSQL and MySQL service containers,
+so Docker must be available to the runner service account. CI jobs force
+external fork pull requests back to `ubuntu-latest`, because they checkout and
+execute untrusted PR code.
 
-The workflows can be switched without editing YAML by setting repository
-variables:
+This intentionally places internal CI and preview deployment on one Docker-capable
+host. Anyone who can push a branch in this repository can make CI execute code
+there, and Docker access is effectively host-level access. Grant branch push
+permission only to trusted maintainers; use a separate, non-deployment runner
+if that trust boundary changes.
 
-- `RUST_CI_RUNNER=angui-ci`
-- `DATABASE_CI_RUNNER=angui-ci`
-- `FRONTEND_CI_RUNNER=angui-ci`
-- `PREVIEW_BUILD_RUNNER=angui-ci`
-- `CUSTOM_REVIEW_RUNNER=angui-review`
+CI dependency downloads use the repository-managed Chinese mirrors: Rustup and
+Cargo use `rsproxy.cn`, while Node.js and npm use `npmmirror.com`. Docker image
+pulls remain governed by the Docker daemon configuration on the server. The
+self-hosted runner must still be able to reach GitHub Actions and GHCR through
+direct Internet access or a standard HTTPS proxy; URL-prefix download
+accelerators are not sufficient for a runner.
 
-Leave any variable unset to keep that job on `ubuntu-latest`. The database job
-uses PostgreSQL and MySQL service containers, so a self-hosted database runner
-must be Linux and have a working Docker daemon. CI jobs force fork pull requests
-back to `ubuntu-latest` even when these variables are set, because they checkout
-and execute PR code. Repository-internal branches and push runs can use the
-self-hosted labels.
+## Preview domains and releases
 
-## Branch previews
+Branch and internal pull request previews reuse the successful CI artifacts.
+They mount the `angui`, `angui-admin`, `migration`, and frontend `dist` files
+into one fixed local runtime image; they never build or push a new application
+image for each commit. The local runtime image is automatically built once as
+`angui-preview-runtime:bookworm` if it does not already exist.
 
-After a successful push-triggered `ci` run, `preview.yml` can build backend and
-frontend images and publish SHA and branch tags to GHCR. Image builds and
-deployment are off by default so an unconfigured repository does not burn
-runner minutes. Set `PREVIEW_BUILD_ENABLED=true` to publish images without a
-server, or set `PREVIEW_DEPLOY_ENABLED=true` after preparing a Docker Compose
-server (deployment also enables image builds).
+The VM-local Traefik publishes previews through Docker labels. The parent host's
+Nginx owns the wildcard certificate and forwards requests to the VM while
+preserving the original `Host` header:
 
-The preview workflow downloads the release binary and frontend bundle from the
-successful CI run and only packages them into runtime images. It does not
-compile Rust a second time.
+| Kind | URL | Retention |
+| --- | --- | --- |
+| Branch | `<branch-slug>.angui.cg8.site` | Latest commit while the branch exists |
+| Internal PR | `pr-<number>-<short-sha>.angui.cg8.site` | Latest commit while the PR is open |
+| Tag | `tag-<tag-slug>.angui.cg8.site` | Retained until manually removed |
 
-The backend artifact and image contain `angui`, `angui-admin`, and `migration`.
-Compose first runs the one-shot migration service, then explicitly bootstraps
-the `.invalid` demo accounts, and only then starts the API. Application startup
-therefore remains separate from schema and account initialization. Re-running
-the bootstrap revokes prior demo-account sessions.
+PR previews are only deployed when the PR head repository is this repository.
+Artifacts from external forks never run on the Docker-capable deployment host.
+When a PR is closed, `pr-preview-cleanup.yml` runs the trusted default-branch
+cleanup definition without checking out PR code.
 
-Required deployment secrets:
+Pushing a tag matching `v*` runs `release.yml`. It runs the full release checks,
+builds and pushes immutable `ghcr.io/<repository>-api:<tag>` and
+`ghcr.io/<repository>-web:<tag>` images plus `latest`, then deploys the
+permanent tag URL from the same release artifacts. Tag preview directories are
+not deleted by any workflow.
 
-- `PREVIEW_SSH_HOST`
-- `PREVIEW_SSH_USER`
-- `PREVIEW_SSH_KEY`
-- `PREVIEW_GHCR_USERNAME`
-- `PREVIEW_GHCR_TOKEN` with `read:packages`
+### Server reverse proxy
+
+The parent host's Nginx owns DNS, TLS certificates, and public ports 80/443.
+It must forward every preview hostname to this VM's port 80 while preserving
+`Host`, `X-Forwarded-For`, and `X-Forwarded-Proto`. On the VM, start the
+code-free Traefik router once:
+
+```bash
+cd deploy/proxy
+docker compose up -d
+```
+
+Traefik on the VM creates the `angui-proxy` Docker network and listens only on
+port 80; it does not use DNS credentials, ACME, or port 443. Do not publish
+individual preview ports.
+
+### GitHub configuration
+
+Required repository variables:
+
+- `PREVIEW_DEPLOY_ENABLED=true`
+- `PREVIEW_BASE_DOMAIN=angui.cg8.site`
+
+Recommended variables:
+
+- `PREVIEW_SCHEME=https`
+- `PREVIEW_ROOT=/var/github-runner/angui/previews`
+- `PREVIEW_PROXY_NETWORK=angui-proxy`
+- `PREVIEW_RUNTIME_IMAGE=angui-preview-runtime:bookworm`
+- `PREVIEW_ENVIRONMENT=preview`
+
+Required repository secret:
+
 - `PREVIEW_DEMO_PASSWORD` with 12-256 characters; used only by the explicit
-  one-shot demo account bootstrap service
+  one-shot demo account bootstrap service.
 
-Optional configuration:
-
-- Secret `PREVIEW_SSH_PORT`, default `22`
-- Variable `PREVIEW_ROOT`, default `/opt/angui-previews`
-- Variable `PREVIEW_BASE_PORT`, default `20000`; each branch receives a stable
-  port in the following 10000-port range
-- Variable `PREVIEW_PUBLIC_HOST`, default the SSH host
-- Variable `PREVIEW_SCHEME`, default `http`
-
-The server needs Docker Engine, the Compose v2 plugin, `curl`, and permission
-for the SSH user to run Docker. Configure the `preview` GitHub Environment with
-deployment branch restrictions or reviewers if untrusted collaborators can
-push branches. Deleting a branch stops its preview and removes its volume.
+The VM needs Docker Engine, Compose v2, `curl`, port 80 reachable from the
+parent Nginx, and permission for the runner service account to run Docker. No
+SSH deployment secrets, GHCR read token, preview port range, DNS credentials, or
+`PREVIEW_BUILD_ENABLED` variable are used by the new preview path. Configure the
+`preview` GitHub Environment with deployment branch restrictions or reviewers if
+needed.
 
 ## GitHub Actions quota
 
@@ -158,13 +211,7 @@ has historically been 2,000 minutes per month; check the account billing page
 for the current plan value. This project should usually take roughly 5-15
 minutes on an empty Rust cache and 2-6 minutes when cached, plus image builds.
 
-If every commit runs both CI and preview image builds in a busy private repo,
-the included allowance can be exhausted. The current split makes migration to
-self-hosted runners straightforward: replace `ubuntu-latest` with a dedicated
-label such as `[self-hosted, linux, x64, angui-ci]`. Keep self-hosted runners
-off fork-controlled jobs that expose secrets.
-
-Runner minutes are separate from artifact and GHCR storage. CI artifacts expire
-after seven days, but immutable `sha-*` container tags accumulate. Configure a
-GHCR package retention policy or a periodic package cleanup once preview builds
-are enabled.
+CI and previews run on the self-hosted server, so they do not consume
+GitHub-hosted runner minutes. CI artifacts still expire after seven days. Only
+versioned release images are pushed to GHCR; configure a package retention policy
+for `latest` and old release tags according to the project's release policy.

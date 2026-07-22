@@ -16,8 +16,12 @@ concurrency:
 jobs:
   backend:
     name: Rust checks
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || vars.RUST_CI_RUNNER || 'ubuntu-latest' }}
+    # External forks never execute on the server that holds deployment access.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
     timeout-minutes: 30
+    env:
+      RUSTUP_DIST_SERVER: https://rsproxy.cn
+      RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -59,8 +63,12 @@ jobs:
 
   database:
     name: PostgreSQL and MySQL migrations
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || vars.DATABASE_CI_RUNNER || vars.RUST_CI_RUNNER || 'ubuntu-latest' }}
+    # External forks never execute on the server that holds deployment access.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
     timeout-minutes: 30
+    env:
+      RUSTUP_DIST_SERVER: https://rsproxy.cn
+      RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
     services:
       postgres:
         image: postgres:17-alpine
@@ -123,7 +131,8 @@ jobs:
 
   frontend:
     name: Frontend checks
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || vars.FRONTEND_CI_RUNNER || 'ubuntu-latest' }}
+    # External forks never execute on the server that holds deployment access.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -136,6 +145,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+          registry-url: https://registry.npmmirror.com
+          mirror: https://npmmirror.com/mirrors/node
 
       - name: Install dependencies
         run: npm ci --prefix frontend
