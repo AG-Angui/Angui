@@ -2,7 +2,9 @@ name: pr-preview-cleanup
 
 # This workflow does not checkout or execute PR code. pull_request_target keeps
 # the cleanup definition on the trusted default branch.
-on:
+# This trusted cleanup workflow neither checks out nor executes PR code; it only
+# removes the directory derived from a numeric PR id after the PR is closed.
+on: # zizmor: ignore[dangerous-triggers]
   pull_request_target:
     types: [closed]
 

@@ -95,7 +95,7 @@ npm run migrate:status
 显式创建固定的低权限模拟账号。密码只通过当前终端环境变量提供，不写入仓库：
 
 ```powershell
-$env:ANGUI_DEMO_PASSWORD = "replace-with-at-least-12-characters"
+$env:ANGUI_DEMO_PASSWORD = "<set-in-GitHub-Actions-secret>"
 npm run auth:bootstrap-demo
 ```
 

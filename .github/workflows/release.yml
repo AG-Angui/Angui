@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -17,6 +16,11 @@ jobs:
   build-and-publish:
     runs-on: angui-preview
     timeout-minutes: 45
+    # A release publishes runtime artifacts. Do not read or write mutable CI
+    # caches here; clean tag builds prevent cache-poisoning from affecting them.
+    permissions:
+      contents: read
+      packages: write
     env:
       RUSTUP_DIST_SERVER: https://rsproxy.cn
       RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
@@ -35,11 +39,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: release
-          cache-on-failure: true
-
       - name: Run release Rust checks and build
         run: |
           cargo fmt --all -- --check
@@ -50,8 +49,6 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
           registry-url: https://registry.npmmirror.com
           mirror: https://npmmirror.com/mirrors/node
 
