@@ -1,16 +1,33 @@
 services:
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: angui
+      POSTGRES_USER: angui
+      POSTGRES_PASSWORD: angui
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U angui -d angui"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   migrate:
     image: ${PREVIEW_RUNTIME_IMAGE:?PREVIEW_RUNTIME_IMAGE is required}
     restart: "no"
     command: ["migration", "up"]
+    depends_on:
+      database:
+        condition: service_healthy
     environment:
-      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      DATABASE_URL: ${PREVIEW_DATABASE_URL:-postgres://angui:angui@database:5432/angui}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./runtime/angui:/usr/local/bin/angui:ro
       - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro
       - ./runtime/migration:/usr/local/bin/migration:ro
-      - angui-data:/app/data
 
   bootstrap:
     image: ${PREVIEW_RUNTIME_IMAGE:?PREVIEW_RUNTIME_IMAGE is required}
@@ -20,13 +37,12 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      DATABASE_URL: ${PREVIEW_DATABASE_URL:-postgres://angui:angui@database:5432/angui}
       ANGUI_DEMO_PASSWORD: ${PREVIEW_DEMO_PASSWORD:?PREVIEW_DEMO_PASSWORD is required}
     volumes:
       - ./runtime/angui:/usr/local/bin/angui:ro
       - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro
       - ./runtime/migration:/usr/local/bin/migration:ro
-      - angui-data:/app/data
 
   api:
     image: ${PREVIEW_RUNTIME_IMAGE:?PREVIEW_RUNTIME_IMAGE is required}
@@ -38,13 +54,12 @@ services:
       ANGUI_HOST: 0.0.0.0
       ANGUI_PORT: 8080
       ANGUI_FRONTEND_ORIGIN: ${PREVIEW_ORIGIN:?PREVIEW_ORIGIN is required}
-      DATABASE_URL: sqlite://data/angui.db?mode=rwc
+      DATABASE_URL: ${PREVIEW_DATABASE_URL:-postgres://angui:angui@database:5432/angui}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./runtime/angui:/usr/local/bin/angui:ro
       - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro
       - ./runtime/migration:/usr/local/bin/migration:ro
-      - angui-data:/app/data
 
   web:
     image: nginx:1.29-alpine
@@ -66,7 +81,7 @@ services:
       - angui-proxy
 
 volumes:
-  angui-data:
+  postgres-data:
 
 networks:
   angui-proxy:

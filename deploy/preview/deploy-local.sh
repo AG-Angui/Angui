@@ -24,6 +24,24 @@ compose() {
     --file "${PREVIEW_DIR}/compose.yml" "$@"
 }
 
+ensure_proxy() {
+  local infra_dir
+  local proxy_compose
+
+  require PREVIEW_ROOT
+  require PREVIEW_REPOSITORY_DIR
+
+  infra_dir="${PREVIEW_INFRA_DIR:-$(dirname "${PREVIEW_ROOT}")/infra}"
+  proxy_compose="${infra_dir}/traefik-compose.yml"
+
+  install -d -m 750 "${infra_dir}"
+  install -m 600 "${PREVIEW_REPOSITORY_DIR}/deploy/proxy/compose.yml" "${proxy_compose}"
+
+  docker compose --project-name angui-proxy \
+    --file "${proxy_compose}" \
+    up --detach --remove-orphans
+}
+
 ensure_runtime_image() {
   if ! docker image inspect "${PREVIEW_RUNTIME_IMAGE}" >/dev/null 2>&1; then
     docker build \
@@ -55,6 +73,7 @@ deploy() {
   [[ -d "${PREVIEW_FRONTEND_DIR}" ]] || die "frontend artifact directory is missing"
 
   ensure_runtime_image
+  ensure_proxy
   install -d -m 700 "${PREVIEW_DIR}/runtime"
   install -m 755 "${PREVIEW_BACKEND_DIR}/angui" "${PREVIEW_DIR}/runtime/angui"
   install -m 755 "${PREVIEW_BACKEND_DIR}/angui-admin" "${PREVIEW_DIR}/runtime/angui-admin"
