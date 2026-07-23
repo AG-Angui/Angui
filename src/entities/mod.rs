@@ -5,4 +5,6 @@ pub mod cases;
 pub mod clue_attributions;
 pub mod clues;
 pub mod elder_profiles;
+pub mod intake_question_definitions;
+pub mod intake_sessions;
 pub mod users;

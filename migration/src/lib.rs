@@ -9,6 +9,8 @@ mod m0006_create_auth_sessions;
 mod m0007_create_case_memberships;
 mod m0008_create_clue_attributions;
 mod m0009_add_learner_role;
+mod m0010_create_intake_sessions;
+mod m0011_create_intake_question_definitions;
 
 use sea_orm_migration::sea_orm::DbBackend;
 
@@ -27,6 +29,8 @@ impl MigratorTrait for Migrator {
             Box::new(m0007_create_case_memberships::Migration),
             Box::new(m0008_create_clue_attributions::Migration),
             Box::new(m0009_add_learner_role::Migration),
+            Box::new(m0010_create_intake_sessions::Migration),
+            Box::new(m0011_create_intake_question_definitions::Migration),
         ]
     }
 }
@@ -124,6 +128,8 @@ mod tests {
         include_str!("../sql/mysql/down/0007_drop_case_memberships.sql"),
         include_str!("../sql/mysql/down/0008_drop_clue_attributions.sql"),
         include_str!("../sql/mysql/down/0009_remove_learner_role.sql"),
+        include_str!("../sql/mysql/down/0010_drop_intake_sessions.sql"),
+        include_str!("../sql/mysql/down/0011_drop_intake_question_definitions.sql"),
     ];
 
     #[tokio::test]

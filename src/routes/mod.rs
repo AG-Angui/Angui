@@ -2,6 +2,7 @@ mod auth;
 mod cases;
 mod clues;
 mod health;
+mod intake_sessions;
 
 use actix_web::web;
 
@@ -14,6 +15,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .service(health::get_health)
             .configure(auth::configure)
             .configure(cases::configure)
+            .configure(intake_sessions::configure)
             .configure(clues::configure),
     );
 }

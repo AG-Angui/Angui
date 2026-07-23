@@ -1,0 +1,28 @@
+ALTER TABLE intake_sessions ADD COLUMN question_set_version INTEGER NOT NULL DEFAULT 1;
+-- statement-break
+CREATE TABLE intake_question_definitions (
+    id TEXT PRIMARY KEY NOT NULL,
+    version INTEGER NOT NULL CHECK (version > 0),
+    field_code TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    display_order INTEGER NOT NULL CHECK (display_order > 0),
+    is_required BOOLEAN NOT NULL,
+    max_answer_chars INTEGER NOT NULL CHECK (max_answer_chars > 0),
+    status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (version, field_code),
+    UNIQUE (version, display_order)
+);
+-- statement-break
+CREATE INDEX idx_intake_question_definitions_active ON intake_question_definitions(status, version, display_order);
+-- statement-break
+INSERT INTO intake_question_definitions (id, version, field_code, prompt, display_order, is_required, max_answer_chars, status, created_at, updated_at) VALUES
+    ('intake-q-0001', 1, 'basic_information', 'Please describe the person in a way your family can verify, such as their name or a safe identifying description.', 1, 1, 500, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z'),
+    ('intake-q-0002', 1, 'health_status', 'Are there health, cognitive, mobility, or medication concerns responders should know? Share only what is necessary.', 2, 0, 1000, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z'),
+    ('intake-q-0003', 1, 'behavior_habits', 'What routines, preferences, or behaviors may help family members recognize useful leads?', 3, 0, 800, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z'),
+    ('intake-q-0004', 1, 'last_seen', 'When and where was the person last seen? Include uncertainty if the time or place is not exact.', 4, 1, 800, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z'),
+    ('intake-q-0005', 1, 'frequent_locations', 'Which places do they commonly visit? Please avoid unrelated private addresses.', 5, 0, 800, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z'),
+    ('intake-q-0006', 1, 'belongings', 'What clothing, bags, phone, identification, or other belongings were they carrying?', 6, 0, 800, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z'),
+    ('intake-q-0007', 1, 'transport_ability', 'How might they travel independently, for example walking, public transport, or a familiar route?', 7, 0, 600, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z'),
+    ('intake-q-0008', 1, 'follow_up_clues', 'Is there any later information or lead that still needs human verification?', 8, 0, 1000, 'active', '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z');

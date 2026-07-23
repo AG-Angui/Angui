@@ -177,3 +177,11 @@ npm run migrate:status
 - 账号删除不是当前能力；禁用账号使用 `status=disabled`，认证时立即拒绝。
 - 管理员全局角色不构成案件成员关系，不能绕过 `case_memberships` 读取业务数据。
 - 显式运行 `angui-admin bootstrap-demo` 会创建或更新五个 `.invalid` 演示账号（家属、指挥、志愿者、新人、管理员），并撤销这些账号之前的活动会话。`learner` 与 `admin` 都不是案件成员角色；后者也不能因全局管理员身份绕过 `case_memberships` 读取案件。
+
+## 12. 问询会话
+
+`intake_sessions` stores the family-created, unconfirmed intake draft before a case exists. It has a required creator, lifecycle status, structured answers JSON, timestamps, and an optional unique `case_id` for the later confirmation flow. The foreign key to the creator protects ownership; the optional case relation supports later visibility for that case's authorized commanders and prevents a session from being associated with more than one case.
+
+`intake_question_definitions` is the versioned, database-managed rule set for the initial questionnaire. Each active row provides the stable answer field code, prompt, display order, required marker, and per-question `max_answer_chars`. Sessions snapshot the selected `question_set_version` at creation so later configuration changes cannot re-label the rules that produced an existing draft. The seeded version `1` contains the initial eight questions.
+
+The current creation API writes only `collecting`. The migration also reserves `ready_for_confirmation`, `confirmed`, and `closed` for the follow-on answer and confirmation APIs. Sensitive raw answers remain in the session record and are deliberately excluded from audit metadata and ordinary logs. The database limit is intersected with the server-only `ANGUI_INTAKE_ANSWER_HARD_MAX` safety cap; database configuration cannot increase that hard limit.

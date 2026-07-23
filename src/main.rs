@@ -18,6 +18,7 @@ async fn main() -> io::Result<()> {
     let state = web::Data::new(AppState {
         db: database,
         session_ttl_hours: settings.session_ttl_hours,
+        intake_answer_hard_max: settings.intake_answer_hard_max,
         login_limiter: LoginRateLimiter::default(),
     });
 

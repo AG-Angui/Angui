@@ -36,6 +36,8 @@ tags:
     description: 案件、老人资料、案件成员和案件内线索
   - name: Clues
     description: 线索人工审核
+  - name: Intake sessions
+    description: 家属创建的未确认走失信息问询会话
 security:
   - bearerAuth: []
 paths:
@@ -122,6 +124,43 @@ paths:
           description: 会话已撤销，无响应正文
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/intake-sessions:
+    post:
+      tags: [Intake sessions]
+      operationId: createIntakeSession
+      summary: Create a family intake session
+      description: |
+        Only family accounts can create an unconfirmed intake draft. Unknown fields, including
+        confirmed, are rejected. This endpoint always returns rule-based guidance and writes no
+        raw answer content to audit metadata. Per-question business limits and question order come
+        from the active database configuration; the server also enforces an independent hard cap.
+      x-roles: [family]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIntakeSessionRequest"
+            example:
+              initial_answers:
+                basic_information: Fictional elder profile
+                last_seen: Fictional community gate; time needs verification
+      responses:
+        "201":
+          description: Intake session created with the next rule-based question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntakeSession"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -594,6 +633,56 @@ components:
           type: string
           minLength: 1
           description: 必填；只包含空白也会被拒绝。
+
+    CreateIntakeSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        initial_answers:
+          $ref: "#/components/schemas/IntakeInitialAnswers"
+
+    IntakeInitialAnswers:
+      type: object
+      additionalProperties: false
+      properties:
+        basic_information: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        health_status: { type: [string, "null"], minLength: 1, description: Sensitive; never included in audit metadata. Limit is configured by the active question definition. }
+        behavior_habits: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        last_seen: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        frequent_locations: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        belongings: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        transport_ability: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        follow_up_clues: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+
+    IntakeQuestion:
+      type: object
+      additionalProperties: false
+      required: [field, prompt, required]
+      properties:
+        field: { type: string }
+        prompt: { type: string }
+        required: { type: boolean }
+
+    IntakeSession:
+      type: object
+      additionalProperties: false
+      required: [id, status, question_set_version, initial_answers, missing_fields, next_question, guidance_mode, privacy_notice, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, const: collecting }
+        question_set_version: { type: integer, minimum: 1 }
+        initial_answers: { $ref: "#/components/schemas/IntakeInitialAnswers" }
+        missing_fields:
+          type: array
+          items: { type: string }
+        next_question:
+          oneOf:
+            - $ref: "#/components/schemas/IntakeQuestion"
+            - type: "null"
+        guidance_mode: { type: string, const: rule_based }
+        privacy_notice: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     UpdateCaseStatusRequest:
       type: object
