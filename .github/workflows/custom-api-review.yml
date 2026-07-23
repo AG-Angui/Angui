@@ -2,7 +2,7 @@ name: custom-api-review
 
 on: # zizmor: ignore[dangerous-triggers]
   pull_request_target:
-    types: [opened, reopened, ready_for_review, synchronize, labeled]
+    types: [opened, reopened, ready_for_review, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -16,17 +16,11 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: custom-api-review-${{ github.event.pull_request.number || inputs.pr_number }}
-  cancel-in-progress: true
+  group: custom-api-review-${{ github.event.pull_request.number || inputs.pr_number }}-${{ github.event.pull_request.head.sha || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   review:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.draft == false &&
-      ((vars.CUSTOM_REVIEW_LABEL == '' && github.event.action != 'labeled') ||
-      (vars.CUSTOM_REVIEW_LABEL != '' &&
-      contains(github.event.pull_request.labels.*.name, vars.CUSTOM_REVIEW_LABEL))))
     runs-on: ${{ vars.CUSTOM_REVIEW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
@@ -58,7 +52,6 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            const marker = '<!-- angui-custom-api-review -->'
             const { owner, repo } = context.repo
 
             let pullRequest = context.payload.pull_request
@@ -75,13 +68,16 @@ jobs:
               })
               pullRequest = response.data
             }
+            const reviewedSha = pullRequest.head.sha
+            const reviewedBaseSha = pullRequest.base.sha
+            const marker = `<!-- angui-custom-api-review:${reviewedSha} -->`
 
             const diffResponse = await github.request(
-              'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+              'GET /repos/{owner}/{repo}/compare/{basehead}',
               {
                 owner,
                 repo,
-                pull_number: pullRequest.number,
+                basehead: `${reviewedBaseSha}...${reviewedSha}`,
                 mediaType: { format: 'diff' },
               },
             )
@@ -107,8 +103,8 @@ jobs:
             Respond in concise Chinese. Put actionable findings first, ordered by severity. Include file and changed line where possible, explain the concrete failure mode, and suggest the smallest sound fix. Avoid style-only comments. If there are no material findings, say so clearly and mention residual test gaps.
 
             Pull request: #${pullRequest.number} ${pullRequest.title}
-            Base: ${pullRequest.base.ref}
-            Head: ${pullRequest.head.ref}
+            Base: ${pullRequest.base.ref} @ ${reviewedBaseSha}
+            Head: ${pullRequest.head.ref} @ ${reviewedSha}
             Diff truncated: ${truncated ? 'yes' : 'no'}
 
             <pull_request_diff>
@@ -196,7 +192,7 @@ jobs:
             const reasoning = apiStyle === 'responses'
               ? ` | Effort: \`${process.env.CUSTOM_REVIEW_REASONING_EFFORT}\``
               : ''
-            const body = `${marker}\n## Custom API code review\n\n${review.slice(0, 60000)}\n\n---\nModel: \`${process.env.CUSTOM_REVIEW_MODEL}\` | API: \`${apiStyle}\`${reasoning} | Commit: \`${pullRequest.head.sha.slice(0, 12)}\``
+            const body = `${marker}\n## Custom API code review\n\n${review.slice(0, 60000)}\n\n---\nModel: \`${process.env.CUSTOM_REVIEW_MODEL}\` | API: \`${apiStyle}\`${reasoning} | Commit: \`${reviewedSha.slice(0, 12)}\``
 
             if (existing) {
               await github.rest.issues.updateComment({
