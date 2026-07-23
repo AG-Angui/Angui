@@ -42,7 +42,13 @@ jobs:
           cargo-audit --version
 
       - name: Audit Cargo.lock
-        run: cargo audit --file Cargo.lock
+        # sqlx-mysql pulls in rsa only for MySQL server public-key handling.
+        # Angui never loads or performs operations with an RSA private key, the
+        # timing-oracle prerequisite of RUSTSEC-2023-0071. No upstream patch is
+        # available; keep all other advisories and warnings visible.
+        run: >-
+          cargo audit --file Cargo.lock
+          --ignore RUSTSEC-2023-0071
 
   npm-audit:
     name: npm high and critical advisories
