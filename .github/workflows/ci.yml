@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ARTIFACT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -47,7 +50,7 @@ jobs:
       - name: Upload backend binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: angui-linux-${{ github.sha }}
+          name: angui-linux-${{ env.ARTIFACT_SHA }}
           path: |
             target/release/angui
             target/release/angui-admin
@@ -156,7 +159,7 @@ jobs:
       - name: Upload frontend bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: angui-frontend-${{ github.sha }}
+          name: angui-frontend-${{ env.ARTIFACT_SHA }}
           path: frontend/dist
           if-no-files-found: error
           retention-days: 7

@@ -49,9 +49,9 @@ deploy() {
 
   PREVIEW_DIR="${PREVIEW_ROOT}/${PREVIEW_ID}"
   ensure_preview_dir
-  [[ -x "${PREVIEW_BACKEND_DIR}/angui" ]] || die "backend artifact angui is missing"
-  [[ -x "${PREVIEW_BACKEND_DIR}/angui-admin" ]] || die "backend artifact angui-admin is missing"
-  [[ -x "${PREVIEW_BACKEND_DIR}/migration" ]] || die "backend artifact migration is missing"
+  [[ -f "${PREVIEW_BACKEND_DIR}/angui" ]] || die "backend artifact angui is missing"
+  [[ -f "${PREVIEW_BACKEND_DIR}/angui-admin" ]] || die "backend artifact angui-admin is missing"
+  [[ -f "${PREVIEW_BACKEND_DIR}/migration" ]] || die "backend artifact migration is missing"
   [[ -d "${PREVIEW_FRONTEND_DIR}" ]] || die "frontend artifact directory is missing"
 
   ensure_runtime_image
