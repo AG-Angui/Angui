@@ -261,7 +261,7 @@ paths:
         - bearerAuth: []
       x-roles: [family, commander, volunteer]
       x-case-roles: [family, commander, volunteer]
-      x-data-classification: case-restricted; elder_profile.health_notes is sensitive
+      x-data-classification: case-restricted
       responses:
         "200":
           description: 经过服务端角色裁剪的案件详情
