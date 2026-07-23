@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{cases, clue_attributions, clues, elder_profiles, users};
+use crate::entities::{cases, clue_attributions, clues, elder_profiles, intake_sessions, users};
 
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUser {
@@ -44,6 +44,71 @@ pub struct CreateCaseRequest {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+}
+
+/// Starts a family-owned intake session. These values remain unconfirmed
+/// collection input; clients cannot set a fact-confirmation state here.
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CreateIntakeSessionRequest {
+    #[serde(default)]
+    pub initial_answers: IntakeInitialAnswers,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeInitialAnswers {
+    pub basic_information: Option<String>,
+    pub health_status: Option<String>,
+    pub behavior_habits: Option<String>,
+    pub last_seen: Option<String>,
+    pub frequent_locations: Option<String>,
+    pub belongings: Option<String>,
+    pub transport_ability: Option<String>,
+    pub follow_up_clues: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeQuestion {
+    pub field: String,
+    pub prompt: String,
+    pub required: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeSessionResponse {
+    pub id: String,
+    pub status: String,
+    pub question_set_version: i32,
+    pub initial_answers: IntakeInitialAnswers,
+    pub missing_fields: Vec<String>,
+    pub next_question: Option<IntakeQuestion>,
+    pub guidance_mode: String,
+    pub privacy_notice: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl IntakeSessionResponse {
+    pub fn new(
+        model: intake_sessions::Model,
+        initial_answers: IntakeInitialAnswers,
+        missing_fields: Vec<String>,
+        next_question: Option<IntakeQuestion>,
+    ) -> Self {
+        Self {
+            id: model.id,
+            status: model.status,
+            question_set_version: model.question_set_version,
+            initial_answers,
+            missing_fields,
+            next_question,
+            guidance_mode: "rule_based".to_owned(),
+            privacy_notice: "Answers are visible only to the session creator and, after case authorization, the case's authorized commanders. They are unconfirmed drafts and are not copied into audit metadata.".to_owned(),
+            created_at: model.created_at,
+            updated_at: model.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

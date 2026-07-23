@@ -7,6 +7,7 @@ pub struct Settings {
     pub frontend_origin: String,
     pub database_url: String,
     pub session_ttl_hours: i64,
+    pub intake_answer_hard_max: usize,
 }
 
 impl Settings {
@@ -28,6 +29,16 @@ impl Settings {
         if !(1..=168).contains(&session_ttl_hours) {
             return Err("ANGUI_SESSION_TTL_HOURS must be between 1 and 168".to_owned());
         }
+        let intake_answer_hard_max_value =
+            env::var("ANGUI_INTAKE_ANSWER_HARD_MAX").unwrap_or_else(|_| "2000".to_owned());
+        let intake_answer_hard_max = intake_answer_hard_max_value.parse::<usize>().map_err(|_| {
+            format!(
+                "ANGUI_INTAKE_ANSWER_HARD_MAX must be a positive integer, got {intake_answer_hard_max_value:?}"
+            )
+        })?;
+        if !(1..=10_000).contains(&intake_answer_hard_max) {
+            return Err("ANGUI_INTAKE_ANSWER_HARD_MAX must be between 1 and 10000".to_owned());
+        }
 
         Ok(Self {
             host,
@@ -35,6 +46,7 @@ impl Settings {
             frontend_origin,
             database_url,
             session_ttl_hours,
+            intake_answer_hard_max,
         })
     }
 
@@ -55,6 +67,7 @@ mod tests {
             frontend_origin: "http://localhost:5173".to_owned(),
             database_url: "sqlite::memory:".to_owned(),
             session_ttl_hours: 8,
+            intake_answer_hard_max: 2_000,
         };
 
         assert_eq!(settings.address(), ("127.0.0.1".to_owned(), 8080));

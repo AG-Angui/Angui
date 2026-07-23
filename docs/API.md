@@ -16,6 +16,7 @@
 | `POST` | `/api/auth/login` | `200` | 使用邮箱和密码创建短期会话 |
 | `GET` | `/api/auth/me` | `200` | 获取当前认证用户 |
 | `POST` | `/api/auth/logout` | `204` | 撤销当前服务端会话 |
+| `POST` | `/api/intake-sessions` | `201` | 创建家属的未确认走失信息问询会话 |
 | `GET` | `/api/cases` | `200` | 按创建时间倒序列出案件 |
 | `POST` | `/api/cases` | `201` | 创建案件和老人画像 |
 | `GET` | `/api/cases/{case_id}` | `200` | 查询案件、老人画像和线索 |
@@ -147,6 +148,23 @@ AI 或其他自动化能力未来只能生成草稿或待审核输入，不得�
 ```json
 {
   "status": "resolved"
+}
+```
+
+## Intake session creation
+
+`POST /api/intake-sessions` is available only to authenticated `family` accounts. Its optional `initial_answers` object has eight structured draft fields: `basic_information`, `health_status`, `behavior_habits`, `last_seen`, `frequent_locations`, `belongings`, `transport_ability`, and `follow_up_clues`. Every supplied value is trimmed and must meet the active question's database-managed `max_answer_chars`; `ANGUI_INTAKE_ANSWER_HARD_MAX` is a server-side absolute cap (default `2000`, range `1`–`10000`) that cannot be exceeded by database configuration. Unknown properties, including `confirmed`, are rejected.
+
+The server creates a `collecting` session and records the selected `question_set_version`. It always returns `guidance_mode: "rule_based"`, `missing_fields`, and the next ordered question from the active database definition. This is the required AI-unavailable fallback; no external model is called. The values remain unconfirmed drafts, never case facts. Raw answers are not included in audit metadata or ordinary logs. The session is owned by its creator; when a later confirmation associates it with a case, only an authorized commander of that case may additionally read it. The database's unique case association protects the later confirmation flow from linking a session to multiple cases.
+
+Example:
+
+```json
+{
+  "initial_answers": {
+    "basic_information": "Fictional elder profile",
+    "last_seen": "Fictional community gate; time needs verification"
+  }
 }
 ```
 

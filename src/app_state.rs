@@ -6,5 +6,6 @@ use crate::rate_limit::LoginRateLimiter;
 pub struct AppState {
     pub db: DatabaseConnection,
     pub session_ttl_hours: i64,
+    pub intake_answer_hard_max: usize,
     pub login_limiter: LoginRateLimiter,
 }

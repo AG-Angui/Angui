@@ -20,7 +20,7 @@ pub const LEARNER: &str = "learner@demo.invalid";
 pub const ADMIN: &str = "admin@demo.invalid";
 
 pub struct TestContext {
-    database: DatabaseConnection,
+    pub(crate) database: DatabaseConnection,
 }
 
 impl TestContext {
@@ -41,6 +41,7 @@ impl TestContext {
         AppState {
             db: self.database.clone(),
             session_ttl_hours: 8,
+            intake_answer_hard_max: 2_000,
             login_limiter: LoginRateLimiter::default(),
         }
     }
