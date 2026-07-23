@@ -88,10 +88,17 @@ Issue 开放/关闭状态直接使用 GitHub 原生 Open/Closed；不创建自�
   `docs/API.md` 一致。
 - **不在范围**：不重写现有认证、案件或线索业务逻辑；只有测试或契约发现真实缺陷
   时，才另建 `Bug` Issue 修复，而不是在本 Issue 中无限扩大范围。
-- **建议测试目录**：
+- **集中式 API 测试模块**：所有 HTTP/API 契约测试统一由唯一的 Cargo 集成测试入口
+  `tests/api_contract.rs` 承载；该入口注册 `tests/api/` 下按端点命名的子模块。这样 CI、
+  本地执行和 Issue 验收只需要面向一个测试 target，同时仍能由文件名直接定位端点。纯函数、
+  配置解析等不启动 HTTP 服务的单元测试可继续贴近 `src/` 源码，避免为“集中”而把实现细节
+  暴露成集成测试；本 Issue 的范围是将所有 **HTTP/API** 测试集中到 `tests/`。
+- **目标测试目录**：
 
   ```text
+  tests/api_contract.rs                        # 唯一 API 集成测试入口：注册 support 和 api 子模块
   tests/support/mod.rs                         # SQLite 临时库、迁移、演示用户、HTTP client helper
+  tests/api/mod.rs                             # 统一声明下列端点测试子模块
   tests/api/health_get.rs                      # GET    /api/health
   tests/api/auth_login_post.rs                 # POST   /api/auth/login
   tests/api/auth_me_get.rs                     # GET    /api/auth/me
@@ -106,8 +113,11 @@ Issue 开放/关闭状态直接使用 GitHub 原生 Open/Closed；不创建自�
   ```
 
 - **验收标准**：
-  - 上述 11 个端点各自都有独立的测试文件和至少一个成功路径测试；测试文件名可直接
-    从端点反查。
+  - `tests/api_contract.rs` 是唯一的 API 集成测试 target，显式注册 `support` 和
+    `api` 模块；不得把新的 HTTP/API 端点测试散落为多个顶层 `tests/*.rs` target 或
+    路由源码内测试。
+  - 上述 11 个端点各自都有 `tests/api/` 下独立的测试子模块和至少一个成功路径测试；
+    测试文件名可直接从端点反查。
   - 所有受认证保护的端点覆盖无 token/无效 token 的 `401`；所有案件资源端点覆盖
     非成员 `404`；适用的角色拒绝路径覆盖 `403`。
   - `POST /api/auth/login` 覆盖成功、错误密码、未知账号同一失败语义及限流；
@@ -120,8 +130,8 @@ Issue 开放/关闭状态直接使用 GitHub 原生 Open/Closed；不创建自�
     commander 限制、全部合法审核状态和审核可见性。
   - 每个测试断言状态码、关键响应字段及统一错误 JSON；测试数据仅使用 `.invalid`
     演示账号和虚构数据，日志输出中不得出现密码或 token。
-  - `cargo test --workspace --all-features --locked` 全部通过；执行后数据库临时文件可
-    清理，不依赖开发者本机已有 `data/angui.db`。
+  - `cargo test --test api_contract --all-features --locked` 全部通过，且不依赖开发者机器
+    已有的 `data/angui.db`；随后 `cargo test --workspace --all-features --locked` 全部通过。
   - 对照 `docs/openapi.yaml` 检查 11 个 `method + path`、认证要求、成功状态码、主要
     错误码和请求/响应字段；发现偏差则同步修改实现或文档并在 Issue 中记录决定。
   - 只有所有验收项完成、测试结果附在 Issue、并且无未处理的契约偏差时，才将本
