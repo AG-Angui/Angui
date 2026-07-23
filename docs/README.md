@@ -13,6 +13,8 @@
 | [DATA_AND_AI.md](./DATA_AND_AI.md) | 数据对象、线索状态、AI 输出约束、知识库治理 | 后端、AI、数据、审核人员 |
 | [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) | 权限分级、隐私保护、定位安全、日志和事件响应 | 全体成员、安全评审人员 |
 | [DEMO_AND_DELIVERY.md](./DEMO_AND_DELIVERY.md) | Demo 故事线、样例数据和初赛交付清单 | 产品、前端、路演团队 |
+| [ISSUE_DRAFT.md](./ISSUE_DRAFT.md) | API、数据、三端能力与交付的 GitHub Issue 拆分草案 | 产品、开发、项目管理 |
+| [FRONTEND_ISSUE_DRAFT.md](./FRONTEND_ISSUE_DRAFT.md) | 前端工作台的独立 Issue、依赖、验收和发布顺序草案 | 前端、测试、项目管理 |
 
 仓库级协作文件：
 
