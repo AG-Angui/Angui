@@ -17,7 +17,7 @@ use crate::{
     models::{AuthenticatedUser, LoginRequest, LoginResponse, UserResponse},
 };
 
-const USER_ROLES: &[&str] = &["family", "commander", "volunteer", "admin"];
+const USER_ROLES: &[&str] = &["family", "commander", "volunteer", "learner", "admin"];
 
 pub async fn login(
     db: &DatabaseConnection,
@@ -163,6 +163,8 @@ pub async fn bootstrap_demo_users(
         ("family@demo.invalid", "模拟家属", "family"),
         ("commander@demo.invalid", "模拟指挥", "commander"),
         ("volunteer@demo.invalid", "模拟志愿者", "volunteer"),
+        ("learner@demo.invalid", "模拟新人", "learner"),
+        ("admin@demo.invalid", "模拟管理员", "admin"),
     ];
     let mut created = Vec::with_capacity(definitions.len());
     for (email, display_name, role) in definitions {
