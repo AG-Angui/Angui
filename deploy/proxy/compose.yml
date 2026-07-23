@@ -1,6 +1,9 @@
 services:
   traefik:
-    image: traefik:v3.5
+    # Docker Engine on the preview host requires API v1.40+. Traefik v3.6.16+
+    # supports that provider minimum; pin a current patch release for stable
+    # Docker socket compatibility instead of the older v3.5 line.
+    image: traefik:v3.6.22
     restart: unless-stopped
     command:
       - --providers.docker=true
