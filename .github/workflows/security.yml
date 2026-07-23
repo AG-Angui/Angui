@@ -18,23 +18,31 @@ concurrency:
 jobs:
   rustsec:
     name: RustSec advisories
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # audit-check publishes its findings as a GitHub Check. Keep this write
-    # permission confined to the auditing job rather than granting it globally.
-    permissions:
-      checks: write
-      contents: read
+    # External forks must not run on the Docker-capable deployment runner.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
+    timeout-minutes: 15
+    env:
+      RUSTUP_DIST_SERVER: https://rsproxy.cn
+      RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
 
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Install cargo-audit once per runner user
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cargo-audit >/dev/null 2>&1; then
+            cargo install cargo-audit --locked
+          fi
+          cargo-audit --version
+
       - name: Audit Cargo.lock
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
-        with:
-          token: ${{ github.token }}
-          working-directory: .
+        run: cargo audit --file Cargo.lock
 
   npm-audit:
     name: npm high and critical advisories
