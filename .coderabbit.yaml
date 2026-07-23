@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+# Keep review feedback aligned with the project's working language and focus
+# it on correctness and operational risk rather than style-only suggestions.
+language: "zh-CN"
+early_access: false
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  review_details: false
+  auto_review:
+    enabled: true
+    drafts: false
+    # Keep reviewing each PR update; do not stop after CodeRabbit's default
+    # reviewed-commit threshold.
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        Review Rust/Actix code for authentication, authorization, privacy,
+        error handling, concurrency, API compatibility, and data-loss risks.
+        Prioritize concrete correctness or security findings over style.
+    - path: "migration/**"
+      instructions: |
+        Check SeaORM migrations for safe forward and rollback behavior across
+        PostgreSQL, MySQL, and SQLite. Flag destructive changes, invalid
+        foreign-key/index ordering, and migrations that cannot be reapplied.
+    - path: "frontend/**"
+      instructions: |
+        Focus on frontend/backend API contract compatibility, authentication
+        state, validation, data exposure, and user-visible failure paths.
+    - path: "deploy/**"
+      instructions: |
+        Review preview and release deployment changes for container lifecycle,
+        database readiness, secret handling, rollback safety, and routing
+        regressions.
+    - path: ".github/workflows/**"
+      instructions: |
+        Check GitHub Actions changes for least-privilege permissions, untrusted
+        pull-request safety, secret exposure, concurrency, and deployment
+        regressions.
+    - path: "tests/**"
+      instructions: |
+        Check that changed behavior has meaningful positive, negative, and
+        boundary-case coverage. Do not request tests for style-only changes.
+
+chat:
+  auto_reply: true
