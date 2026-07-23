@@ -48,10 +48,18 @@ jobs:
           CUSTOM_REVIEW_MODEL: ${{ vars.CUSTOM_REVIEW_MODEL || 'qwen3-coder' }}
           CUSTOM_REVIEW_API_STYLE: ${{ vars.CUSTOM_REVIEW_API_STYLE || 'chat' }}
           CUSTOM_REVIEW_REASONING_EFFORT: ${{ vars.CUSTOM_REVIEW_REASONING_EFFORT || 'medium' }}
-          CUSTOM_REVIEW_MAX_DIFF_CHARS: ${{ vars.CUSTOM_REVIEW_MAX_DIFF_CHARS || '120000' }}
+          # A focused review completes more reliably than sending a full,
+          # very large PR to a high-reasoning model.
+          CUSTOM_REVIEW_MAX_DIFF_CHARS: ${{ vars.CUSTOM_REVIEW_MAX_DIFF_CHARS || '60000' }}
+          # Node fetch in github-script has a 300-second headers timeout.
+          # Keep this below the 20-minute job timeout while allowing deeper
+          # reasoning requests through slower compatible gateways.
+          CUSTOM_REVIEW_TIMEOUT_SECONDS: ${{ vars.CUSTOM_REVIEW_TIMEOUT_SECONDS || '900' }}
         with:
           github-token: ${{ github.token }}
           script: |
+            const http = require('node:http')
+            const https = require('node:https')
             const { owner, repo } = context.repo
 
             let pullRequest = context.payload.pull_request
@@ -90,7 +98,7 @@ jobs:
             )
             const maxDiffChars = Number.isFinite(configuredLimit) && configuredLimit > 0
               ? configuredLimit
-              : 120000
+              : 60000
             const truncated = fullDiff.length > maxDiffChars
             const diff = truncated ? fullDiff.slice(0, maxDiffChars) : fullDiff
 
@@ -145,21 +153,85 @@ jobs:
                   temperature: 0.1,
                 }
 
-            const apiResponse = await fetch(endpoint, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify(requestBody),
-            })
+            const configuredTimeoutSeconds = Number.parseInt(
+              process.env.CUSTOM_REVIEW_TIMEOUT_SECONDS,
+              10,
+            )
+            const timeoutSeconds = Number.isFinite(configuredTimeoutSeconds) &&
+              configuredTimeoutSeconds > 0
+              ? Math.min(configuredTimeoutSeconds, 900)
+              : 900
+            const requestPayload = JSON.stringify(requestBody)
+            headers['Content-Length'] = String(Buffer.byteLength(requestPayload))
 
-            if (!apiResponse.ok) {
-              const errorBody = await apiResponse.text()
+            // github-script's global fetch uses Undici's fixed 300-second
+            // headers timeout. A high-effort review can legitimately take
+            // longer, so use Node's HTTP client with an explicit, bounded
+            // socket timeout instead.
+            const postJson = async (url, requestHeaders, payload) => {
+              const target = new URL(url)
+              const transport = target.protocol === 'https:'
+                ? https
+                : target.protocol === 'http:'
+                  ? http
+                  : null
+              if (!transport) {
+                throw new Error(`Unsupported custom review API protocol: ${target.protocol}`)
+              }
+
+              return new Promise((resolve, reject) => {
+                const request = transport.request(target, {
+                  method: 'POST',
+                  headers: requestHeaders,
+                }, (response) => {
+                  let responseBody = ''
+                  response.setEncoding('utf8')
+                  response.on('data', (chunk) => {
+                    responseBody += chunk
+                  })
+                  response.on('end', () => {
+                    resolve({
+                      status: response.statusCode ?? 0,
+                      body: responseBody,
+                    })
+                  })
+                })
+                request.setTimeout(timeoutSeconds * 1000, () => {
+                  request.destroy(
+                    new Error(`Custom review API timed out after ${timeoutSeconds} seconds`),
+                  )
+                })
+                request.on('error', reject)
+                request.end(payload)
+              })
+            }
+
+            let apiResponse
+            try {
+              apiResponse = await postJson(endpoint, headers, requestPayload)
+            } catch (error) {
               core.setFailed(
-                `Custom review API returned ${apiResponse.status}: ${errorBody.slice(0, 2000)}`,
+                `Custom review API request failed after up to ${timeoutSeconds} seconds: ${error.message}`,
               )
               return
             }
 
-            const payload = await apiResponse.json()
+            if (apiResponse.status < 200 || apiResponse.status >= 300) {
+              core.setFailed(
+                `Custom review API returned ${apiResponse.status}: ${apiResponse.body.slice(0, 2000)}`,
+              )
+              return
+            }
+
+            let payload
+            try {
+              payload = JSON.parse(apiResponse.body)
+            } catch (error) {
+              core.setFailed(
+                `Custom review API returned invalid JSON: ${error.message}`,
+              )
+              return
+            }
             const review = apiStyle === 'responses'
               ? (payload.output ?? [])
                   .flatMap((item) => item.type === 'message' ? (item.content ?? []) : [])
