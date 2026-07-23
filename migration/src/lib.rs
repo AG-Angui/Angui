@@ -43,11 +43,22 @@ pub(crate) fn sql_for_backend(
 }
 
 pub(crate) async fn execute_script(manager: &SchemaManager<'_>, script: &str) -> Result<(), DbErr> {
-    for statement in script
+    let statements: Vec<_> = script
         .split("-- statement-break")
         .map(str::trim)
         .filter(|statement| !statement.is_empty())
-    {
+        .collect();
+
+    for (index, statement) in statements.iter().enumerate() {
+        // InnoDB rejects dropping an index that backs a foreign key (error 1553).
+        // A later DROP TABLE removes that table's indexes and constraints itself,
+        // so skip only that provably redundant index drop and keep all others strict.
+        if manager.get_database_backend() == DbBackend::MySql
+            && mysql_drop_index_is_redundant(statement, &statements[index + 1..])
+        {
+            continue;
+        }
+
         manager
             .get_connection()
             .execute_unprepared(statement)
@@ -57,11 +68,60 @@ pub(crate) async fn execute_script(manager: &SchemaManager<'_>, script: &str) ->
     Ok(())
 }
 
+fn mysql_drop_index_is_redundant(statement: &str, later_statements: &[&str]) -> bool {
+    let Some(indexed_table) = mysql_drop_index_table(statement) else {
+        return false;
+    };
+
+    later_statements.iter().any(|later_statement| {
+        mysql_drop_table(later_statement).as_deref() == Some(indexed_table.as_str())
+    })
+}
+
+fn mysql_drop_index_table(statement: &str) -> Option<String> {
+    let normalized = normalize_mysql_statement(statement);
+    let drop_index = normalized.strip_prefix("drop index ")?;
+    let (_, table) = drop_index.rsplit_once(" on ")?;
+    normalize_mysql_identifier(table)
+}
+
+fn mysql_drop_table(statement: &str) -> Option<String> {
+    let normalized = normalize_mysql_statement(statement);
+    let table = normalized
+        .strip_prefix("drop table if exists ")
+        .or_else(|| normalized.strip_prefix("drop table "))?;
+    normalize_mysql_identifier(table)
+}
+
+fn normalize_mysql_statement(statement: &str) -> String {
+    statement
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn normalize_mysql_identifier(identifier: &str) -> Option<String> {
+    let identifier = identifier.trim().trim_matches('`').trim_matches('"').trim();
+    (!identifier.is_empty()).then(|| identifier.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use sea_orm_migration::sea_orm::Database;
 
-    use super::{Migrator, MigratorTrait};
+    use super::{Migrator, MigratorTrait, mysql_drop_index_is_redundant};
+
+    const MYSQL_DOWN_SCRIPTS: &[&str] = &[
+        include_str!("../sql/mysql/down/0001_drop_cases.sql"),
+        include_str!("../sql/mysql/down/0002_drop_elder_profiles.sql"),
+        include_str!("../sql/mysql/down/0003_drop_clues.sql"),
+        include_str!("../sql/mysql/down/0004_drop_audit_events.sql"),
+        include_str!("../sql/mysql/down/0005_drop_users.sql"),
+        include_str!("../sql/mysql/down/0006_drop_auth_sessions.sql"),
+        include_str!("../sql/mysql/down/0007_drop_case_memberships.sql"),
+        include_str!("../sql/mysql/down/0008_drop_clue_attributions.sql"),
+    ];
 
     #[tokio::test]
     async fn sqlite_migrations_support_up_down_up() {
@@ -78,5 +138,33 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[test]
+    fn mysql_down_scripts_skip_indexes_removed_by_a_later_table_drop() {
+        for script in MYSQL_DOWN_SCRIPTS {
+            let statements: Vec<_> = script
+                .split("-- statement-break")
+                .map(str::trim)
+                .filter(|statement| !statement.is_empty())
+                .collect();
+
+            for (index, statement) in statements.iter().enumerate() {
+                if statement.to_ascii_lowercase().starts_with("drop index ") {
+                    assert!(
+                        mysql_drop_index_is_redundant(statement, &statements[index + 1..]),
+                        "expected redundant MySQL index drop in statement: {statement}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mysql_keeps_index_drops_when_the_table_is_not_dropped_later() {
+        assert!(!mysql_drop_index_is_redundant(
+            "DROP INDEX idx_users_role_status ON users;",
+            &["DROP TABLE IF EXISTS cases;"]
+        ));
     }
 }
