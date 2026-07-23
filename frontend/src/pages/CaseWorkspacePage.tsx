@@ -1,10 +1,9 @@
-import { Button, Chip, Input, Spinner, TextArea } from '@heroui/react'
+import { Button, Chip, Input, TextArea } from '@heroui/react'
 import {
   CheckCircle2,
   ChevronRight,
   CirclePlus,
   FileSearch,
-  Inbox,
   MapPin,
   RefreshCw,
   Send,
@@ -30,6 +29,7 @@ import type {
 } from '../api/cases'
 import { ApiClientError } from '../api/client'
 import { useAuth } from '../auth/useAuth'
+import { EmptyState, ErrorState, LoadingState } from '../components/ContentState'
 
 type WorkspaceMode = 'family' | 'commander' | 'volunteer'
 
@@ -69,14 +69,15 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   const [detail, setDetail] = useState<CaseDetail | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isDetailLoading, setIsDetailLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [listError, setListError] = useState('')
+  const [detailError, setDetailError] = useState('')
   const [notice, setNotice] = useState('')
   const [showCreate, setShowCreate] = useState(false)
 
   const loadCases = useCallback(async (preferredId?: string) => {
     if (!token) return
     setIsLoading(true)
-    setError('')
+    setListError('')
     try {
       const items = await listCases(token)
       setCases(items)
@@ -86,7 +87,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
         return nextId
       })
     } catch (cause) {
-      setError(messageFrom(cause))
+      setListError(messageFrom(cause))
     } finally {
       setIsLoading(false)
     }
@@ -95,11 +96,11 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   const loadDetail = useCallback(async (caseId: string) => {
     if (!token) return
     setIsDetailLoading(true)
-    setError('')
+    setDetailError('')
     try {
       setDetail(await getCase(token, caseId))
     } catch (cause) {
-      setError(messageFrom(cause))
+      setDetailError(messageFrom(cause))
       setDetail(null)
     } finally {
       setIsDetailLoading(false)
@@ -141,7 +142,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
         </div>
       </header>
 
-      {error && <Message tone="error">{error}</Message>}
+      {listError && cases.length > 0 && <Message tone="error">{listError}</Message>}
       {notice && <Message tone="success">{notice}</Message>}
 
       {showCreate && mode !== 'volunteer' && (
@@ -162,12 +163,11 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
             <Chip size="sm" variant="soft"><Chip.Label>{cases.length}</Chip.Label></Chip>
           </div>
           {isLoading ? (
-            <div className="grid min-h-40 place-items-center"><Spinner /></div>
+            <LoadingState label="正在加载可访问案件" />
+          ) : listError && cases.length === 0 ? (
+            <ErrorState message={listError} onRetry={() => void loadCases()} />
           ) : cases.length === 0 ? (
-            <div className="flex min-h-48 flex-col items-center justify-center px-5 text-center">
-              <Inbox size={24} className="text-slate-400" />
-              <strong className="mt-3 text-sm text-slate-950">暂无案件</strong>
-            </div>
+            <EmptyState title="暂无案件" description="新建案件后，会显示在这里。" />
           ) : (
             <div className="divide-y divide-slate-100">
               {cases.map((item) => (
@@ -175,6 +175,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                   type="button"
                   key={item.id}
                   onClick={() => setSelectedId(item.id)}
+                  aria-pressed={selectedId === item.id}
                   className={`flex min-h-20 w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
                     selectedId === item.id ? 'bg-brand-50' : 'hover:bg-slate-50'
                   }`}
@@ -196,7 +197,12 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
 
         <section className="min-w-0">
           {isDetailLoading ? (
-            <div className="grid min-h-96 place-items-center"><Spinner size="lg" /></div>
+            <LoadingState label="正在加载案件详情" />
+          ) : detailError ? (
+            <ErrorState
+              message={detailError}
+              onRetry={() => selectedId && void loadDetail(selectedId)}
+            />
           ) : detail ? (
             <CaseDetailView
               detail={detail}
@@ -209,8 +215,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
             />
           ) : (
             <div className="flex min-h-96 flex-col items-center justify-center px-6 text-center">
-              <FileSearch size={28} className="text-slate-400" />
-              <strong className="mt-3 text-sm text-slate-950">选择一个案件查看详情</strong>
+              <EmptyState icon={FileSearch} title="选择一个案件查看详情" />
             </div>
           )}
         </section>
@@ -234,12 +239,19 @@ function CreateCaseForm({
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!token) return
+    const validationError = validateCreateCase(form)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
     setIsSubmitting(true)
     setError('')
     try {
       await onCreated(
         await createCase(token, {
           ...form,
+          display_name: form.display_name.trim(),
+          last_seen_location: form.last_seen_location?.trim() ?? '',
           last_seen_at: form.last_seen_at ? new Date(form.last_seen_at).toISOString() : null,
         }),
       )
@@ -256,16 +268,16 @@ function CreateCaseForm({
       <h2 id="create-case-title" className="m-0 text-base font-bold text-slate-950">建立模拟案件</h2>
       <form onSubmit={submit} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Field label="案件内称呼" required>
-          <Input value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} fullWidth required />
+          <Input value={form.display_name} maxLength={120} onChange={(event) => setForm({ ...form, display_name: event.target.value })} fullWidth required />
         </Field>
         <Field label="年龄">
-          <Input type="number" min={0} max={130} value={form.age ?? ''} onChange={(event) => setForm({ ...form, age: event.target.value ? Number(event.target.value) : null })} fullWidth />
+          <Input type="number" min={0} max={130} step={1} value={form.age ?? ''} onChange={(event) => setForm({ ...form, age: event.target.value ? Number(event.target.value) : null })} fullWidth />
         </Field>
         <Field label="性别">
           <Input value={form.gender ?? ''} onChange={(event) => setForm({ ...form, gender: nullable(event.target.value) })} fullWidth />
         </Field>
         <Field label="最后出现地点" required>
-          <Input value={form.last_seen_location} onChange={(event) => setForm({ ...form, last_seen_location: event.target.value })} fullWidth required />
+          <Input value={form.last_seen_location ?? ''} onChange={(event) => setForm({ ...form, last_seen_location: event.target.value })} fullWidth required />
         </Field>
         <Field label="最后出现时间">
           <Input type="datetime-local" value={form.last_seen_at ?? ''} onChange={(event) => setForm({ ...form, last_seen_at: nullable(event.target.value) })} fullWidth />
@@ -301,12 +313,18 @@ function CaseDetailView({
   const { token } = useAuth()
   const [clueContent, setClueContent] = useState('')
   const [clueLocation, setClueLocation] = useState('')
+  const [clueOccurredAt, setClueOccurredAt] = useState('')
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status)
   const [memberEmail, setMemberEmail] = useState('')
   const [memberRole, setMemberRole] = useState<CaseRole>('volunteer')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const isCommander = detail.access_role === 'commander'
+  const statusOptions: CaseStatus[] = detail.status === 'active'
+    ? ['active', 'resolved', 'closed']
+    : detail.status === 'resolved'
+      ? ['resolved', 'active', 'closed']
+      : ['closed']
 
   useEffect(() => setNextStatus(detail.status), [detail.status])
 
@@ -316,8 +334,10 @@ function CaseDetailView({
     try {
       await action()
       await onChanged(message)
+      return true
     } catch (cause) {
       setError(messageFrom(cause))
+      return false
     } finally {
       setBusy('')
     }
@@ -359,12 +379,10 @@ function CaseDetailView({
           >
             <h3 className="m-0 text-sm font-bold text-slate-950">案件状态</h3>
             <div className="mt-3 flex gap-2">
-              <select className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm" value={nextStatus} onChange={(event) => setNextStatus(event.target.value as CaseStatus)}>
-                <option value="active">进行中</option>
-                <option value="resolved">已找到</option>
-                <option value="closed">已关闭</option>
+              <select className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm" value={nextStatus} onChange={(event) => setNextStatus(event.target.value as CaseStatus)} disabled={detail.status === 'closed'}>
+                {statusOptions.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}
               </select>
-              <Button type="submit" size="sm" variant="secondary" isDisabled={busy === 'status'}>保存</Button>
+              <Button type="submit" size="sm" variant="secondary" isDisabled={busy === 'status' || nextStatus === detail.status}>保存</Button>
             </div>
           </form>}
 
@@ -373,12 +391,14 @@ function CaseDetailView({
               event.preventDefault()
               if (!token) return
               const role = detail.access_role === 'family' ? 'commander' : memberRole
-              void run('member', () => addCaseMember(token, detail.id, memberEmail, role), '案件成员已添加').then(() => setMemberEmail(''))
+              void run('member', () => addCaseMember(token, detail.id, memberEmail.trim(), role), '案件成员已添加').then((succeeded) => {
+                if (succeeded) setMemberEmail('')
+              })
             }}
           >
             <h3 className="m-0 text-sm font-bold text-slate-950">添加成员</h3>
             <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
-              <Input type="email" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} placeholder="成员邮箱" fullWidth required />
+              <Input type="email" value={memberEmail} maxLength={320} onChange={(event) => setMemberEmail(event.target.value)} placeholder="成员邮箱" fullWidth required />
               <select className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={detail.access_role === 'family' ? 'commander' : memberRole} onChange={(event) => setMemberRole(event.target.value as CaseRole)} disabled={detail.access_role === 'family'}>
                 {detail.access_role === 'family' ? (
                   <option value="commander">指挥</option>
@@ -435,18 +455,27 @@ function CaseDetailView({
             onSubmit={(event) => {
               event.preventDefault()
               if (!token) return
+              const content = nullable(clueContent)
+              if (!content) {
+                setError('请填写线索内容后再提交。')
+                return
+              }
               void run(
                 'clue',
-                () => createClue(token, detail.id, { source: detail.access_role, content: clueContent, occurred_at: null, location_text: nullable(clueLocation) }),
+                () => createClue(token, detail.id, { source: detail.access_role, content, occurred_at: toIsoOrNull(clueOccurredAt), location_text: nullable(clueLocation) }),
                 '线索已提交并进入人工审核',
-              ).then(() => {
-                setClueContent('')
-                setClueLocation('')
+              ).then((succeeded) => {
+                if (succeeded) {
+                  setClueContent('')
+                  setClueLocation('')
+                  setClueOccurredAt('')
+                }
               })
             }}
           >
-            <Field label="线索内容" required><TextArea value={clueContent} onChange={(event) => setClueContent(event.target.value)} rows={3} fullWidth required /></Field>
+            <Field label="线索内容" required><TextArea value={clueContent} maxLength={4000} onChange={(event) => setClueContent(event.target.value)} rows={3} fullWidth required /></Field>
             <div className="space-y-3">
+              <Field label="发生时间"><Input type="datetime-local" value={clueOccurredAt} onChange={(event) => setClueOccurredAt(event.target.value)} fullWidth /></Field>
               <Field label="地点"><Input value={clueLocation} onChange={(event) => setClueLocation(event.target.value)} fullWidth /></Field>
               <Button type="submit" variant="primary" fullWidth isDisabled={busy === 'clue'}><Send size={16} />提交线索</Button>
             </div>
@@ -468,7 +497,7 @@ function ReviewButton({
   status: ClueReviewStatus
   clueId: string
   busy: string
-  run: (key: string, action: () => Promise<unknown>, message: string) => Promise<void>
+  run: (key: string, action: () => Promise<unknown>, message: string) => Promise<boolean>
 }) {
   const { token } = useAuth()
   const key = `review:${clueId}:${status}`
@@ -514,6 +543,24 @@ function Message({ tone, children }: { tone: 'error' | 'success'; children: Reac
 function nullable(value: string): string | null {
   const trimmed = value.trim()
   return trimmed ? trimmed : null
+}
+
+function validateCreateCase(form: CreateCasePayload): string | null {
+  if (!form.display_name.trim()) return '请填写案件内称呼。'
+  if (!form.last_seen_location?.trim()) return '请填写最后出现地点。'
+  if (form.age !== null && (!Number.isInteger(form.age) || form.age < 0 || form.age > 130)) {
+    return '年龄应为 0 到 130 之间的整数。'
+  }
+  if (form.last_seen_at && Number.isNaN(new Date(form.last_seen_at).getTime())) {
+    return '最后出现时间格式无效。'
+  }
+  return null
+}
+
+function toIsoOrNull(value: string): string | null {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
 function messageFrom(cause: unknown): string {
