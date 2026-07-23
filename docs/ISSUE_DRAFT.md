@@ -848,7 +848,7 @@ OpenAPI 对齐且测试命令全量通过后才能关闭**。
 
 ---
 
-## 6. AI 调用可靠性与合规路由补充 Issue（待发布）
+## 6. AI 调用可靠性与合规路由补充 Issue（已发布）
 
 > 本组事项是 `B-02`、`D-04`、`G-02`、`H-04` 等实际模型调用能力的共同前置条件。当前
 > `rule_based` 问询和人工处理路径仍是必需的最终降级，而不是由多个模型供应商替代。
@@ -993,3 +993,16 @@ OpenAPI 对齐且测试命令全量通过后才能关闭**。
   - 运行手册包含超时/429/预算耗尽/隐私策略拒绝/供应商故障的诊断、止损、人工沟通和
     恢复步骤，并引用可观测性面板。
   - 至少完成一次使用模拟 Provider 的故障演练，保留脱敏的演练记录和改进事项。
+
+### 发布编号映射
+
+| 草案编号 | GitHub Issue | 标题 |
+| --- | --- | --- |
+| `AI-R-01` | [#96](https://github.com/AG-Angui/Angui/issues/96) | AI Gateway - Provider 抽象、能力注册与安全配置 |
+| `AI-R-02` | [#97](https://github.com/AG-Angui/Angui/issues/97) | AI 准入控制 - 分功能队列、并发上限、速率与预算 |
+| `AI-R-03` | [#98](https://github.com/AG-Angui/Angui/issues/98) | AI 执行器 - Deadline、可恢复重试、退避与熔断 |
+| `AI-R-04` | [#99](https://github.com/AG-Angui/Angui/issues/99) | 合规 Failover 与确定性降级策略 |
+| `AI-R-05` | [#100](https://github.com/AG-Angui/Angui/issues/100) | AI 出站数据最小化、脱敏与 Provider 数据策略 |
+| `AI-R-06` | [#101](https://github.com/AG-Angui/Angui/issues/101) | AI 调用指标、成本、链路追踪与告警 |
+| `AI-R-07` | [#102](https://github.com/AG-Angui/Angui/issues/102) | AI Provider Mock、故障注入与降级矩阵测试 |
+| `AI-R-08` | [#103](https://github.com/AG-Angui/Angui/issues/103) | AI 灰度发布、Kill Switch 与故障处置手册 |
