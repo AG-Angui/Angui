@@ -17,6 +17,7 @@ chrono = "0.4.42"
 env_logger = "0.11.11"
 futures-util = "0.3.32"
 hex = "0.4.3"
+http = "0.2.12"
 sea-orm = { version = "1.1.19", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

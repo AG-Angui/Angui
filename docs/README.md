@@ -12,6 +12,7 @@
 | [openapi.yaml](./openapi.yaml) | 当前已注册 HTTP API 的机器可读契约、认证、角色与字段可见性 | 前端、后端、测试、集成 |
 | [DATABASE.md](./DATABASE.md) | SeaORM、SQLite/PostgreSQL/MySQL 和编号 SQL 迁移规范 | 后端、数据库、运维 |
 | [DATA_AND_AI.md](./DATA_AND_AI.md) | 数据对象、线索状态、AI 输出约束、知识库治理 | 后端、AI、数据、审核人员 |
+| [AI_GATEWAY.md](./AI_GATEWAY.md) | AI Provider 协议适配、合规路由、配置与审计边界 | 后端、AI、安全评审人员 |
 | [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) | 权限分级、隐私保护、定位安全、日志和事件响应 | 全体成员、安全评审人员 |
 | [DEMO_AND_DELIVERY.md](./DEMO_AND_DELIVERY.md) | Demo 故事线、样例数据和初赛交付清单 | 产品、前端、路演团队 |
 | [ISSUE_DRAFT.md](./ISSUE_DRAFT.md) | API、数据、三端能力与交付的 GitHub Issue 拆分草案 | 产品、开发、项目管理 |

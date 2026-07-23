@@ -1,5 +1,7 @@
 use std::env;
 
+use crate::ai_gateway::{ProviderConfig, validate_provider_configurations};
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub host: String,
@@ -8,6 +10,7 @@ pub struct Settings {
     pub database_url: String,
     pub session_ttl_hours: i64,
     pub intake_answer_hard_max: usize,
+    pub ai_provider_configurations: Vec<ProviderConfig>,
 }
 
 impl Settings {
@@ -39,6 +42,18 @@ impl Settings {
         if !(1..=10_000).contains(&intake_answer_hard_max) {
             return Err("ANGUI_INTAKE_ANSWER_HARD_MAX must be between 1 and 10000".to_owned());
         }
+        let provider_configurations_value =
+            env::var("ANGUI_AI_PROVIDERS_JSON").unwrap_or_else(|_| "[]".to_owned());
+        let ai_provider_configurations: Vec<ProviderConfig> = serde_json::from_str(
+            &provider_configurations_value,
+        )
+        .map_err(|error| {
+            format!(
+                "ANGUI_AI_PROVIDERS_JSON must be a JSON array of provider configurations: {error}"
+            )
+        })?;
+        validate_provider_configurations(&ai_provider_configurations)
+            .map_err(|error| error.to_string())?;
 
         Ok(Self {
             host,
@@ -47,6 +62,7 @@ impl Settings {
             database_url,
             session_ttl_hours,
             intake_answer_hard_max,
+            ai_provider_configurations,
         })
     }
 
@@ -68,6 +84,7 @@ mod tests {
             database_url: "sqlite::memory:".to_owned(),
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
+            ai_provider_configurations: Vec::new(),
         };
 
         assert_eq!(settings.address(), ("127.0.0.1".to_owned(), 8080));

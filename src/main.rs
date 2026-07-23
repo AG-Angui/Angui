@@ -2,7 +2,10 @@ use std::io;
 
 use actix_cors::Cors;
 use actix_web::{App, HttpServer, http, middleware::Logger, web};
-use angui::{app_state::AppState, config::Settings, rate_limit::LoginRateLimiter, routes};
+use angui::{
+    ai_gateway::AiGateway, app_state::AppState, config::Settings, rate_limit::LoginRateLimiter,
+    routes,
+};
 use sea_orm::Database;
 
 #[actix_web::main]
@@ -15,10 +18,13 @@ async fn main() -> io::Result<()> {
     let database = Database::connect(&settings.database_url)
         .await
         .map_err(|error| io::Error::other(format!("database connection failed: {error}")))?;
+    let ai_gateway = AiGateway::from_configurations(settings.ai_provider_configurations.clone())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     let state = web::Data::new(AppState {
         db: database,
         session_ttl_hours: settings.session_ttl_hours,
         intake_answer_hard_max: settings.intake_answer_hard_max,
+        ai_gateway,
         login_limiter: LoginRateLimiter::default(),
     });
 
