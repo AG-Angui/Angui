@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   getCurrentUser,
@@ -6,6 +6,7 @@ import {
   logout as requestLogout,
 } from '../api/auth'
 import type { AuthUser } from '../api/auth'
+import { SESSION_EXPIRED_EVENT } from '../api/client'
 import { AuthContext } from './auth-context'
 import type { AuthContextValue } from './auth-context'
 
@@ -15,6 +16,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY))
   const [user, setUser] = useState<AuthUser | null>(null)
   const [isLoading, setIsLoading] = useState(Boolean(token))
+  const clearSession = useCallback(() => {
+    sessionStorage.removeItem(TOKEN_KEY)
+    setToken(null)
+    setUser(null)
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener(SESSION_EXPIRED_EVENT, clearSession)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, clearSession)
+  }, [clearSession])
 
   useEffect(() => {
     if (!token) {
@@ -31,9 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         if (!active) return
-        sessionStorage.removeItem(TOKEN_KEY)
-        setToken(null)
-        setUser(null)
+        clearSession()
       })
       .finally(() => {
         if (active) setIsLoading(false)
@@ -42,7 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false
     }
-  }, [token])
+  }, [clearSession, token])
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -60,13 +69,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           await requestLogout(token)
         } finally {
-          sessionStorage.removeItem(TOKEN_KEY)
-          setToken(null)
-          setUser(null)
+          clearSession()
         }
       },
     }),
-    [isLoading, token, user],
+    [clearSession, isLoading, token, user],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

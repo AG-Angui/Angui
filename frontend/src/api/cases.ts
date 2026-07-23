@@ -8,6 +8,7 @@ export type ClueReviewStatus =
   | 'rejected'
   | 'expired'
   | 'duplicate'
+export type ClueStatus = 'pending_review' | ClueReviewStatus
 
 export interface CaseListItem {
   id: string
@@ -36,7 +37,7 @@ export interface ElderProfile {
 export interface Clue {
   id: string
   case_id: string
-  status: string
+  status: ClueStatus
   source: string
   content: string
   occurred_at: string | null
@@ -66,7 +67,14 @@ export interface CreateCasePayload {
   clothing_description: string | null
   health_notes: string | null
   last_seen_at: string | null
-  last_seen_location: string
+  last_seen_location: string | null
+}
+
+export interface CaseMember {
+  user_id: string
+  email: string
+  display_name: string
+  role: CaseRole
 }
 
 export interface CreateCluePayload {
@@ -133,8 +141,8 @@ export function addCaseMember(
   caseId: string,
   email: string,
   role: CaseRole,
-): Promise<void> {
-  return apiRequest<void>(
+): Promise<CaseMember> {
+  return apiRequest<CaseMember>(
     `/cases/${caseId}/members`,
     { method: 'POST', body: JSON.stringify({ email, role }) },
     token,
