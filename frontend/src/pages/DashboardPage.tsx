@@ -35,7 +35,7 @@ export function DashboardPage() {
 
       setCases(items)
       setDetails(loaded)
-      if (loaded.length !== Math.min(items.length, 20)) {
+      if (loaded.length !== items.length) {
         setError('部分案件详情暂时不可用，统计数据可能不完整。')
       }
     } catch (cause) {

@@ -87,5 +87,13 @@ describe('case API contract', () => {
       'PATCH',
       'PATCH',
     ])
+    expect(
+      fetchMock.mock.calls.map((call) => JSON.parse(String(requestOptions(call).body))),
+    ).toEqual([
+      { email: 'volunteer@demo.invalid', role: 'volunteer' },
+      { source: 'volunteer', content: '模拟线索', occurred_at: null, location_text: null },
+      { status: 'confirmed' },
+      { status: 'resolved' },
+    ])
   })
 })

@@ -49,14 +49,17 @@ describe('application role routing', () => {
   })
 
   it.each([
-    ['family', '家属端'],
-    ['commander', '指挥端'],
-    ['volunteer', '志愿者端'],
-  ] as const)('shows only the %s workspace navigation', async (role, workspace) => {
+    ['family', '家属端', ['指挥端', '志愿者端']],
+    ['commander', '指挥端', ['家属端', '志愿者端']],
+    ['volunteer', '志愿者端', ['家属端', '指挥端']],
+  ] as const)('shows only the %s workspace navigation', async (role, workspace, unavailableWorkspaces) => {
     setAuth(role)
     renderApp()
     await waitFor(() => expect(screen.getByText('行动总览')).toBeInTheDocument())
     expect(screen.getByRole('link', { name: workspace })).toBeInTheDocument()
+    unavailableWorkspaces.forEach((name) => {
+      expect(screen.queryByRole('link', { name })).not.toBeInTheDocument()
+    })
   })
 
   it.each([

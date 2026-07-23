@@ -9,7 +9,7 @@ import {
   Send,
   UserPlus,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addCaseMember,
   createCase,
@@ -73,6 +73,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   const [detailError, setDetailError] = useState('')
   const [notice, setNotice] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const detailRequestVersion = useRef(0)
 
   const loadCases = useCallback(async (preferredId?: string) => {
     if (!token) return
@@ -94,16 +95,21 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   }, [token])
 
   const loadDetail = useCallback(async (caseId: string) => {
+    const requestVersion = detailRequestVersion.current + 1
+    detailRequestVersion.current = requestVersion
     if (!token) return
     setIsDetailLoading(true)
     setDetailError('')
     try {
-      setDetail(await getCase(token, caseId))
+      const nextDetail = await getCase(token, caseId)
+      if (requestVersion !== detailRequestVersion.current) return
+      setDetail(nextDetail)
     } catch (cause) {
+      if (requestVersion !== detailRequestVersion.current) return
       setDetailError(messageFrom(cause))
       setDetail(null)
     } finally {
-      setIsDetailLoading(false)
+      if (requestVersion === detailRequestVersion.current) setIsDetailLoading(false)
     }
   }, [token])
 
@@ -112,7 +118,14 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   }, [loadCases])
 
   useEffect(() => {
-    if (selectedId) void loadDetail(selectedId)
+    if (selectedId) {
+      void loadDetail(selectedId)
+      return
+    }
+    detailRequestVersion.current += 1
+    setDetail(null)
+    setDetailError('')
+    setIsDetailLoading(false)
   }, [loadDetail, selectedId])
 
   const pendingCount = useMemo(
