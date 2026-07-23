@@ -1,6 +1,6 @@
 import { apiRequest } from './client'
 
-export type UserRole = 'family' | 'commander' | 'volunteer' | 'admin'
+export type UserRole = 'family' | 'commander' | 'volunteer' | 'learner' | 'admin'
 
 export interface AuthUser {
   id: string

@@ -8,6 +8,7 @@ mod m0005_create_users;
 mod m0006_create_auth_sessions;
 mod m0007_create_case_memberships;
 mod m0008_create_clue_attributions;
+mod m0009_add_learner_role;
 
 use sea_orm_migration::sea_orm::DbBackend;
 
@@ -25,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0006_create_auth_sessions::Migration),
             Box::new(m0007_create_case_memberships::Migration),
             Box::new(m0008_create_clue_attributions::Migration),
+            Box::new(m0009_add_learner_role::Migration),
         ]
     }
 }
@@ -108,7 +110,7 @@ fn normalize_mysql_identifier(identifier: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm_migration::sea_orm::Database;
+    use sea_orm_migration::sea_orm::{ConnectionTrait, Database, Statement};
 
     use super::{Migrator, MigratorTrait, mysql_drop_index_is_redundant};
 
@@ -121,6 +123,7 @@ mod tests {
         include_str!("../sql/mysql/down/0006_drop_auth_sessions.sql"),
         include_str!("../sql/mysql/down/0007_drop_case_memberships.sql"),
         include_str!("../sql/mysql/down/0008_drop_clue_attributions.sql"),
+        include_str!("../sql/mysql/down/0009_remove_learner_role.sql"),
     ];
 
     #[tokio::test]
@@ -138,6 +141,39 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[tokio::test]
+    async fn sqlite_learner_role_migration_preserves_existing_user_references() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, Some(8))
+            .await
+            .expect("schema before learner role migration should succeed");
+        database
+            .execute_unprepared(
+                "INSERT INTO users (id, email, display_name, role, password_hash, status, created_at, updated_at) VALUES ('existing-user', 'existing@demo.invalid', 'Existing user', 'family', 'hash', 'active', '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z')",
+            )
+            .await
+            .expect("old schema should accept existing user");
+
+        Migrator::up(&database, None)
+            .await
+            .expect("learner role migration should preserve existing data");
+        database
+            .execute_unprepared(
+                "INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, revoked_at, created_at, last_used_at) VALUES ('existing-session', 'existing-user', 'hash', '2026-07-24T00:00:00Z', NULL, '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z')",
+            )
+            .await
+            .expect("existing user should remain a valid foreign-key target");
+        database
+            .execute(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "INSERT INTO users (id, email, display_name, role, password_hash, status, created_at, updated_at) VALUES ('learner-user', 'learner@demo.invalid', 'Learner user', 'learner', 'hash', 'active', '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z')",
+            ))
+            .await
+            .expect("upgraded schema should accept learner role");
     }
 
     #[test]

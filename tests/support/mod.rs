@@ -16,6 +16,8 @@ pub const PASSWORD: &str = "demo-password-123";
 pub const FAMILY: &str = "family@demo.invalid";
 pub const COMMANDER: &str = "commander@demo.invalid";
 pub const VOLUNTEER: &str = "volunteer@demo.invalid";
+pub const LEARNER: &str = "learner@demo.invalid";
+pub const ADMIN: &str = "admin@demo.invalid";
 
 pub struct TestContext {
     database: DatabaseConnection,

@@ -97,7 +97,7 @@ paths:
       tags: [Authentication]
       operationId: getCurrentUser
       summary: 获取当前认证用户
-      x-roles: [family, commander, volunteer, admin]
+      x-roles: [family, commander, volunteer, learner, admin]
       responses:
         "200":
           description: 当前活动账号
@@ -116,7 +116,7 @@ paths:
       operationId: logout
       summary: 撤销当前服务端会话
       description: 成功后，当前 Bearer token 立即失效。
-      x-roles: [family, commander, volunteer, admin]
+      x-roles: [family, commander, volunteer, learner, admin]
       responses:
         "204":
           description: 会话已撤销，无响应正文
@@ -131,7 +131,7 @@ paths:
       operationId: listCases
       summary: 列出当前用户有成员关系的案件
       description: 按案件创建时间倒序返回；没有案件成员关系时返回空数组。
-      x-roles: [family, commander, volunteer, admin]
+      x-roles: [family, commander, volunteer, learner, admin]
       responses:
         "200":
           description: 当前用户可访问的案件列表
@@ -539,7 +539,7 @@ components:
 
     UserRole:
       type: string
-      enum: [family, commander, volunteer, admin]
+      enum: [family, commander, volunteer, learner, admin]
 
     CaseRole:
       type: string

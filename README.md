@@ -92,7 +92,7 @@ npm run migrate:up
 npm run migrate:status
 ```
 
-显式创建固定的低权限模拟账号。密码只通过当前终端环境变量提供，不写入仓库：
+显式创建固定的模拟账号。密码只通过当前终端环境变量提供，不写入仓库；管理员账号也不自动获得案件成员权限：
 
 ```powershell
 $env:ANGUI_DEMO_PASSWORD = "<set-in-GitHub-Actions-secret>"
@@ -105,6 +105,8 @@ npm run auth:bootstrap-demo
 family@demo.invalid
 commander@demo.invalid
 volunteer@demo.invalid
+learner@demo.invalid
+admin@demo.invalid
 ```
 
 分别启动两个开发进程：

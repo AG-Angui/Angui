@@ -21,7 +21,7 @@ interface NavigationItem {
 }
 
 const navigation: NavigationItem[] = [
-  { to: '/', label: '总览', icon: LayoutDashboard, end: true, roles: ['family', 'commander', 'volunteer', 'admin'] },
+  { to: '/', label: '总览', icon: LayoutDashboard, end: true, roles: ['family', 'commander', 'volunteer', 'learner', 'admin'] },
   { to: '/family', label: '家属端', icon: HeartHandshake, roles: ['family'] },
   { to: '/command', label: '指挥端', icon: RadioTower, roles: ['commander'] },
   { to: '/volunteer', label: '志愿者端', icon: Navigation, roles: ['volunteer'] },
@@ -31,6 +31,7 @@ const roleLabels: Record<UserRole, string> = {
   family: '家属',
   commander: '指挥',
   volunteer: '志愿者',
+  learner: '新人',
   admin: '管理员',
 }
 

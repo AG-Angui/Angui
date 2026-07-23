@@ -32,16 +32,17 @@ migration/
 │   ├── m0005_create_users.rs
 │   ├── m0006_create_auth_sessions.rs
 │   ├── m0007_create_case_memberships.rs
-│   └── m0008_create_clue_attributions.rs
+│   ├── m0008_create_clue_attributions.rs
+│   └── m0009_add_learner_role.rs
 └── sql/
     ├── sqlite/
     │   ├── up/
     │   │   ├── 0001_create_cases.sql
     │   │   ├── 0002_create_elder_profiles.sql
     │   │   ├── 0003_create_clues.sql
-    │   │   └── 0004_create_audit_events.sql ... 0008_create_clue_attributions.sql
+    │   │   └── 0004_create_audit_events.sql ... 0009_add_learner_role.sql
     │   └── down/
-    │       └── 0001_drop_cases.sql ... 0008_drop_clue_attributions.sql
+    │       └── 0001_drop_cases.sql ... 0009_remove_learner_role.sql
     ├── postgres/
     │   ├── up/
     │   │   └── 与 SQLite 相同编号的 8 个 PostgreSQL up 脚本
@@ -85,7 +86,7 @@ NNNN_function_name.sql
 0006_create_auth_sessions.sql
 0007_create_case_memberships.sql
 0008_create_clue_attributions.sql
-0009_add_case_status_index.sql
+0009_add_learner_role.sql
 ```
 
 ## 5. 不可变更规则
@@ -175,4 +176,4 @@ npm run migrate:status
 - 邮箱在写入和登录查询前统一去除首尾空白并转为小写。
 - 账号删除不是当前能力；禁用账号使用 `status=disabled`，认证时立即拒绝。
 - 管理员全局角色不构成案件成员关系，不能绕过 `case_memberships` 读取业务数据。
-- 显式运行 `angui-admin bootstrap-demo` 会创建或更新三个 `.invalid` 演示账号，并撤销这些账号之前的活动会话。
+- 显式运行 `angui-admin bootstrap-demo` 会创建或更新五个 `.invalid` 演示账号（家属、指挥、志愿者、新人、管理员），并撤销这些账号之前的活动会话。`learner` 与 `admin` 都不是案件成员角色；后者也不能因全局管理员身份绕过 `case_memberships` 读取案件。

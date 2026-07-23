@@ -4,7 +4,7 @@ use actix_web::{
 };
 use serde_json::Value;
 
-use crate::support::{COMMANDER, FAMILY, TestContext, assert_error};
+use crate::support::{ADMIN, COMMANDER, FAMILY, LEARNER, TestContext, assert_error};
 
 #[actix_web::test]
 async fn get_cases_only_returns_cases_where_the_user_is_a_member() {
@@ -44,4 +44,27 @@ async fn get_cases_only_returns_cases_where_the_user_is_a_member() {
     )
     .await;
     assert_error(missing, StatusCode::UNAUTHORIZED, "unauthorized").await;
+}
+
+#[actix_web::test]
+async fn learner_and_admin_do_not_gain_case_access_from_their_global_roles() {
+    let context = TestContext::new().await;
+    context.create_case().await;
+    let learner_token = context.token(LEARNER).await;
+    let admin_token = context.token(ADMIN).await;
+    let app = crate::init_api_app!(&context);
+
+    for token in [learner_token, admin_token] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/cases")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let cases: Value = test::read_body_json(response).await;
+        assert_eq!(cases, Value::Array(vec![]));
+    }
 }
