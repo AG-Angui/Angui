@@ -59,6 +59,12 @@ jobs:
     name: PostgreSQL and MySQL migrations
     # External forks never execute on the server that holds deployment access.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
+    # Run the integration suite at review, merge, and explicit verification
+    # boundaries, rather than for every intermediate feature-branch push.
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'workflow_dispatch'
     timeout-minutes: 30
     env:
       RUSTUP_DIST_SERVER: https://rsproxy.cn

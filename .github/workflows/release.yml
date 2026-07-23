@@ -24,6 +24,34 @@ jobs:
     env:
       RUSTUP_DIST_SERVER: https://rsproxy.cn
       RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: angui
+          POSTGRES_USER: angui
+          POSTGRES_PASSWORD: angui
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U angui -d angui"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: angui
+          MYSQL_USER: angui
+          MYSQL_PASSWORD: angui
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 13306:3306
+        options: >-
+          --health-cmd "mysqladmin ping --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     outputs:
       tag_slug: ${{ steps.meta.outputs.tag_slug }}
       api_image: ${{ steps.meta.outputs.api_image }}
@@ -45,6 +73,24 @@ jobs:
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
           cargo test --workspace --all-features --locked
           cargo build --workspace --all-features --release --locked
+
+      - name: Exercise release migrations against PostgreSQL
+        env:
+          DATABASE_URL: postgres://angui:angui@127.0.0.1:15432/angui
+        run: |
+          target/release/migration up
+          target/release/migration status
+          target/release/migration refresh
+          target/release/migration status
+
+      - name: Exercise release migrations against MySQL
+        env:
+          DATABASE_URL: mysql://angui:angui@127.0.0.1:13306/angui
+        run: |
+          target/release/migration up
+          target/release/migration status
+          target/release/migration refresh
+          target/release/migration status
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
