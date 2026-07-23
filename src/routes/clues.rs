@@ -12,8 +12,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
 }
 
 async fn review_clue(
-    state: web::Data<AppState>,
     auth: AuthenticatedUser,
+    state: web::Data<AppState>,
     clue_id: web::Path<String>,
     request: web::Json<ReviewClueRequest>,
 ) -> Result<HttpResponse, ApiError> {

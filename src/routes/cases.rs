@@ -31,8 +31,8 @@ async fn list_cases(
 }
 
 async fn create_case(
-    state: web::Data<AppState>,
     auth: AuthenticatedUser,
+    state: web::Data<AppState>,
     request: web::Json<CreateCaseRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let case = case_service::create_case(&state.db, &auth, request.into_inner()).await?;
@@ -49,8 +49,8 @@ async fn get_case(
 }
 
 async fn update_case_status(
-    state: web::Data<AppState>,
     auth: AuthenticatedUser,
+    state: web::Data<AppState>,
     case_id: web::Path<String>,
     request: web::Json<UpdateCaseStatusRequest>,
 ) -> Result<HttpResponse, ApiError> {
@@ -60,8 +60,8 @@ async fn update_case_status(
 }
 
 async fn create_clue(
-    state: web::Data<AppState>,
     auth: AuthenticatedUser,
+    state: web::Data<AppState>,
     case_id: web::Path<String>,
     request: web::Json<CreateClueRequest>,
 ) -> Result<HttpResponse, ApiError> {
@@ -70,8 +70,8 @@ async fn create_clue(
 }
 
 async fn add_case_member(
-    state: web::Data<AppState>,
     auth: AuthenticatedUser,
+    state: web::Data<AppState>,
     case_id: web::Path<String>,
     request: web::Json<AddCaseMemberRequest>,
 ) -> Result<HttpResponse, ApiError> {
