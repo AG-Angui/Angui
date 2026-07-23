@@ -20,6 +20,12 @@ info:
     - volunteer 只能查看已确认线索，且 elder_profile.health_notes 会由服务端返回为 null。
     - 没有案件成员关系时，案件资源通常返回 404，以减少资源 ID 枚举。
 
+    阅读约定：
+
+    - 每个 operation 的 security 明确标出是否需要 Bearer 会话；没有 security 的公共接口会显式使用空数组。
+    - x-roles 表示可调用该 operation 的全局账号角色；x-case-roles 表示还必须具备的案件成员角色。案件成员角色不会因 learner 或 admin 等全局角色自动授予。
+    - x-data-classification 标出响应中需要按案件成员关系和角色裁剪的数据。客户端不得把 case-restricted 或 sensitive 字段缓存到公共页面、日志或分析服务。
+
     当前仍是 MVP API，不应处理真实搜救数据。正式部署必须使用 HTTPS。
   contact:
     name: AG-Angui
@@ -33,7 +39,7 @@ tags:
   - name: Authentication
     description: 服务端会话登录、查询和撤销
   - name: Cases
-    description: 案件、老人资料、案件成员和案件内线索
+    description: 案件、老人资料、案件成员和案件内线索；必须先通过案件成员关系授权
   - name: Clues
     description: 线索人工审核
 security:
@@ -46,6 +52,8 @@ paths:
       summary: 获取服务健康状态
       description: 不访问认证会话，可用于进程和反向代理健康检查。
       security: []
+      x-roles: []
+      x-data-classification: public
       responses:
         "200":
           description: 服务正常
@@ -67,6 +75,8 @@ paths:
         登录成功后返回一次原始 Bearer token。数据库只保存 token 的 SHA-256 哈希。
         登录失败会同时按客户端 IP 和客户端 IP + 规范化邮箱执行进程内限流。
       security: []
+      x-roles: []
+      x-data-classification: account-private
       requestBody:
         required: true
         content:
@@ -97,7 +107,10 @@ paths:
       tags: [Authentication]
       operationId: getCurrentUser
       summary: 获取当前认证用户
+      security:
+        - bearerAuth: []
       x-roles: [family, commander, volunteer, learner, admin]
+      x-data-classification: account-private
       responses:
         "200":
           description: 当前活动账号
@@ -116,7 +129,10 @@ paths:
       operationId: logout
       summary: 撤销当前服务端会话
       description: 成功后，当前 Bearer token 立即失效。
+      security:
+        - bearerAuth: []
       x-roles: [family, commander, volunteer, learner, admin]
+      x-data-classification: account-private
       responses:
         "204":
           description: 会话已撤销，无响应正文
@@ -130,8 +146,13 @@ paths:
       tags: [Cases]
       operationId: listCases
       summary: 列出当前用户有成员关系的案件
-      description: 按案件创建时间倒序返回；没有案件成员关系时返回空数组。
+      description: |
+        按案件创建时间倒序返回；没有案件成员关系时返回空数组。learner 和 admin 可以使用该接口，
+        但当前实现不会仅凭全局角色授予案件成员关系，因此通常返回空数组。
+      security:
+        - bearerAuth: []
       x-roles: [family, commander, volunteer, learner, admin]
+      x-data-classification: case-restricted
       responses:
         "200":
           description: 当前用户可访问的案件列表
@@ -152,7 +173,10 @@ paths:
       description: |
         family 或 commander 可以创建案件。服务端生成案件 UUID、AG- 前缀案件编号和 active 初始状态，
         并把创建者加入案件。不会自动把其他 commander 加入案件。
+      security:
+        - bearerAuth: []
       x-roles: [family, commander]
+      x-data-classification: case-restricted
       requestBody:
         required: true
         content:
@@ -192,8 +216,13 @@ paths:
       operationId: getCase
       summary: 获取案件详情、老人资料和当前角色可见线索
       description: |
-        必须是案件成员。线索列表会根据案件角色裁剪；volunteer 的 health_notes 固定返回 null。
+        必须是案件成员。commander 可查看全部线索；family 只能查看已确认线索和本人提交的线索；
+        volunteer 只能查看已确认线索，且 elder_profile.health_notes 固定返回 null。
+      security:
+        - bearerAuth: []
+      x-roles: [family, commander, volunteer]
       x-case-roles: [family, commander, volunteer]
+      x-data-classification: case-restricted; elder_profile.health_notes is sensitive
       responses:
         "200":
           description: 经过服务端角色裁剪的案件详情
@@ -218,7 +247,11 @@ paths:
       description: |
         仅案件 commander 可以操作。允许 active -> resolved、active -> closed、
         resolved -> active、resolved -> closed，以及相同状态的幂等更新。closed 不能转回其他状态。
+      security:
+        - bearerAuth: []
+      x-roles: [commander]
       x-case-roles: [commander]
+      x-data-classification: case-restricted
       requestBody:
         required: true
         content:
@@ -257,7 +290,11 @@ paths:
       description: |
         family、commander 和 volunteer 案件成员均可提交。服务端忽略客户端对状态的控制，
         新线索始终写为 pending_review。closed 案件不能再添加线索。
+      security:
+        - bearerAuth: []
+      x-roles: [family, commander, volunteer]
       x-case-roles: [family, commander, volunteer]
+      x-data-classification: case-restricted
       requestBody:
         required: true
         content:
@@ -297,7 +334,11 @@ paths:
       description: |
         family 只能邀请 commander。commander 可以添加 family、commander 或 volunteer。
         请求中的案件角色必须与目标活动账号的全局角色一致，且目标账号不能已经属于该案件。
+      security:
+        - bearerAuth: []
+      x-roles: [family, commander]
       x-case-roles: [family, commander]
+      x-data-classification: case-restricted
       requestBody:
         required: true
         content:
@@ -337,7 +378,11 @@ paths:
       description: |
         仅线索所属案件的 commander 可以操作。接口接受 needs_verification、confirmed、rejected、
         expired 或 duplicate，不接受 pending_review 作为人工审核目标状态。
+      security:
+        - bearerAuth: []
+      x-roles: [commander]
       x-case-roles: [commander]
+      x-data-classification: case-restricted
       requestBody:
         required: true
         content:
@@ -690,6 +735,7 @@ components:
           type: [string, "null"]
         last_seen_location:
           type: [string, "null"]
+          description: 仅返回给当前案件成员的最后出现地点；客户端不得将其用于公开展示。
         created_at:
           type: string
           format: date-time
@@ -814,6 +860,7 @@ components:
         reviewed_at:
           type: [string, "null"]
           format: date-time
+          description: 未经人工审核时为 null。响应不会返回审核人的身份信息。
         is_own_submission:
           type: boolean
           description: 当前认证用户是否为该线索的提交者。
