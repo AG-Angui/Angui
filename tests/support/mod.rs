@@ -1,0 +1,176 @@
+use actix_web::{body::MessageBody, dev::ServiceResponse, http::StatusCode, test};
+use angui::{
+    app_state::AppState,
+    models::{
+        AddCaseMemberRequest, AuthenticatedUser, CreateCaseRequest, CreateClueRequest,
+        LoginRequest, UpdateCaseStatusRequest,
+    },
+    rate_limit::LoginRateLimiter,
+    services::{auth_service, case_service},
+};
+use migration::{Migrator, MigratorTrait};
+use sea_orm::{Database, DatabaseConnection};
+use serde_json::{Value, json};
+
+pub const PASSWORD: &str = "demo-password-123";
+pub const FAMILY: &str = "family@demo.invalid";
+pub const COMMANDER: &str = "commander@demo.invalid";
+pub const VOLUNTEER: &str = "volunteer@demo.invalid";
+
+pub struct TestContext {
+    database: DatabaseConnection,
+}
+
+impl TestContext {
+    pub async fn new() -> Self {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("test database should connect");
+        Migrator::up(&database, None)
+            .await
+            .expect("test migrations should succeed");
+        auth_service::bootstrap_demo_users(&database, PASSWORD)
+            .await
+            .expect("test demo users should bootstrap");
+        Self { database }
+    }
+
+    pub fn app_state(&self) -> AppState {
+        AppState {
+            db: self.database.clone(),
+            session_ttl_hours: 8,
+            login_limiter: LoginRateLimiter::default(),
+        }
+    }
+
+    pub async fn token(&self, email: &str) -> String {
+        auth_service::login(
+            &self.database,
+            LoginRequest {
+                email: email.to_owned(),
+                password: PASSWORD.to_owned(),
+            },
+            8,
+        )
+        .await
+        .expect("fixture login should succeed")
+        .token
+    }
+
+    pub async fn authenticated(&self, email: &str) -> AuthenticatedUser {
+        let token = self.token(email).await;
+        auth_service::authenticate(&self.database, &token)
+            .await
+            .expect("fixture session should authenticate")
+    }
+
+    pub async fn create_case(&self) -> String {
+        let family = self.authenticated(FAMILY).await;
+        case_service::create_case(&self.database, &family, create_case_request())
+            .await
+            .expect("fixture case should be created")
+            .id
+    }
+
+    pub async fn add_member(&self, case_id: &str, actor_email: &str, email: &str, role: &str) {
+        let actor = self.authenticated(actor_email).await;
+        case_service::add_case_member(
+            &self.database,
+            &actor,
+            case_id,
+            AddCaseMemberRequest {
+                email: email.to_owned(),
+                role: role.to_owned(),
+            },
+        )
+        .await
+        .expect("fixture case member should be added");
+    }
+
+    pub async fn create_clue(&self, case_id: &str, actor_email: &str) -> String {
+        let actor = self.authenticated(actor_email).await;
+        case_service::create_clue(&self.database, &actor, case_id, create_clue_request())
+            .await
+            .expect("fixture clue should be created")
+            .id
+    }
+
+    pub async fn close_case(&self, case_id: &str) {
+        let commander = self.authenticated(COMMANDER).await;
+        case_service::update_case_status(
+            &self.database,
+            &commander,
+            case_id,
+            UpdateCaseStatusRequest {
+                status: "closed".to_owned(),
+            },
+        )
+        .await
+        .expect("fixture case should close");
+    }
+}
+
+pub fn create_case_request() -> CreateCaseRequest {
+    CreateCaseRequest {
+        display_name: "测试老人".to_owned(),
+        age: Some(76),
+        gender: Some("female".to_owned()),
+        physical_description: Some("测试体貌".to_owned()),
+        clothing_description: Some("测试衣着".to_owned()),
+        health_notes: Some("仅用于测试的健康备注".to_owned()),
+        last_seen_at: Some("2026-07-13T09:00:00Z".to_owned()),
+        last_seen_location: Some("测试公园北门".to_owned()),
+    }
+}
+
+pub fn create_case_json() -> Value {
+    json!({
+        "display_name": "测试老人",
+        "age": 76,
+        "gender": "female",
+        "physical_description": "测试体貌",
+        "clothing_description": "测试衣着",
+        "health_notes": "仅用于测试的健康备注",
+        "last_seen_at": "2026-07-13T09:00:00Z",
+        "last_seen_location": "测试公园北门"
+    })
+}
+
+pub fn create_clue_request() -> CreateClueRequest {
+    CreateClueRequest {
+        source: "family".to_owned(),
+        content: "测试线索：曾向测试市场方向步行".to_owned(),
+        occurred_at: Some("2026-07-13T09:10:00Z".to_owned()),
+        location_text: Some("测试公园北门".to_owned()),
+    }
+}
+
+pub fn create_clue_json() -> Value {
+    json!({
+        "source": "family",
+        "content": "测试线索：曾向测试市场方向步行",
+        "occurred_at": "2026-07-13T09:10:00Z",
+        "location_text": "测试公园北门"
+    })
+}
+
+#[macro_export]
+macro_rules! init_api_app {
+    ($context:expr) => {{
+        actix_web::test::init_service(
+            actix_web::App::new()
+                .app_data(actix_web::web::Data::new($context.app_state()))
+                .configure(angui::routes::configure),
+        )
+        .await
+    }};
+}
+
+pub async fn assert_error<B>(response: ServiceResponse<B>, status: StatusCode, code: &str)
+where
+    B: MessageBody + 'static,
+{
+    assert_eq!(response.status(), status);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["code"], code);
+}
