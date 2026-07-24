@@ -10,6 +10,8 @@ CREATE TABLE user_global_capabilities (
 INSERT INTO user_global_capabilities (user_id, capability, created_at)
 SELECT id, role, updated_at FROM users WHERE role IN ('commander', 'volunteer', 'admin');
 -- statement-break
+DROP INDEX idx_users_role_status ON users;
+-- statement-break
 ALTER TABLE users DROP CHECK users_role_check;
 -- statement-break
 UPDATE users SET role = CASE WHEN role = 'learner' THEN 'learner' ELSE 'member' END;
