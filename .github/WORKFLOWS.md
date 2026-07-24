@@ -2,12 +2,17 @@
 
 ## CI
 
-`ci.yml` runs on every branch push and pull request. Rust formatting, Clippy,
-tests, and the release build run in parallel with the frontend lint/build and
-live PostgreSQL/MySQL migration checks. The database job applies every
-migration, reports status, performs a full refresh, and checks status again for
-both server databases. Cargo and npm caches are enabled, and successful
-binaries/bundles are retained for seven days.
+`ci.yml` runs on every branch push and pull request. Its concurrency identity
+is the head commit SHA rather than the branch or PR number. When `push` and
+`pull_request` refer to the same SHA, the first run performs the full CI while
+the second waits, detects the successful run for that SHA, and skips all
+expensive jobs. New branches therefore still receive CI before a PR exists,
+while a PR update does not compile, test, migrate, or upload artifacts twice.
+Rust formatting, Clippy, tests, and the release build run in parallel with the
+frontend lint/build and live PostgreSQL/MySQL migration checks. The database job
+applies every migration, reports status, performs a full refresh, and checks
+status again for both server databases. Cargo and npm caches are enabled, and
+successful binaries/bundles are retained for seven days.
 
 ## Pull request quality
 
@@ -133,7 +138,10 @@ accelerators are not sufficient for a runner.
 
 ## Preview domains and releases
 
-Branch and internal pull request previews reuse the successful CI artifacts.
+Branch and internal pull request previews reuse successful CI artifacts. A
+branch without an associated open PR receives its branch preview; once a push
+is associated with an internal PR, the same successful push CI supplies the PR
+preview artifacts and the branch preview is skipped.
 They mount the `angui`, `angui-admin`, `migration`, and frontend `dist` files
 into one fixed local runtime image; they never build or push a new application
 image for each commit. The local runtime image is automatically built once as
@@ -148,7 +156,7 @@ preserving the original `Host` header:
 
 | Kind | URL | Retention |
 | --- | --- | --- |
-| Branch | `<branch-slug>.angui.cg8.site` | Latest commit while the branch exists |
+| Branch without an open PR | `<branch-slug>.angui.cg8.site` | Latest commit while the branch exists |
 | Internal PR | `pr-<number>-<short-sha>.angui.cg8.site` | Latest commit while the PR is open |
 | Tag | `tag-<tag-slug>.angui.cg8.site` | Retained until manually removed |
 

@@ -7,18 +7,61 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 env:
   ARTIFACT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A push and a pull_request event can name the same commit. Serializing by
+  # the head SHA lets the second event observe the first successful full CI and
+  # skip its expensive jobs instead of compiling and testing the same code.
+  group: ci-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
 
 jobs:
+  deduplicate:
+    name: Deduplicate commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check whether this SHA already passed CI
+        id: check
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        with:
+          script: |
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'ci.yml',
+                head_sha: process.env.HEAD_SHA,
+                status: 'completed',
+                per_page: 100,
+              },
+            );
+            const previousSuccess = runs.find(
+              (run) => run.id !== context.runId && run.conclusion === 'success',
+            );
+            const shouldRun = previousSuccess === undefined;
+            core.setOutput('should_run', String(shouldRun));
+            if (!shouldRun) {
+              core.notice(
+                `Skipping duplicate CI for ${process.env.HEAD_SHA}; ` +
+                `run ${previousSuccess.html_url} already succeeded.`,
+              );
+            }
+
   backend:
     name: Rust checks
+    needs: deduplicate
+    if: needs.deduplicate.outputs.should_run == 'true'
     # External forks never execute on the server that holds deployment access.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
     timeout-minutes: 30
@@ -60,14 +103,12 @@ jobs:
 
   database:
     name: PostgreSQL and MySQL migrations
+    needs: deduplicate
     # External forks never execute on the server that holds deployment access.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
-    # Run the integration suite at review, merge, and explicit verification
-    # boundaries, rather than for every intermediate feature-branch push.
-    if: >-
-      github.event_name == 'pull_request' ||
-      github.ref == 'refs/heads/main' ||
-      github.event_name == 'workflow_dispatch'
+    # The first CI for a SHA must be equivalent to a PR CI. Otherwise a branch
+    # could pass before its PR exists and later skip this migration coverage.
+    if: needs.deduplicate.outputs.should_run == 'true'
     timeout-minutes: 30
     env:
       RUSTUP_DIST_SERVER: https://rsproxy.cn
@@ -128,6 +169,8 @@ jobs:
 
   frontend:
     name: Frontend checks
+    needs: deduplicate
+    if: needs.deduplicate.outputs.should_run == 'true'
     # External forks never execute on the server that holds deployment access.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
     timeout-minutes: 20
