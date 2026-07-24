@@ -1,7 +1,7 @@
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, RuntimeErr, Set, SqlxError, TransactionTrait,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -126,9 +126,7 @@ pub async fn submit_intake_answer(
             .await?
             .is_some()
     {
-        return Err(ApiError::Conflict(
-            "an answer for this intake field has already been submitted".to_owned(),
-        ));
+        return Err(duplicate_answer_conflict());
     }
     set_answer(&mut answers, &field, raw_answer.clone())?;
 
@@ -148,7 +146,14 @@ pub async fn submit_intake_answer(
         updated_at: Set(timestamp.clone()),
     }
     .insert(&transaction)
-    .await?;
+    .await
+    .map_err(|error| {
+        if is_unique_constraint_error(&error) {
+            duplicate_answer_conflict()
+        } else {
+            ApiError::Database(error)
+        }
+    })?;
 
     let missing_fields = missing_fields(&answers, &questions);
     let next_question = next_question(&questions, &missing_fields);
@@ -185,6 +190,18 @@ pub async fn submit_intake_answer(
         missing_fields,
         next_question,
     ))
+}
+
+fn duplicate_answer_conflict() -> ApiError {
+    ApiError::Conflict("an answer for this intake field has already been submitted".to_owned())
+}
+
+fn is_unique_constraint_error(error: &DbErr) -> bool {
+    matches!(
+        error,
+        DbErr::Exec(RuntimeErr::SqlxError(SqlxError::Database(database_error)))
+            if database_error.is_unique_violation()
+    )
 }
 
 async fn active_questions<C: ConnectionTrait>(

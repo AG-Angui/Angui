@@ -36,6 +36,38 @@ fn answer_request(field: &str, answer: &str) -> Value {
 }
 
 #[actix_web::test]
+async fn post_intake_session_answers_marks_the_session_ready_after_required_fields_are_complete() {
+    let context = TestContext::new().await;
+    let session_id = create_family_session(&context).await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/intake-sessions/{session_id}/answers"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(answer_request(
+                "last_seen",
+                "Fictional community gate; the time still needs verification.",
+            ))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["status"], "ready_for_confirmation");
+
+    let session = intake_sessions::Entity::find_by_id(&session_id)
+        .one(&context.database)
+        .await
+        .unwrap()
+        .expect("session should exist");
+    assert_eq!(session.status, "ready_for_confirmation");
+}
+
+#[actix_web::test]
 async fn post_intake_session_answers_stores_raw_and_draft_candidate_then_returns_next_question() {
     let context = TestContext::new().await;
     let session_id = create_family_session(&context).await;
