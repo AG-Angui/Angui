@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entities::{cases, clue_attributions, clues, elder_profiles, intake_sessions, users},
-    roles::{CaseRole, GlobalRole, InvalidRole},
+    entities::{cases, clue_attributions, clues, elder_profiles, intake_sessions},
+    roles::{AccountType, CaseRole, GlobalCapability},
 };
 
 #[derive(Clone, Debug)]
@@ -10,7 +10,8 @@ pub struct AuthenticatedUser {
     pub id: String,
     pub email: String,
     pub display_name: String,
-    pub global_role: GlobalRole,
+    pub account_type: AccountType,
+    pub global_capabilities: Vec<GlobalCapability>,
     pub session_id: String,
 }
 
@@ -26,7 +27,8 @@ pub struct UserResponse {
     pub id: String,
     pub email: String,
     pub display_name: String,
-    pub global_role: GlobalRole,
+    pub account_type: AccountType,
+    pub global_capabilities: Vec<GlobalCapability>,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,7 +149,8 @@ pub struct CaseMemberResponse {
     pub user_id: String,
     pub email: String,
     pub display_name: String,
-    pub global_role: GlobalRole,
+    pub account_type: AccountType,
+    pub global_capabilities: Vec<GlobalCapability>,
     pub case_role: CaseRole,
 }
 
@@ -243,19 +246,6 @@ impl ClueResponse {
                 .and_then(|attribution| attribution.submitted_by_user_id)
                 .is_some_and(|user_id| user_id == viewer_user_id),
         }
-    }
-}
-
-impl TryFrom<users::Model> for UserResponse {
-    type Error = InvalidRole;
-
-    fn try_from(model: users::Model) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: model.id,
-            email: model.email,
-            display_name: model.display_name,
-            global_role: GlobalRole::try_from(model.role.as_str())?,
-        })
     }
 }
 

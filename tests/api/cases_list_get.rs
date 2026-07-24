@@ -47,7 +47,7 @@ async fn get_cases_only_returns_cases_where_the_user_is_a_member() {
 }
 
 #[actix_web::test]
-async fn learner_and_admin_do_not_gain_case_access_from_their_global_roles() {
+async fn learner_and_admin_capability_do_not_gain_case_access_without_membership() {
     let context = TestContext::new().await;
     context.create_case().await;
     let learner_token = context.token(LEARNER).await;

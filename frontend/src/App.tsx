@@ -9,7 +9,7 @@ import { LoginPage } from './pages/LoginPage'
 
 function CaseRoleRoute({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  return user && ['family', 'commander', 'volunteer'].includes(user.global_role)
+  return user?.account_type === 'member'
     ? children
     : <Navigate to="/" replace />
 }

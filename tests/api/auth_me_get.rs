@@ -22,7 +22,8 @@ async fn get_auth_me_returns_the_authenticated_identity_and_rejects_bad_tokens()
     assert_eq!(authorized.status(), StatusCode::OK);
     let body: Value = test::read_body_json(authorized).await;
     assert_eq!(body["email"], FAMILY);
-    assert_eq!(body["global_role"], "family");
+    assert_eq!(body["account_type"], "member");
+    assert_eq!(body["global_capabilities"], serde_json::json!([]));
 
     let missing = test::call_service(
         &app,

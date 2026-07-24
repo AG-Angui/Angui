@@ -16,7 +16,7 @@
 | `POST` | `/api/auth/login` | `200` | 使用邮箱和密码创建短期会话 |
 | `GET` | `/api/auth/me` | `200` | 获取当前认证用户 |
 | `POST` | `/api/auth/logout` | `204` | 撤销当前服务端会话 |
-| `POST` | `/api/intake-sessions` | `201` | 创建家属的未确认走失信息问询会话 |
+| `POST` | `/api/intake-sessions` | `201` | 创建成员的未确认走失信息问询会话 |
 | `GET` | `/api/cases` | `200` | 按创建时间倒序列出案件 |
 | `POST` | `/api/cases` | `201` | 创建案件和老人画像 |
 | `GET` | `/api/cases/{case_id}` | `200` | 查询案件、老人画像和线索 |
@@ -54,7 +54,8 @@ Authorization: Bearer angui_<session-token>
     "id": "uuid",
     "email": "family@demo.invalid",
     "display_name": "模拟家属",
-    "role": "family"
+    "account_type": "member",
+    "global_capabilities": []
   }
 }
 ```
@@ -63,15 +64,15 @@ Authorization: Bearer angui_<session-token>
 
 ## 4. 授权与可见性
 
-- `family`：可创建案件；只能访问本人作为成员的案件；可看已确认线索和本人提交的待审核线索；可按邮箱显式邀请一名具备案件成员资格的账号担任指挥；不能添加其他角色、审核线索或改变案件状态。
-- `commander`：必须是案件成员；可查看全部线索、审核线索、改变案件状态并添加案件成员。
-- `volunteer`：必须由指挥加入案件；只能查看已确认线索，老人资料中的健康注意字段由服务端删除。
-- `learner`：新人/学习身份；当前可登录并恢复会话，但不是案件成员角色，案件列表为空且不能创建、加入或操作案件资源。
-- `admin`：管理角色不自动获得业务案件访问权。
+- `member`：正常业务账号类型。可创建案件；创建者在新案件中获得 `family` 角色。只有被显式加入案件后才能读取或操作该案件。
+- `learner`：长期学习账号类型；当前可登录并恢复会话，但不能创建或加入案件，学习与考核能力将在后续平台提供。
+- `commander`：可叠加的全局能力。持有者可被显式授予某案件的 `commander` 角色；该案件角色才允许查看全部线索、审核线索、改变案件状态和添加成员。
+- `volunteer`：可叠加的全局能力。持有者可被指挥显式授予某案件的 `volunteer` 角色；该案件角色只能查看已确认线索，老人资料中的健康注意字段由服务端删除。
+- `admin`：可叠加的全局能力，不自动获得业务案件访问权，也不绕过案件成员关系。
 
 无案件成员关系时，详情和操作接口返回 `404`，不会通过 `403` 暴露案件 ID 是否真实存在。角色已经是案件成员但动作不允许时返回 `403`。
 
-账号响应中的 `global_role` 表示平台身份；案件列表/详情中的 `access_role` 与成员响应中的 `case_role` 表示仅对该案件有效的授权。`family`、`commander`、`volunteer` 三种活跃业务账号可由有权限的案件成员获授案件角色；`learner` 与 `admin` 不能被加入案件，管理员身份也不会绕过成员关系。
+账号响应中的 `account_type` 表示长期账号类型，`global_capabilities` 表示可叠加的平台资格；两者均不授予案件访问权。案件列表/详情中的 `access_role` 与成员响应中的 `case_role` 是仅对该案件有效的授权。`family` 来自建案或受控的显式成员操作；授予 `commander` 或 `volunteer` 案件角色时，目标 `member` 必须具有同名全局能力。具备多项能力的账号仍需逐案、逐角色地显式加入。
 
 添加案件成员时，提交案件内角色：
 
@@ -155,7 +156,7 @@ AI 或其他自动化能力未来只能生成草稿或待审核输入，不得�
 
 ## Intake session creation
 
-`POST /api/intake-sessions` is available only to authenticated `family` accounts. Its optional `initial_answers` object has eight structured draft fields: `basic_information`, `health_status`, `behavior_habits`, `last_seen`, `frequent_locations`, `belongings`, `transport_ability`, and `follow_up_clues`. Every supplied value is trimmed and must meet the active question's database-managed `max_answer_chars`; `ANGUI_INTAKE_ANSWER_HARD_MAX` is a server-side absolute cap (default `2000`, range `1`–`10000`) that cannot be exceeded by database configuration. Unknown properties, including `confirmed`, are rejected.
+`POST /api/intake-sessions` is available only to authenticated `member` accounts. Its optional `initial_answers` object has eight structured draft fields: `basic_information`, `health_status`, `behavior_habits`, `last_seen`, `frequent_locations`, `belongings`, `transport_ability`, and `follow_up_clues`. Every supplied value is trimmed and must meet the active question's database-managed `max_answer_chars`; `ANGUI_INTAKE_ANSWER_HARD_MAX` is a server-side absolute cap (default `2000`, range `1`–`10000`) that cannot be exceeded by database configuration. Unknown properties, including `confirmed`, are rejected.
 
 The server creates a `collecting` session and records the selected `question_set_version`. It always returns `guidance_mode: "rule_based"`, `missing_fields`, and the next ordered question from the active database definition. This is the required AI-unavailable fallback; no external model is called. The values remain unconfirmed drafts, never case facts. Raw answers are not included in audit metadata or ordinary logs. The session is owned by its creator; when a later confirmation associates it with a case, only an authorized commander of that case may additionally read it. The database's unique case association protects the later confirmation flow from linking a session to multiple cases.
 

@@ -4,9 +4,7 @@ use actix_web::{
 };
 use serde_json::Value;
 
-use crate::support::{
-    ADMIN, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error, create_case_json,
-};
+use crate::support::{ADMIN, FAMILY, LEARNER, TestContext, assert_error, create_case_json};
 
 #[actix_web::test]
 async fn post_cases_creates_an_active_case_for_a_family_member() {
@@ -30,16 +28,16 @@ async fn post_cases_creates_an_active_case_for_a_family_member() {
 }
 
 #[actix_web::test]
-async fn post_cases_enforces_auth_role_and_request_validation() {
+async fn post_cases_allows_operational_members_and_validates_requests() {
     let context = TestContext::new().await;
-    let volunteer_token = context.token(VOLUNTEER).await;
+    let learner_token = context.token(LEARNER).await;
     let family_token = context.token(FAMILY).await;
     let app = crate::init_api_app!(&context);
     let forbidden = test::call_service(
         &app,
         test::TestRequest::post()
             .uri("/api/cases")
-            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
             .set_json(create_case_json())
             .to_request(),
     )
@@ -58,22 +56,33 @@ async fn post_cases_enforces_auth_role_and_request_validation() {
 }
 
 #[actix_web::test]
-async fn learner_and_admin_can_log_in_but_cannot_create_cases() {
+async fn learner_cannot_create_cases_but_admin_capability_does_not_block_member_creation() {
     let context = TestContext::new().await;
     let learner_token = context.token(LEARNER).await;
     let admin_token = context.token(ADMIN).await;
     let app = crate::init_api_app!(&context);
 
-    for token in [learner_token, admin_token] {
-        let response = test::call_service(
-            &app,
-            test::TestRequest::post()
-                .uri("/api/cases")
-                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
-                .set_json(create_case_json())
-                .to_request(),
-        )
-        .await;
-        assert_error(response, StatusCode::FORBIDDEN, "forbidden").await;
-    }
+    let learner = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/cases")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .set_json(create_case_json())
+            .to_request(),
+    )
+    .await;
+    assert_error(learner, StatusCode::FORBIDDEN, "forbidden").await;
+
+    let admin = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/cases")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(create_case_json())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(admin.status(), StatusCode::CREATED);
+    let body: Value = test::read_body_json(admin).await;
+    assert_eq!(body["access_role"], "family");
 }

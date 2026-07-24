@@ -5,17 +5,17 @@ use argon2::{
 use chrono::{Duration, SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
-    Set, TransactionTrait,
+    QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    entities::{audit_events, auth_sessions, users},
+    entities::{audit_events, auth_sessions, user_global_capabilities, users},
     error::ApiError,
     models::{AuthenticatedUser, LoginRequest, LoginResponse, UserResponse},
-    roles::GlobalRole,
+    roles::{AccountType, GlobalCapability},
 };
 
 pub async fn login(
@@ -49,7 +49,8 @@ pub async fn login(
             "invalid email or password".to_owned(),
         ));
     };
-    let global_role = global_role_from_database(&user.role)?;
+    let account_type = account_type_from_database(&user.account_type)?;
+    let global_capabilities = global_capabilities_for_user(db, &user.id).await?;
 
     let transaction = db.begin().await?;
     let raw_token = format!(
@@ -91,7 +92,8 @@ pub async fn login(
             id: user.id,
             email: user.email,
             display_name: user.display_name,
-            global_role,
+            account_type,
+            global_capabilities,
         },
     })
 }
@@ -123,12 +125,15 @@ pub async fn authenticate(
     let mut active = session.into_active_model();
     active.last_used_at = Set(now());
     active.update(db).await?;
+    let account_type = account_type_from_database(&user.account_type)?;
+    let global_capabilities = global_capabilities_for_user(db, &user.id).await?;
 
     Ok(AuthenticatedUser {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
-        global_role: global_role_from_database(&user.role)?,
+        account_type,
+        global_capabilities,
         session_id,
     })
 }
@@ -165,19 +170,50 @@ pub async fn bootstrap_demo_users(
     }
 
     let definitions = [
-        ("family@demo.invalid", "模拟家属", GlobalRole::Family),
-        ("commander@demo.invalid", "模拟指挥", GlobalRole::Commander),
+        (
+            "family@demo.invalid",
+            "模拟家属",
+            AccountType::Member,
+            &[][..],
+        ),
+        (
+            "commander@demo.invalid",
+            "模拟指挥",
+            AccountType::Member,
+            &[GlobalCapability::Commander][..],
+        ),
         (
             "volunteer@demo.invalid",
             "模拟志愿者",
-            GlobalRole::Volunteer,
+            AccountType::Member,
+            &[GlobalCapability::Volunteer][..],
         ),
-        ("learner@demo.invalid", "模拟新人", GlobalRole::Learner),
-        ("admin@demo.invalid", "模拟管理员", GlobalRole::Admin),
+        (
+            "learner@demo.invalid",
+            "模拟新人",
+            AccountType::Learner,
+            &[][..],
+        ),
+        (
+            "admin@demo.invalid",
+            "模拟管理员",
+            AccountType::Member,
+            &[GlobalCapability::Admin][..],
+        ),
     ];
     let mut created = Vec::with_capacity(definitions.len());
-    for (email, display_name, role) in definitions {
-        created.push(upsert_user(db, email, display_name, role, password).await?);
+    for (email, display_name, account_type, global_capabilities) in definitions {
+        created.push(
+            upsert_user(
+                db,
+                email,
+                display_name,
+                account_type,
+                global_capabilities,
+                password,
+            )
+            .await?,
+        );
     }
     Ok(created)
 }
@@ -186,7 +222,8 @@ async fn upsert_user(
     db: &DatabaseConnection,
     email: &str,
     display_name: &str,
-    global_role: GlobalRole,
+    account_type: AccountType,
+    global_capabilities: &[GlobalCapability],
     password: &str,
 ) -> Result<UserResponse, ApiError> {
     let email = normalize_email(email)?;
@@ -201,25 +238,39 @@ async fn upsert_user(
     {
         let mut active = existing.into_active_model();
         active.display_name = Set(display_name.to_owned());
-        active.role = Set(global_role.to_string());
+        active.account_type = Set(account_type.to_string());
         active.password_hash = Set(password_hash);
         active.status = Set("active".to_owned());
-        active.updated_at = Set(timestamp);
+        active.updated_at = Set(timestamp.clone());
         active.update(&transaction).await?
     } else {
         users::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             email: Set(email),
             display_name: Set(display_name.to_owned()),
-            role: Set(global_role.to_string()),
+            account_type: Set(account_type.to_string()),
             password_hash: Set(password_hash),
             status: Set("active".to_owned()),
             created_at: Set(timestamp.clone()),
-            updated_at: Set(timestamp),
+            updated_at: Set(timestamp.clone()),
         }
         .insert(&transaction)
         .await?
     };
+
+    user_global_capabilities::Entity::delete_many()
+        .filter(user_global_capabilities::Column::UserId.eq(&user.id))
+        .exec(&transaction)
+        .await?;
+    for capability in global_capabilities {
+        user_global_capabilities::ActiveModel {
+            user_id: Set(user.id.clone()),
+            capability: Set(capability.to_string()),
+            created_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+    }
 
     let sessions = auth_sessions::Entity::find()
         .filter(auth_sessions::Column::UserId.eq(&user.id))
@@ -237,16 +288,37 @@ async fn upsert_user(
         id: user.id,
         email: user.email,
         display_name: user.display_name,
-        global_role,
+        account_type,
+        global_capabilities: global_capabilities.to_vec(),
     })
 }
 
-fn global_role_from_database(value: &str) -> Result<GlobalRole, ApiError> {
-    GlobalRole::try_from(value).map_err(|error| {
+fn account_type_from_database(value: &str) -> Result<AccountType, ApiError> {
+    AccountType::try_from(value).map_err(|error| {
         ApiError::Database(sea_orm::DbErr::Custom(format!(
-            "users.role violates the global role constraint: {error}"
+            "users.account_type violates the account type constraint: {error}"
         )))
     })
+}
+
+async fn global_capabilities_for_user<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    user_id: &str,
+) -> Result<Vec<GlobalCapability>, ApiError> {
+    user_global_capabilities::Entity::find()
+        .filter(user_global_capabilities::Column::UserId.eq(user_id))
+        .order_by_asc(user_global_capabilities::Column::Capability)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|capability| {
+            GlobalCapability::try_from(capability.capability.as_str()).map_err(|error| {
+                ApiError::Database(sea_orm::DbErr::Custom(format!(
+                    "user_global_capabilities.capability violates the capability constraint: {error}"
+                )))
+            })
+        })
+        .collect()
 }
 
 async fn hash_password(password: String) -> Result<String, ApiError> {

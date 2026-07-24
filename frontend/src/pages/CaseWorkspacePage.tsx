@@ -133,7 +133,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     [detail],
   )
   const copy = workspaceCopy[mode]
-  const canCreateCase = user?.global_role === 'family' || user?.global_role === 'commander'
+  const canCreateCase = user?.account_type === 'member'
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">

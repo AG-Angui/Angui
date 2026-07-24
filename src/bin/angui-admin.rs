@@ -52,7 +52,7 @@ async fn main() -> io::Result<()> {
     for user in users {
         println!(
             "{}\t{}\t{}",
-            user.global_role, user.email, user.display_name
+            user.account_type, user.email, user.display_name
         );
     }
     Ok(())

@@ -11,7 +11,7 @@ use angui::{
     services::intake_session_service,
 };
 
-use crate::support::{ADMIN, COMMANDER, FAMILY, TestContext, assert_error};
+use crate::support::{FAMILY, LEARNER, TestContext, assert_error};
 
 #[actix_web::test]
 async fn post_intake_sessions_creates_a_family_owned_rule_guided_draft() {
@@ -148,11 +148,11 @@ async fn intake_answer_hard_max_caps_the_database_question_limit() {
 }
 
 #[actix_web::test]
-async fn post_intake_sessions_rejects_non_family_accounts() {
+async fn post_intake_sessions_rejects_learner_accounts() {
     let context = TestContext::new().await;
     let app = crate::init_api_app!(&context);
 
-    for email in [COMMANDER, ADMIN] {
+    for email in [LEARNER] {
         let token = context.token(email).await;
         let response = test::call_service(
             &app,

@@ -22,11 +22,11 @@ vi.mock('./api/cases', () => ({
 }))
 vi.mock('./components/ServiceStatus', () => ({ ServiceStatus: () => <span>服务状态</span> }))
 
-function setAuth(globalRole: NonNullable<AuthContextValue['user']>['global_role'] | null) {
+function setAuth(accountType: NonNullable<AuthContextValue['user']>['account_type'] | null) {
   mocked.auth = {
-    token: globalRole ? 'test-session' : null,
-    user: globalRole
-      ? { id: `${globalRole}-1`, email: `${globalRole}@demo.invalid`, display_name: '模拟用户', global_role: globalRole }
+    token: accountType ? 'test-session' : null,
+    user: accountType
+      ? { id: `${accountType}-1`, email: `${accountType}@demo.invalid`, display_name: '模拟用户', account_type: accountType, global_capabilities: [] }
       : null,
     isLoading: false,
     login: vi.fn(),
@@ -50,7 +50,7 @@ describe('application role routing', () => {
     expect(screen.getByText('账号登录')).toBeInTheDocument()
   })
 
-  it.each(['family', 'commander', 'volunteer'] as const)(
+  it.each(['member'] as const)(
     'shows all case workspaces to the operational %s account',
     async (role) => {
     setAuth(role)
@@ -63,18 +63,18 @@ describe('application role routing', () => {
   )
 
   it.each([
-    ['family', '/command', '指挥端'],
-    ['commander', '/volunteer', '志愿者端'],
-    ['volunteer', '/family', '家属端'],
+    ['member', '/command', '指挥端'],
+    ['member', '/volunteer', '志愿者端'],
+    ['member', '/family', '家属端'],
   ] as const)('allows a %s account to open the %s route when its case membership grants access', async (role, path, workspace) => {
     setAuth(role)
     renderApp(path)
     expect(await screen.findByRole('link', { name: workspace })).toBeInTheDocument()
   })
 
-  it.each(['learner', 'admin'] as const)('does not imply case access for %s accounts', async (role) => {
+  it.each(['learner'] as const)('does not imply case access for %s accounts', async (role) => {
     setAuth(role)
     renderApp()
-    expect(await screen.findByText(role === 'learner' ? '新人账号暂未获得案件权限' : '管理员账号不自动拥有案件权限')).toBeInTheDocument()
+    expect(await screen.findByText('新人账号暂未获得案件权限')).toBeInTheDocument()
   })
 })

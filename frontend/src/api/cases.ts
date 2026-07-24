@@ -1,5 +1,5 @@
 import { apiRequest } from './client'
-import type { GlobalRole } from './auth'
+import type { AccountType, GlobalCapability } from './auth'
 
 export type CaseRole = 'family' | 'commander' | 'volunteer'
 export type CaseStatus = 'active' | 'resolved' | 'closed'
@@ -75,7 +75,8 @@ export interface CaseMember {
   user_id: string
   email: string
   display_name: string
-  global_role: GlobalRole
+  account_type: AccountType
+  global_capabilities: GlobalCapability[]
   case_role: CaseRole
 }
 

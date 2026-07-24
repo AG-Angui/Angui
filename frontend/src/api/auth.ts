@@ -1,12 +1,14 @@
 import { apiRequest } from './client'
 
-export type GlobalRole = 'family' | 'commander' | 'volunteer' | 'learner' | 'admin'
+export type AccountType = 'member' | 'learner'
+export type GlobalCapability = 'commander' | 'volunteer' | 'admin'
 
 export interface AuthUser {
   id: string
   email: string
   display_name: string
-  global_role: GlobalRole
+  account_type: AccountType
+  global_capabilities: GlobalCapability[]
 }
 
 export interface LoginResponse {

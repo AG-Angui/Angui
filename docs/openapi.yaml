@@ -12,9 +12,9 @@ info:
 
     重要授权规则：
 
-    - family 和 commander 可以创建案件；创建者会成为该案件的同角色成员。
-    - family 只能显式邀请全局角色为 commander 的活动账号。
-    - commander 可以添加 family、commander 或 volunteer，但请求角色必须与目标账号全局角色一致。
+    - `member` 可以创建案件；创建者会成为该案件的 `family` 成员。
+    - `commander` 与 `volunteer` 是可叠加的全局能力，不会自动产生案件成员关系。
+    - family 只能显式邀请持有 commander 能力的活动成员；commander 可以添加 family、commander 或 volunteer，但同名案件角色要求目标成员持有相应全局能力。
     - commander 可以查看和审核案件内全部线索，并改变案件状态。
     - family 可以查看已确认线索及本人提交的线索。
     - volunteer 只能查看已确认线索，且 elder_profile.health_notes 会由服务端返回为 null。
@@ -23,7 +23,7 @@ info:
     阅读约定：
 
     - 每个 operation 的 security 明确标出是否需要 Bearer 会话；没有 security 的公共接口会显式使用空数组。
-    - x-roles 表示可调用该 operation 的全局账号角色；x-case-roles 表示还必须具备的案件成员角色。案件成员角色不会因 learner 或 admin 等全局角色自动授予。
+    - x-account-types 表示可调用该 operation 的长期账号类型；x-case-roles 表示还必须具备的案件成员角色。全局能力仅用于成员分配资格，不能自动授予案件访问权。
     - x-data-classification 标出响应中需要按案件成员关系和角色裁剪的数据。客户端不得把 case-restricted 或 sensitive 字段缓存到公共页面、日志或分析服务。
 
     当前仍是 MVP API，不应处理真实搜救数据。正式部署必须使用 HTTPS。
@@ -54,7 +54,7 @@ paths:
       summary: 获取服务健康状态
       description: 不访问认证会话，可用于进程和反向代理健康检查。
       security: []
-      x-roles: []
+      x-account-types: []
       x-data-classification: public
       responses:
         "200":
@@ -77,7 +77,7 @@ paths:
         登录成功后返回一次原始 Bearer token。数据库只保存 token 的 SHA-256 哈希。
         登录失败会同时按客户端 IP 和客户端 IP + 规范化邮箱执行进程内限流。
       security: []
-      x-roles: []
+      x-account-types: []
       x-data-classification: account-private
       requestBody:
         required: true
@@ -111,7 +111,7 @@ paths:
       summary: 获取当前认证用户
       security:
         - bearerAuth: []
-      x-roles: [family, commander, volunteer, learner, admin]
+      x-account-types: [member, learner]
       x-data-classification: account-private
       responses:
         "200":
@@ -133,7 +133,7 @@ paths:
       description: 成功后，当前 Bearer token 立即失效。
       security:
         - bearerAuth: []
-      x-roles: [family, commander, volunteer, learner, admin]
+      x-account-types: [member, learner]
       x-data-classification: account-private
       responses:
         "204":
@@ -147,13 +147,13 @@ paths:
     post:
       tags: [Intake sessions]
       operationId: createIntakeSession
-      summary: Create a family intake session
+      summary: Create a member intake session
       description: |
-        Only family accounts can create an unconfirmed intake draft. Unknown fields, including
+        Only member accounts can create an unconfirmed intake draft. Unknown fields, including
         confirmed, are rejected. This endpoint always returns rule-based guidance and writes no
         raw answer content to audit metadata. Per-question business limits and question order come
         from the active database configuration; the server also enforces an independent hard cap.
-      x-roles: [family]
+      x-account-types: [member]
       requestBody:
         required: true
         content:
@@ -186,11 +186,10 @@ paths:
       operationId: listCases
       summary: 列出当前用户有成员关系的案件
       description: |
-        按案件创建时间倒序返回；没有案件成员关系时返回空数组。learner 和 admin 可以使用该接口，
-        但当前实现不会仅凭全局角色授予案件成员关系，因此通常返回空数组。
+        按案件创建时间倒序返回；没有案件成员关系时返回空数组。全局能力（包括 admin）不会单独授予案件成员关系。
       security:
         - bearerAuth: []
-      x-roles: [family, commander, volunteer, learner, admin]
+      x-account-types: [member, learner]
       x-data-classification: case-restricted
       responses:
         "200":
@@ -210,11 +209,11 @@ paths:
       operationId: createCase
       summary: 创建案件和老人资料
       description: |
-        family 或 commander 可以创建案件。服务端生成案件 UUID、AG- 前缀案件编号和 active 初始状态，
-        并把创建者加入案件。不会自动把其他 commander 加入案件。
+        member 可以创建案件。服务端生成案件 UUID、AG- 前缀案件编号和 active 初始状态，
+        并把创建者作为 family 加入案件。不会自动把任何具备 commander 能力的账号加入案件。
       security:
         - bearerAuth: []
-      x-roles: [family, commander]
+      x-account-types: [member]
       x-data-classification: case-restricted
       requestBody:
         required: true
@@ -259,7 +258,7 @@ paths:
         volunteer 只能查看已确认线索，且 elder_profile.health_notes 固定返回 null。
       security:
         - bearerAuth: []
-      x-roles: [family, commander, volunteer]
+      x-account-types: [member]
       x-case-roles: [family, commander, volunteer]
       x-data-classification: case-restricted
       responses:
@@ -288,7 +287,7 @@ paths:
         resolved -> active、resolved -> closed，以及相同状态的幂等更新。closed 不能转回其他状态。
       security:
         - bearerAuth: []
-      x-roles: [commander]
+      x-account-types: [member]
       x-case-roles: [commander]
       x-data-classification: case-restricted
       requestBody:
@@ -331,7 +330,7 @@ paths:
         新线索始终写为 pending_review。closed 案件不能再添加线索。
       security:
         - bearerAuth: []
-      x-roles: [family, commander, volunteer]
+      x-account-types: [member]
       x-case-roles: [family, commander, volunteer]
       x-data-classification: case-restricted
       requestBody:
@@ -372,11 +371,11 @@ paths:
       summary: 按邮箱添加案件成员
       description: |
         family 只能邀请 commander。commander 可以添加 family、commander 或 volunteer。
-        `case_role` 是案件内角色；目标账号的 `global_role` 仅决定其是否具备案件成员资格。
-        `learner` 与 `admin` 不可被加入案件，且目标账号不能已经属于该案件。
+        `case_role` 是案件内角色；目标账号必须是 member。授予 commander 或 volunteer 时，目标还必须持有同名 `global_capabilities`；family 不需要全局能力。
+        learner 不可被加入案件；admin 能力不会产生访问权，但 member 账号可被显式加入案件，且目标账号不能已经属于该案件。
       security:
         - bearerAuth: []
-      x-roles: [family, commander]
+      x-account-types: [member]
       x-case-roles: [family, commander]
       x-data-classification: case-restricted
       requestBody:
@@ -420,7 +419,7 @@ paths:
         expired 或 duplicate，不接受 pending_review 作为人工审核目标状态。
       security:
         - bearerAuth: []
-      x-roles: [commander]
+      x-account-types: [member]
       x-case-roles: [commander]
       x-data-classification: case-restricted
       requestBody:
@@ -609,7 +608,7 @@ components:
     User:
       type: object
       additionalProperties: false
-      required: [id, email, display_name, global_role]
+      required: [id, email, display_name, account_type, global_capabilities]
       properties:
         id:
           type: string
@@ -619,12 +618,20 @@ components:
           maxLength: 320
         display_name:
           type: string
-        global_role:
-          $ref: "#/components/schemas/GlobalRole"
+        account_type:
+          $ref: "#/components/schemas/AccountType"
+        global_capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/GlobalCapability"
 
-    GlobalRole:
+    AccountType:
       type: string
-      enum: [family, commander, volunteer, learner, admin]
+      enum: [member, learner]
+
+    GlobalCapability:
+      type: string
+      enum: [commander, volunteer, admin]
 
     CaseRole:
       type: string
@@ -783,7 +790,7 @@ components:
     CaseMember:
       type: object
       additionalProperties: false
-      required: [user_id, email, display_name, global_role, case_role]
+      required: [user_id, email, display_name, account_type, global_capabilities, case_role]
       properties:
         user_id:
           type: string
@@ -792,8 +799,12 @@ components:
           type: string
         display_name:
           type: string
-        global_role:
-          $ref: "#/components/schemas/GlobalRole"
+        account_type:
+          $ref: "#/components/schemas/AccountType"
+        global_capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/GlobalCapability"
         case_role:
           $ref: "#/components/schemas/CaseRole"
 

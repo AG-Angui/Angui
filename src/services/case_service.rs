@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, case_memberships, cases, clue_attributions, clues, elder_profiles, users,
+        audit_events, case_memberships, cases, clue_attributions, clues, elder_profiles,
+        user_global_capabilities, users,
     },
     error::ApiError,
     models::{
@@ -18,7 +19,7 @@ use crate::{
         ClueResponse, CreateCaseRequest, CreateClueRequest, ElderProfileResponse,
         ReviewClueRequest, UpdateCaseStatusRequest,
     },
-    roles::{CaseRole, GlobalRole},
+    roles::{AccountType, CaseRole, GlobalCapability},
 };
 
 const CASE_STATUSES: &[&str] = &["active", "resolved", "closed"];
@@ -102,10 +103,12 @@ pub async fn create_case(
     request: CreateCaseRequest,
 ) -> Result<CaseDetail, ApiError> {
     validate_case_request(&request)?;
-    let initial_case_role = auth
-        .global_role
-        .initial_case_role()
-        .ok_or_else(|| ApiError::Forbidden("this account cannot create cases".to_owned()))?;
+    if !auth.account_type.can_join_cases() {
+        return Err(ApiError::Forbidden(
+            "this account cannot create cases".to_owned(),
+        ));
+    }
+    let initial_case_role = CaseRole::Family;
 
     let transaction = db.begin().await?;
     let timestamp = now();
@@ -377,10 +380,23 @@ pub async fn add_case_member(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("active user was not found".to_owned()))?;
-    let target_global_role = global_role_from_database(&target.role)?;
-    if !target_global_role.can_receive_case_role() {
+    let target_account_type = account_type_from_database(&target.account_type)?;
+    if !target_account_type.can_join_cases() {
         return Err(ApiError::Forbidden(
-            "learning-only and platform-admin accounts cannot be assigned to cases".to_owned(),
+            "learning-only accounts cannot be assigned to cases".to_owned(),
+        ));
+    }
+    let target_global_capabilities = global_capabilities_for_user(&transaction, &target.id).await?;
+    if matches!(
+        requested_case_role,
+        CaseRole::Commander | CaseRole::Volunteer
+    ) && !target_global_capabilities
+        .iter()
+        .copied()
+        .any(|capability| capability.authorizes_case_role(requested_case_role))
+    {
+        return Err(ApiError::Forbidden(
+            "the target account lacks the required global capability for this case role".to_owned(),
         ));
     }
     if case_memberships::Entity::find()
@@ -420,7 +436,8 @@ pub async fn add_case_member(
         user_id: target.id,
         email: target.email,
         display_name: target.display_name,
-        global_role: target_global_role,
+        account_type: target_account_type,
+        global_capabilities: target_global_capabilities,
         case_role: requested_case_role,
     })
 }
@@ -540,12 +557,32 @@ async fn insert_membership<C: ConnectionTrait>(
     Ok(())
 }
 
-fn global_role_from_database(value: &str) -> Result<GlobalRole, ApiError> {
-    GlobalRole::try_from(value).map_err(|error| {
+fn account_type_from_database(value: &str) -> Result<AccountType, ApiError> {
+    AccountType::try_from(value).map_err(|error| {
         ApiError::Database(sea_orm::DbErr::Custom(format!(
-            "users.role violates the global role constraint: {error}"
+            "users.account_type violates the account type constraint: {error}"
         )))
     })
+}
+
+async fn global_capabilities_for_user<C: ConnectionTrait>(
+    db: &C,
+    user_id: &str,
+) -> Result<Vec<GlobalCapability>, ApiError> {
+    user_global_capabilities::Entity::find()
+        .filter(user_global_capabilities::Column::UserId.eq(user_id))
+        .order_by_asc(user_global_capabilities::Column::Capability)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|capability| {
+            GlobalCapability::try_from(capability.capability.as_str()).map_err(|error| {
+                ApiError::Database(sea_orm::DbErr::Custom(format!(
+                    "user_global_capabilities.capability violates the capability constraint: {error}"
+                )))
+            })
+        })
+        .collect()
 }
 
 fn case_role_from_database(value: &str) -> Result<CaseRole, ApiError> {
@@ -567,7 +604,11 @@ async fn write_audit<C: ConnectionTrait>(
 ) -> Result<(), ApiError> {
     let metadata = metadata.map(|mut value| {
         if let Some(object) = value.as_object_mut() {
-            object.insert("actor_global_role".to_owned(), json!(auth.global_role));
+            object.insert("actor_account_type".to_owned(), json!(auth.account_type));
+            object.insert(
+                "actor_global_capabilities".to_owned(),
+                json!(auth.global_capabilities),
+            );
         }
         value.to_string()
     });

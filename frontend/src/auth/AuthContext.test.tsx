@@ -28,13 +28,13 @@ describe('AuthProvider', () => {
       .mockResolvedValueOnce(jsonResponse(200, {
         token: 'session-created-by-test-server',
         expires_at: '2026-07-24T00:00:00Z',
-        user: { id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', global_role: 'family' },
+        user: { id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', account_type: 'member', global_capabilities: [] },
       }))
       .mockResolvedValueOnce(jsonResponse(200, {
-        id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', global_role: 'family',
+        id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', account_type: 'member', global_capabilities: [],
       }))
       .mockResolvedValueOnce(jsonResponse(200, {
-        id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', global_role: 'family',
+        id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', account_type: 'member', global_capabilities: [],
       }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -64,7 +64,7 @@ describe('AuthProvider', () => {
     sessionStorage.setItem('angui.session.token', 'existing-session')
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse(200, {
-        id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', global_role: 'family',
+        id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', account_type: 'member', global_capabilities: [],
       }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -82,7 +82,7 @@ describe('AuthProvider', () => {
       'fetch',
       vi.fn()
         .mockResolvedValueOnce(jsonResponse(200, {
-          id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', global_role: 'family',
+          id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', account_type: 'member', global_capabilities: [],
         }))
         .mockResolvedValueOnce(jsonResponse(401, { error: { code: 'unauthorized' } })),
     )
