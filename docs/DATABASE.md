@@ -33,16 +33,19 @@ migration/
 │   ├── m0006_create_auth_sessions.rs
 │   ├── m0007_create_case_memberships.rs
 │   ├── m0008_create_clue_attributions.rs
-│   └── m0009_add_learner_role.rs
+│   ├── m0009_add_learner_role.rs
+│   ├── m0010_create_intake_sessions.rs
+│   ├── m0011_create_intake_question_definitions.rs
+│   └── m0012_split_account_type_and_capabilities.rs
 └── sql/
     ├── sqlite/
     │   ├── up/
     │   │   ├── 0001_create_cases.sql
     │   │   ├── 0002_create_elder_profiles.sql
     │   │   ├── 0003_create_clues.sql
-    │   │   └── 0004_create_audit_events.sql ... 0009_add_learner_role.sql
+    │   │   └── 0004_create_audit_events.sql ... 0012_split_account_type_and_capabilities.sql
     │   └── down/
-    │       └── 0001_drop_cases.sql ... 0009_remove_learner_role.sql
+    │       └── 0001_drop_cases.sql ... 0012_restore_single_user_role.sql
     ├── postgres/
     │   ├── up/
     │   │   └── 与 SQLite 相同编号的 8 个 PostgreSQL up 脚本
@@ -57,7 +60,7 @@ migration/
 
 `sea-orm-migration` 的 Rust 迁移负责注册顺序、选择当前数据库方言、加载对应 SQL、执行事务并向 SeaORM 迁移表记录状态。SQL 文件是必须保留的结构变更记录，不能只在 Rust builder 中生成而不留下可审查脚本。
 
-当前共保留 48 个业务 SQL 文件：8 个逻辑迁移 × 3 种方言 × `up/down` 两个方向。脚本使用 `-- statement-break` 作为显式语句边界，由 Rust wrapper 顺序执行。
+当前共保留 72 个业务 SQL 文件：12 个逻辑迁移 × 3 种方言 × `up/down` 两个方向。脚本使用 `-- statement-break` 作为显式语句边界，由 Rust wrapper 顺序执行。
 
 ## 4. 文件命名
 
@@ -161,7 +164,8 @@ npm run migrate:status
 - `elder_profiles`：与案件一对一的老人展示资料；当前字段用于模拟数据，尚未建立字段级权限与加密。
 - `clues`：线索内容和审核状态；新线索固定进入 `pending_review`。
 - `audit_events`：记录案件创建、案件状态变化、线索提交和人工审核。
-- `users`：邮箱、展示名、全局角色、账号状态和 Argon2id 密码哈希。
+- `users`：邮箱、展示名、`account_type`、账号状态和 Argon2id 密码哈希。
+- `user_global_capabilities`：用户可叠加的长期平台能力；复合主键 `(user_id, capability)` 防止重复能力记录。
 - `auth_sessions`：只保存令牌 SHA-256 哈希、有效期、撤销时间和最后使用时间。
 - `case_memberships`：案件、用户、案件内角色和授权创建者；案件与用户组合唯一。
 - `clue_attributions`：线索提交人、审核人和审核时间；兼容认证接入前的历史线索，提交人可以为空。
@@ -175,8 +179,10 @@ npm run migrate:status
 - 密码原文和会话令牌原文不得写入数据库、审计日志或普通应用日志。
 - 邮箱在写入和登录查询前统一去除首尾空白并转为小写。
 - 账号删除不是当前能力；禁用账号使用 `status=disabled`，认证时立即拒绝。
-- 管理员全局角色不构成案件成员关系，不能绕过 `case_memberships` 读取业务数据。
-- 显式运行 `angui-admin bootstrap-demo` 会创建或更新五个 `.invalid` 演示账号（家属、指挥、志愿者、新人、管理员），并撤销这些账号之前的活动会话。该命令仅在 `ANGUI_RUNTIME_ENV` 为 `development`、`preview` 或 `test`，且 `ANGUI_ALLOW_DEMO_BOOTSTRAP=1` 时允许执行。`learner` 与 `admin` 都不是案件成员角色；后者也不能因全局管理员身份绕过 `case_memberships` 读取案件。
+- `admin` 全局能力不构成案件成员关系，不能绕过 `case_memberships` 读取业务数据。
+- `users.account_type` 是固定的长期账号类型（`member`、`learner`）；`user_global_capabilities.capability` 是固定的可叠加能力（`commander`、`volunteer`、`admin`）；`case_memberships.role` 是固定的案件内角色（`family`、`commander`、`volunteer`）。三者均以跨 SQLite、PostgreSQL、MySQL 一致的 `CHECK` 约束保存；业务层使用 Rust 枚举转换未知值，未知持久化值按数据完整性错误处理，绝不默认授权。
+- 案件创建会为创建者写入 `family` 成员关系。授予 `commander` 或 `volunteer` 案件角色前，服务层要求目标为 `member` 并持有同名全局能力；能力不会自动生成任何 `case_memberships` 记录。`learner` 不能加入或创建案件。
+- 显式运行 `angui-admin bootstrap-demo` 会创建或更新五个 `.invalid` 演示账号（普通成员、具备指挥能力的成员、具备志愿者能力的成员、新人、具备管理员能力的成员），并撤销这些账号之前的活动会话。该命令仅在 `ANGUI_RUNTIME_ENV` 为 `development`、`preview` 或 `test`，且 `ANGUI_ALLOW_DEMO_BOOTSTRAP=1` 时允许执行。
 
 ## 12. 问询会话
 

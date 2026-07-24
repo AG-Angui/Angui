@@ -13,6 +13,7 @@ use crate::{
         AuthenticatedUser, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakeQuestion,
         IntakeSessionResponse,
     },
+    roles::AccountType,
 };
 
 pub async fn create_intake_session(
@@ -21,9 +22,9 @@ pub async fn create_intake_session(
     request: CreateIntakeSessionRequest,
     answer_hard_max: usize,
 ) -> Result<IntakeSessionResponse, ApiError> {
-    if auth.role != "family" {
+    if auth.account_type != AccountType::Member {
         return Err(ApiError::Forbidden(
-            "only family accounts can create intake sessions".to_owned(),
+            "only operational member accounts can create intake sessions".to_owned(),
         ));
     }
 
@@ -92,7 +93,11 @@ async fn write_audit<C: ConnectionTrait>(
 ) -> Result<(), ApiError> {
     let metadata_json = metadata.map(|mut value| {
         if let Some(object) = value.as_object_mut() {
-            object.insert("actor_role".to_owned(), json!(auth.role));
+            object.insert("actor_account_type".to_owned(), json!(auth.account_type));
+            object.insert(
+                "actor_global_capabilities".to_owned(),
+                json!(auth.global_capabilities),
+            );
         }
         value.to_string()
     });

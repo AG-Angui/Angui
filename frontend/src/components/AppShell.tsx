@@ -9,25 +9,27 @@ import {
 import { NavLink, Outlet } from 'react-router-dom'
 import brandMark from '../../../assets/brand/angui-mark.svg'
 import { useAuth } from '../auth/useAuth'
-import type { UserRole } from '../api/auth'
+import type { AccountType, GlobalCapability } from '../api/auth'
 import { ServiceStatus } from './ServiceStatus'
+
+type LegacyRole = 'family' | 'commander' | 'volunteer' | 'learner' | 'admin'
 
 interface NavigationItem {
   to: string
   label: string
   icon: typeof LayoutDashboard
   end?: boolean
-  roles: UserRole[]
+  roles: LegacyRole[]
 }
 
 const navigation: NavigationItem[] = [
   { to: '/', label: '总览', icon: LayoutDashboard, end: true, roles: ['family', 'commander', 'volunteer', 'learner', 'admin'] },
-  { to: '/family', label: '家属端', icon: HeartHandshake, roles: ['family'] },
-  { to: '/command', label: '指挥端', icon: RadioTower, roles: ['commander'] },
-  { to: '/volunteer', label: '志愿者端', icon: Navigation, roles: ['volunteer'] },
+  { to: '/family', label: '家属端', icon: HeartHandshake, roles: ['family', 'commander', 'volunteer'] },
+  { to: '/command', label: '指挥端', icon: RadioTower, roles: ['family', 'commander', 'volunteer'] },
+  { to: '/volunteer', label: '志愿者端', icon: Navigation, roles: ['family', 'commander', 'volunteer'] },
 ]
 
-const roleLabels: Record<UserRole, string> = {
+const roleLabels: Record<LegacyRole, string> = {
   family: '家属',
   commander: '指挥',
   volunteer: '志愿者',
@@ -35,9 +37,14 @@ const roleLabels: Record<UserRole, string> = {
   admin: '管理员',
 }
 
+function identityLabel(accountType: AccountType, capabilities: GlobalCapability[]) {
+  const labels = capabilities.map((capability) => roleLabels[capability])
+  return labels.length > 0 ? `${accountType} / ${labels.join(' / ')}` : accountType
+}
+
 export function AppShell() {
   const { user, logout } = useAuth()
-  const visibleNavigation = navigation.filter((item) => user && item.roles.includes(user.role))
+  const visibleNavigation = navigation.filter((item) => user && (item.to === '/' || user.account_type === 'member'))
 
   return (
     <div className="min-h-screen bg-canvas text-slate-700 lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
@@ -81,7 +88,7 @@ export function AppShell() {
               <div className="flex items-center gap-2">
                 <strong className="truncate text-sm text-slate-950">{user.display_name}</strong>
                 <Chip size="sm" variant="soft">
-                  <Chip.Label>{roleLabels[user.role]}</Chip.Label>
+                  <Chip.Label>{identityLabel(user.account_type, user.global_capabilities)}</Chip.Label>
                 </Chip>
               </div>
               <span className="mt-1 block truncate text-xs text-slate-500">{user.email}</span>
@@ -99,7 +106,7 @@ export function AppShell() {
         <div className="flex min-h-14 items-center justify-between border-b border-slate-200 bg-white px-4 lg:hidden">
           <div className="min-w-0">
             <strong className="block truncate text-sm text-slate-950">{user?.display_name}</strong>
-            <span className="block truncate text-xs text-slate-500">{user ? roleLabels[user.role] : ''}</span>
+            <span className="block truncate text-xs text-slate-500">{user ? identityLabel(user.account_type, user.global_capabilities) : ''}</span>
           </div>
           <Button size="sm" variant="ghost" isIconOnly aria-label="退出登录" onPress={() => void logout()}>
             <LogOut size={17} />

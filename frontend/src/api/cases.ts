@@ -1,4 +1,5 @@
 import { apiRequest } from './client'
+import type { AccountType, GlobalCapability } from './auth'
 
 export type CaseRole = 'family' | 'commander' | 'volunteer'
 export type CaseStatus = 'active' | 'resolved' | 'closed'
@@ -74,7 +75,9 @@ export interface CaseMember {
   user_id: string
   email: string
   display_name: string
-  role: CaseRole
+  account_type: AccountType
+  global_capabilities: GlobalCapability[]
+  case_role: CaseRole
 }
 
 export interface CreateCluePayload {
@@ -140,11 +143,11 @@ export function addCaseMember(
   token: string,
   caseId: string,
   email: string,
-  role: CaseRole,
+  caseRole: CaseRole,
 ): Promise<CaseMember> {
   return apiRequest<CaseMember>(
     `/cases/${caseId}/members`,
-    { method: 'POST', body: JSON.stringify({ email, role }) },
+    { method: 'POST', body: JSON.stringify({ email, case_role: caseRole }) },
     token,
   )
 }

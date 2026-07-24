@@ -7,6 +7,7 @@ use angui::{
         LoginRequest, UpdateCaseStatusRequest,
     },
     rate_limit::LoginRateLimiter,
+    roles::CaseRole,
     services::{auth_service, case_service},
 };
 use migration::{Migrator, MigratorTrait};
@@ -86,7 +87,9 @@ impl TestContext {
             case_id,
             AddCaseMemberRequest {
                 email: email.to_owned(),
-                role: role.to_owned(),
+                case_role: role
+                    .parse::<CaseRole>()
+                    .expect("fixture role should be valid"),
             },
         )
         .await

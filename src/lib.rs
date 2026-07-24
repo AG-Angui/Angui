@@ -6,5 +6,6 @@ pub mod entities;
 pub mod error;
 pub mod models;
 pub mod rate_limit;
+pub mod roles;
 pub mod routes;
 pub mod services;
