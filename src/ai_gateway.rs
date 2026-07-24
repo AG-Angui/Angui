@@ -361,22 +361,27 @@ impl AiProvider for ProtocolProvider {
                     "max_tokens": max_tokens,
                 }),
             },
-            ProviderProtocol::GeminiGenerateContent => ProviderHttpRequest {
-                method: "POST",
-                path: format!("/v1beta/models/{}:generateContent", self.config.model),
-                headers: vec![ProviderHeader {
-                    name: "x-goog-api-key",
-                    value: credential,
-                }],
-                body: json!({
-                    "systemInstruction": { "parts": [{ "text": instructions }] },
+            ProviderProtocol::GeminiGenerateContent => {
+                let mut body = json!({
                     "contents": [{
                         "role": "user",
                         "parts": [{ "text": request.input.as_str() }],
                     }],
                     "generationConfig": { "maxOutputTokens": max_tokens },
-                }),
-            },
+                });
+                if !instructions.is_empty() {
+                    body["systemInstruction"] = json!({ "parts": [{ "text": instructions }] });
+                }
+                ProviderHttpRequest {
+                    method: "POST",
+                    path: format!("/v1beta/models/{}:generateContent", self.config.model),
+                    headers: vec![ProviderHeader {
+                        name: "x-goog-api-key",
+                        value: credential,
+                    }],
+                    body,
+                }
+            }
         };
         Ok(request)
     }
@@ -518,6 +523,7 @@ fn provider_is_eligible(config: &ProviderConfig, request: &AiRequest) -> bool {
         && config.allowed_data_levels.contains(&request.data_level)
         && config.allowed_purposes.contains(&request.purpose)
         && config.region == request.data_region
+        && !request.input.trim().is_empty()
         && request.input.chars().count() <= config.input_limit_chars
         && request.requested_output_tokens <= config.output_limit_tokens
 }
@@ -688,6 +694,22 @@ mod tests {
     }
 
     #[test]
+    fn empty_input_degrades_before_selecting_a_provider() {
+        let gateway = AiGateway::from_configurations(vec![provider(
+            "eligible",
+            ProviderProtocol::GeminiGenerateContent,
+        )])
+        .expect("fixture is valid");
+        let mut request = request();
+        request.input = "  \n\t ".to_owned();
+
+        assert!(matches!(
+            gateway.route(&request),
+            GatewayDecision::Degraded { .. }
+        ));
+    }
+
+    #[test]
     fn validation_rejects_sensitive_provider_without_compliance_scope() {
         let mut configuration = provider("sensitive", ProviderProtocol::OpenAiChatCompletions);
         configuration.allowed_data_levels.push(DataLevel::Sensitive);
@@ -741,6 +763,29 @@ mod tests {
                     assert!(outbound.body.get("systemInstruction").is_some());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn gemini_omits_system_instruction_when_it_is_absent_or_empty() {
+        let gateway = AiGateway::from_configurations(vec![provider(
+            "gemini",
+            ProviderProtocol::GeminiGenerateContent,
+        )])
+        .expect("fixture is valid");
+        let route = match gateway.route(&request()) {
+            GatewayDecision::Routed(route) => route,
+            GatewayDecision::Degraded { .. } => panic!("fixture should route"),
+        };
+
+        for system_instruction in [None, Some(String::new())] {
+            let mut request = request();
+            request.system_instruction = system_instruction;
+            let outbound = gateway
+                .build_provider_request(&route, &request)
+                .expect("request should be serializable");
+
+            assert!(outbound.body.get("systemInstruction").is_none());
         }
     }
 
