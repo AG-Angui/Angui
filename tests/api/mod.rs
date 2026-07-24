@@ -10,4 +10,5 @@ mod cases_create_post;
 mod cases_list_get;
 mod clue_review_patch;
 mod health_get;
+mod intake_session_answers_post;
 mod intake_sessions_create_post;
