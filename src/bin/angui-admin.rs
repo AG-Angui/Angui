@@ -50,7 +50,10 @@ async fn main() -> io::Result<()> {
         .map_err(|error| io::Error::other(error.to_string()))?;
 
     for user in users {
-        println!("{}\t{}\t{}", user.role, user.email, user.display_name);
+        println!(
+            "{}\t{}\t{}",
+            user.global_role, user.email, user.display_name
+        );
     }
     Ok(())
 }

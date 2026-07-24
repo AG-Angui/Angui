@@ -1,16 +1,17 @@
 import { Spinner } from '@heroui/react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import type { UserRole } from './api/auth'
 import { useAuth } from './auth/useAuth'
 import { AppShell } from './components/AppShell'
 import { CaseWorkspacePage } from './pages/CaseWorkspacePage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 
-function RoleRoute({ role, children }: { role: UserRole; children: ReactNode }) {
+function CaseRoleRoute({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  return user?.role === role ? children : <Navigate to="/" replace />
+  return user && ['family', 'commander', 'volunteer'].includes(user.global_role)
+    ? children
+    : <Navigate to="/" replace />
 }
 
 function App() {
@@ -35,25 +36,25 @@ function App() {
         <Route
           path="family"
           element={
-            <RoleRoute role="family">
+            <CaseRoleRoute>
               <CaseWorkspacePage mode="family" />
-            </RoleRoute>
+            </CaseRoleRoute>
           }
         />
         <Route
           path="command"
           element={
-            <RoleRoute role="commander">
+            <CaseRoleRoute>
               <CaseWorkspacePage mode="commander" />
-            </RoleRoute>
+            </CaseRoleRoute>
           }
         />
         <Route
           path="volunteer"
           element={
-            <RoleRoute role="volunteer">
+            <CaseRoleRoute>
               <CaseWorkspacePage mode="volunteer" />
-            </RoleRoute>
+            </CaseRoleRoute>
           }
         />
       </Route>

@@ -15,9 +15,8 @@ use crate::{
     entities::{audit_events, auth_sessions, users},
     error::ApiError,
     models::{AuthenticatedUser, LoginRequest, LoginResponse, UserResponse},
+    roles::GlobalRole,
 };
-
-const USER_ROLES: &[&str] = &["family", "commander", "volunteer", "learner", "admin"];
 
 pub async fn login(
     db: &DatabaseConnection,
@@ -50,6 +49,7 @@ pub async fn login(
             "invalid email or password".to_owned(),
         ));
     };
+    let global_role = global_role_from_database(&user.role)?;
 
     let transaction = db.begin().await?;
     let raw_token = format!(
@@ -87,7 +87,12 @@ pub async fn login(
     Ok(LoginResponse {
         token: raw_token,
         expires_at,
-        user: user.into(),
+        user: UserResponse {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+            global_role,
+        },
     })
 }
 
@@ -123,7 +128,7 @@ pub async fn authenticate(
         id: user.id,
         email: user.email,
         display_name: user.display_name,
-        role: user.role,
+        global_role: global_role_from_database(&user.role)?,
         session_id,
     })
 }
@@ -160,11 +165,15 @@ pub async fn bootstrap_demo_users(
     }
 
     let definitions = [
-        ("family@demo.invalid", "模拟家属", "family"),
-        ("commander@demo.invalid", "模拟指挥", "commander"),
-        ("volunteer@demo.invalid", "模拟志愿者", "volunteer"),
-        ("learner@demo.invalid", "模拟新人", "learner"),
-        ("admin@demo.invalid", "模拟管理员", "admin"),
+        ("family@demo.invalid", "模拟家属", GlobalRole::Family),
+        ("commander@demo.invalid", "模拟指挥", GlobalRole::Commander),
+        (
+            "volunteer@demo.invalid",
+            "模拟志愿者",
+            GlobalRole::Volunteer,
+        ),
+        ("learner@demo.invalid", "模拟新人", GlobalRole::Learner),
+        ("admin@demo.invalid", "模拟管理员", GlobalRole::Admin),
     ];
     let mut created = Vec::with_capacity(definitions.len());
     for (email, display_name, role) in definitions {
@@ -177,12 +186,9 @@ async fn upsert_user(
     db: &DatabaseConnection,
     email: &str,
     display_name: &str,
-    role: &str,
+    global_role: GlobalRole,
     password: &str,
 ) -> Result<UserResponse, ApiError> {
-    if !USER_ROLES.contains(&role) {
-        return Err(ApiError::Validation("unsupported user role".to_owned()));
-    }
     let email = normalize_email(email)?;
     let password_hash = hash_password(password.to_owned()).await?;
     let timestamp = now();
@@ -195,7 +201,7 @@ async fn upsert_user(
     {
         let mut active = existing.into_active_model();
         active.display_name = Set(display_name.to_owned());
-        active.role = Set(role.to_owned());
+        active.role = Set(global_role.to_string());
         active.password_hash = Set(password_hash);
         active.status = Set("active".to_owned());
         active.updated_at = Set(timestamp);
@@ -205,7 +211,7 @@ async fn upsert_user(
             id: Set(Uuid::new_v4().to_string()),
             email: Set(email),
             display_name: Set(display_name.to_owned()),
-            role: Set(role.to_owned()),
+            role: Set(global_role.to_string()),
             password_hash: Set(password_hash),
             status: Set("active".to_owned()),
             created_at: Set(timestamp.clone()),
@@ -227,7 +233,20 @@ async fn upsert_user(
     }
     transaction.commit().await?;
 
-    Ok(user.into())
+    Ok(UserResponse {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        global_role,
+    })
+}
+
+fn global_role_from_database(value: &str) -> Result<GlobalRole, ApiError> {
+    GlobalRole::try_from(value).map_err(|error| {
+        ApiError::Database(sea_orm::DbErr::Custom(format!(
+            "users.role violates the global role constraint: {error}"
+        )))
+    })
 }
 
 async fn hash_password(password: String) -> Result<String, ApiError> {

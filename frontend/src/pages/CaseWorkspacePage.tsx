@@ -63,7 +63,7 @@ const emptyCase: CreateCasePayload = {
 }
 
 export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const [cases, setCases] = useState<CaseListItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<CaseDetail | null>(null)
@@ -133,6 +133,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     [detail],
   )
   const copy = workspaceCopy[mode]
+  const canCreateCase = user?.global_role === 'family' || user?.global_role === 'commander'
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
@@ -146,7 +147,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
             <RefreshCw size={16} />
             刷新
           </Button>
-          {mode !== 'volunteer' && (
+          {canCreateCase && mode !== 'volunteer' && (
             <Button size="sm" variant="primary" onPress={() => setShowCreate((value) => !value)}>
               <CirclePlus size={16} />
               新建案件
@@ -158,7 +159,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
       {listError && cases.length > 0 && <Message tone="error">{listError}</Message>}
       {notice && <Message tone="success">{notice}</Message>}
 
-      {showCreate && mode !== 'volunteer' && (
+      {showCreate && canCreateCase && mode !== 'volunteer' && (
         <CreateCaseForm
           onCancel={() => setShowCreate(false)}
           onCreated={async (created) => {

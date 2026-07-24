@@ -10,7 +10,7 @@ const mocked = vi.hoisted(() => ({
 vi.mock('../auth/useAuth', () => ({
   useAuth: () => ({
     token: 'test-session',
-    user: { id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', role: 'family' },
+    user: { id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', global_role: 'family' },
   }),
 }))
 vi.mock('../api/cases', () => ({

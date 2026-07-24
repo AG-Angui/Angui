@@ -372,7 +372,8 @@ paths:
       summary: 按邮箱添加案件成员
       description: |
         family 只能邀请 commander。commander 可以添加 family、commander 或 volunteer。
-        请求中的案件角色必须与目标活动账号的全局角色一致，且目标账号不能已经属于该案件。
+        `case_role` 是案件内角色；目标账号的 `global_role` 仅决定其是否具备案件成员资格。
+        `learner` 与 `admin` 不可被加入案件，且目标账号不能已经属于该案件。
       security:
         - bearerAuth: []
       x-roles: [family, commander]
@@ -386,7 +387,7 @@ paths:
               $ref: "#/components/schemas/AddCaseMemberRequest"
             example:
               email: volunteer@demo.invalid
-              role: volunteer
+              case_role: volunteer
       responses:
         "201":
           description: 案件成员已添加
@@ -608,7 +609,7 @@ components:
     User:
       type: object
       additionalProperties: false
-      required: [id, email, display_name, role]
+      required: [id, email, display_name, global_role]
       properties:
         id:
           type: string
@@ -618,10 +619,10 @@ components:
           maxLength: 320
         display_name:
           type: string
-        role:
-          $ref: "#/components/schemas/UserRole"
+        global_role:
+          $ref: "#/components/schemas/GlobalRole"
 
-    UserRole:
+    GlobalRole:
       type: string
       enum: [family, commander, volunteer, learner, admin]
 
@@ -769,20 +770,20 @@ components:
     AddCaseMemberRequest:
       type: object
       additionalProperties: false
-      required: [email, role]
+      required: [email, case_role]
       properties:
         email:
           type: string
           minLength: 3
           maxLength: 320
           description: 目标活动账号邮箱；服务端转换为小写并去除首尾空白。
-        role:
+        case_role:
           $ref: "#/components/schemas/CaseRole"
 
     CaseMember:
       type: object
       additionalProperties: false
-      required: [user_id, email, display_name, role]
+      required: [user_id, email, display_name, global_role, case_role]
       properties:
         user_id:
           type: string
@@ -791,7 +792,9 @@ components:
           type: string
         display_name:
           type: string
-        role:
+        global_role:
+          $ref: "#/components/schemas/GlobalRole"
+        case_role:
           $ref: "#/components/schemas/CaseRole"
 
     CaseListItem:

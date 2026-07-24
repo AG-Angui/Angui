@@ -22,10 +22,12 @@ vi.mock('./api/cases', () => ({
 }))
 vi.mock('./components/ServiceStatus', () => ({ ServiceStatus: () => <span>服务状态</span> }))
 
-function setAuth(role: NonNullable<AuthContextValue['user']>['role'] | null) {
+function setAuth(globalRole: NonNullable<AuthContextValue['user']>['global_role'] | null) {
   mocked.auth = {
-    token: role ? 'test-session' : null,
-    user: role ? { id: `${role}-1`, email: `${role}@demo.invalid`, display_name: '模拟用户', role } : null,
+    token: globalRole ? 'test-session' : null,
+    user: globalRole
+      ? { id: `${globalRole}-1`, email: `${globalRole}@demo.invalid`, display_name: '模拟用户', global_role: globalRole }
+      : null,
     isLoading: false,
     login: vi.fn(),
     logout: vi.fn(),
@@ -48,29 +50,26 @@ describe('application role routing', () => {
     expect(screen.getByText('账号登录')).toBeInTheDocument()
   })
 
-  it.each([
-    ['family', '家属端', ['指挥端', '志愿者端']],
-    ['commander', '指挥端', ['家属端', '志愿者端']],
-    ['volunteer', '志愿者端', ['家属端', '指挥端']],
-  ] as const)('shows only the %s workspace navigation', async (role, workspace, unavailableWorkspaces) => {
+  it.each(['family', 'commander', 'volunteer'] as const)(
+    'shows all case workspaces to the operational %s account',
+    async (role) => {
     setAuth(role)
     renderApp()
     await waitFor(() => expect(screen.getByText('行动总览')).toBeInTheDocument())
-    expect(screen.getByRole('link', { name: workspace })).toBeInTheDocument()
-    unavailableWorkspaces.forEach((name) => {
-      expect(screen.queryByRole('link', { name })).not.toBeInTheDocument()
-    })
-  })
+    for (const workspace of ['家属端', '指挥端', '志愿者端']) {
+      expect(screen.getByRole('link', { name: workspace })).toBeInTheDocument()
+    }
+    },
+  )
 
   it.each([
     ['family', '/command', '指挥端'],
     ['commander', '/volunteer', '志愿者端'],
     ['volunteer', '/family', '家属端'],
-  ] as const)('redirects a %s account away from the incompatible %s route', async (role, path, unavailableNavigation) => {
+  ] as const)('allows a %s account to open the %s route when its case membership grants access', async (role, path, workspace) => {
     setAuth(role)
     renderApp(path)
-    await waitFor(() => expect(screen.getByText('行动总览')).toBeInTheDocument())
-    expect(screen.queryByRole('link', { name: unavailableNavigation })).not.toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: workspace })).toBeInTheDocument()
   })
 
   it.each(['learner', 'admin'] as const)('does not imply case access for %s accounts', async (role) => {

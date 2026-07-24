@@ -29,7 +29,7 @@ async fn login_returns_a_session_for_valid_demo_credentials() {
             .is_some_and(|token| token.starts_with("angui_"))
     );
     assert_eq!(body["user"]["email"], FAMILY);
-    assert_eq!(body["user"]["role"], "family");
+    assert_eq!(body["user"]["global_role"], "family");
 }
 
 #[actix_web::test]
@@ -59,7 +59,7 @@ async fn every_demo_role_can_log_in_and_restore_its_identity_from_the_session_to
             .as_str()
             .expect("login response should contain a token");
         assert_eq!(body["user"]["email"], email);
-        assert_eq!(body["user"]["role"], role);
+        assert_eq!(body["user"]["global_role"], role);
 
         let restored = test::call_service(
             &app,
@@ -76,7 +76,7 @@ async fn every_demo_role_can_log_in_and_restore_its_identity_from_the_session_to
         );
         let current_user: Value = test::read_body_json(restored).await;
         assert_eq!(current_user["email"], email);
-        assert_eq!(current_user["role"], role);
+        assert_eq!(current_user["global_role"], role);
     }
 }
 

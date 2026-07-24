@@ -59,6 +59,6 @@ async fn current_user(auth: AuthenticatedUser) -> HttpResponse {
         id: auth.id,
         email: auth.email,
         display_name: auth.display_name,
-        role: auth.role,
+        global_role: auth.global_role,
     })
 }

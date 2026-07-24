@@ -57,12 +57,12 @@ export function DashboardPage() {
   )
   const activeCases = cases.filter((item) => item.status === 'active').length
   const confirmedClues = details.flatMap((item) => item.clues).filter((clue) => clue.status === 'confirmed').length
-  const emptyState = user?.role === 'learner'
+  const emptyState = user?.global_role === 'learner'
     ? {
         title: '新人账号暂未获得案件权限',
         description: '当前后端只会返回你作为案件成员可访问的案件；学习模块尚未提供接口。',
       }
-    : user?.role === 'admin'
+    : user?.global_role === 'admin'
       ? {
           title: '管理员账号不自动拥有案件权限',
           description: '管理员需要先被授予具体案件成员关系，才能查看案件内容。',

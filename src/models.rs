@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{cases, clue_attributions, clues, elder_profiles, intake_sessions, users};
+use crate::{
+    entities::{cases, clue_attributions, clues, elder_profiles, intake_sessions, users},
+    roles::{CaseRole, GlobalRole, InvalidRole},
+};
 
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUser {
     pub id: String,
     pub email: String,
     pub display_name: String,
-    pub role: String,
+    pub global_role: GlobalRole,
     pub session_id: String,
 }
 
@@ -23,7 +26,7 @@ pub struct UserResponse {
     pub id: String,
     pub email: String,
     pub display_name: String,
-    pub role: String,
+    pub global_role: GlobalRole,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,7 +139,7 @@ pub struct ReviewClueRequest {
 #[serde(deny_unknown_fields)]
 pub struct AddCaseMemberRequest {
     pub email: String,
-    pub role: String,
+    pub case_role: CaseRole,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,7 +147,8 @@ pub struct CaseMemberResponse {
     pub user_id: String,
     pub email: String,
     pub display_name: String,
-    pub role: String,
+    pub global_role: GlobalRole,
+    pub case_role: CaseRole,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,7 +156,7 @@ pub struct CaseListItem {
     pub id: String,
     pub case_code: String,
     pub status: String,
-    pub access_role: String,
+    pub access_role: CaseRole,
     pub display_name: String,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
@@ -165,7 +169,7 @@ pub struct CaseDetail {
     pub id: String,
     pub case_code: String,
     pub status: String,
-    pub access_role: String,
+    pub access_role: CaseRole,
     pub elder_profile: ElderProfileResponse,
     pub clues: Vec<ClueResponse>,
     pub created_at: String,
@@ -242,14 +246,16 @@ impl ClueResponse {
     }
 }
 
-impl From<users::Model> for UserResponse {
-    fn from(model: users::Model) -> Self {
-        Self {
+impl TryFrom<users::Model> for UserResponse {
+    type Error = InvalidRole;
+
+    fn try_from(model: users::Model) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: model.id,
             email: model.email,
             display_name: model.display_name,
-            role: model.role,
-        }
+            global_role: GlobalRole::try_from(model.role.as_str())?,
+        })
     }
 }
 
@@ -258,7 +264,7 @@ impl CaseDetail {
         case_model: cases::Model,
         elder_profile: ElderProfileResponse,
         clues: Vec<ClueResponse>,
-        access_role: String,
+        access_role: CaseRole,
     ) -> Self {
         Self {
             id: case_model.id,

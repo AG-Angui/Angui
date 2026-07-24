@@ -132,6 +132,33 @@ mod tests {
         include_str!("../sql/mysql/down/0011_drop_intake_question_definitions.sql"),
     ];
 
+    const ROLE_CONSTRAINT_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite users",
+            include_str!("../sql/sqlite/up/0009_add_learner_role.sql"),
+        ),
+        (
+            "sqlite case memberships",
+            include_str!("../sql/sqlite/up/0007_create_case_memberships.sql"),
+        ),
+        (
+            "postgres users",
+            include_str!("../sql/postgres/up/0009_add_learner_role.sql"),
+        ),
+        (
+            "postgres case memberships",
+            include_str!("../sql/postgres/up/0007_create_case_memberships.sql"),
+        ),
+        (
+            "mysql users",
+            include_str!("../sql/mysql/up/0009_add_learner_role.sql"),
+        ),
+        (
+            "mysql case memberships",
+            include_str!("../sql/mysql/up/0007_create_case_memberships.sql"),
+        ),
+    ];
+
     #[tokio::test]
     async fn sqlite_migrations_support_up_down_up() {
         let database = Database::connect("sqlite::memory:")
@@ -180,6 +207,60 @@ mod tests {
             ))
             .await
             .expect("upgraded schema should accept learner role");
+    }
+
+    #[tokio::test]
+    async fn sqlite_role_constraints_reject_unknown_global_and_case_roles() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, None)
+            .await
+            .expect("migrations should succeed");
+
+        assert!(database
+            .execute_unprepared(
+                "INSERT INTO users (id, email, display_name, role, password_hash, status, created_at, updated_at) VALUES ('invalid-user', 'invalid@demo.invalid', 'Invalid', 'operator', 'hash', 'active', '2026-07-24T00:00:00Z', '2026-07-24T00:00:00Z')",
+            )
+            .await
+            .is_err());
+        database
+            .execute_unprepared(
+                "INSERT INTO users (id, email, display_name, role, password_hash, status, created_at, updated_at) VALUES ('valid-user', 'valid@demo.invalid', 'Valid', 'family', 'hash', 'active', '2026-07-24T00:00:00Z', '2026-07-24T00:00:00Z'); INSERT INTO cases (id, case_code, status, created_at, updated_at) VALUES ('valid-case', 'AG-00000001', 'active', '2026-07-24T00:00:00Z', '2026-07-24T00:00:00Z')",
+            )
+            .await
+            .expect("valid role fixtures should insert");
+        assert!(database
+            .execute_unprepared(
+                "INSERT INTO case_memberships (id, case_id, user_id, role, created_by_user_id, created_at) VALUES ('invalid-membership', 'valid-case', 'valid-user', 'admin', NULL, '2026-07-24T00:00:00Z')",
+            )
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn every_database_dialect_keeps_closed_global_and_case_role_constraints() {
+        for (name, script) in ROLE_CONSTRAINT_SCRIPTS {
+            let normalized = script.to_ascii_lowercase();
+            assert!(
+                normalized.contains("check"),
+                "{name} must constrain role values"
+            );
+            if name.contains("users") {
+                for role in ["family", "commander", "volunteer", "learner", "admin"] {
+                    assert!(normalized.contains(role), "{name} must permit {role}");
+                }
+            } else {
+                for role in ["family", "commander", "volunteer"] {
+                    assert!(normalized.contains(role), "{name} must permit {role}");
+                }
+                assert!(
+                    !normalized.contains("'learner'"),
+                    "{name} must exclude learner"
+                );
+                assert!(!normalized.contains("'admin'"), "{name} must exclude admin");
+            }
+        }
     }
 
     #[test]

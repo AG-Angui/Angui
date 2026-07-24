@@ -18,10 +18,10 @@ use crate::{
         ClueResponse, CreateCaseRequest, CreateClueRequest, ElderProfileResponse,
         ReviewClueRequest, UpdateCaseStatusRequest,
     },
+    roles::{CaseRole, GlobalRole},
 };
 
 const CASE_STATUSES: &[&str] = &["active", "resolved", "closed"];
-const CASE_ROLES: &[&str] = &["family", "commander", "volunteer"];
 const CLUE_REVIEW_STATUSES: &[&str] = &[
     "needs_verification",
     "confirmed",
@@ -40,8 +40,13 @@ pub async fn list_cases(
         .await?;
     let roles: HashMap<_, _> = memberships
         .into_iter()
-        .map(|membership| (membership.case_id, membership.role))
-        .collect();
+        .map(|membership| {
+            Ok((
+                membership.case_id,
+                case_role_from_database(&membership.role)?,
+            ))
+        })
+        .collect::<Result<_, ApiError>>()?;
 
     if roles.is_empty() {
         return Ok(Vec::new());
@@ -97,11 +102,10 @@ pub async fn create_case(
     request: CreateCaseRequest,
 ) -> Result<CaseDetail, ApiError> {
     validate_case_request(&request)?;
-    if !matches!(auth.role.as_str(), "family" | "commander") {
-        return Err(ApiError::Forbidden(
-            "this account cannot create cases".to_owned(),
-        ));
-    }
+    let initial_case_role = auth
+        .global_role
+        .initial_case_role()
+        .ok_or_else(|| ApiError::Forbidden("this account cannot create cases".to_owned()))?;
 
     let transaction = db.begin().await?;
     let timestamp = now();
@@ -140,7 +144,7 @@ pub async fn create_case(
         &transaction,
         &case_id,
         &auth.id,
-        &auth.role,
+        initial_case_role,
         Some(&auth.id),
         &timestamp,
     )
@@ -175,7 +179,7 @@ pub async fn update_case_status(
     }
 
     let transaction = db.begin().await?;
-    require_case_role(&transaction, &auth.id, case_id, &["commander"]).await?;
+    require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander]).await?;
     let case_model = cases::Entity::find_by_id(case_id)
         .one(&transaction)
         .await?
@@ -221,7 +225,7 @@ pub async fn create_clue(
         &transaction,
         &auth.id,
         case_id,
-        &["family", "commander", "volunteer"],
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
     let case_model = cases::Entity::find_by_id(case_id)
@@ -293,7 +297,13 @@ pub async fn review_clue(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("clue was not found".to_owned()))?;
-    require_case_role(&transaction, &auth.id, &clue_model.case_id, &["commander"]).await?;
+    require_case_role(
+        &transaction,
+        &auth.id,
+        &clue_model.case_id,
+        &[CaseRole::Commander],
+    )
+    .await?;
     let previous_status = clue_model.status.clone();
     let case_id = clue_model.case_id.clone();
     let mut active = clue_model.into_active_model();
@@ -342,19 +352,21 @@ pub async fn add_case_member(
     case_id: &str,
     request: AddCaseMemberRequest,
 ) -> Result<CaseMemberResponse, ApiError> {
-    let requested_role = request.role.trim().to_lowercase();
-    if !CASE_ROLES.contains(&requested_role.as_str()) {
-        return Err(ApiError::Validation("unsupported case role".to_owned()));
-    }
+    let requested_case_role = request.case_role;
     let email = request.email.trim().to_lowercase();
     if email.is_empty() || email.len() > 320 || !email.contains('@') {
         return Err(ApiError::Validation("email is invalid".to_owned()));
     }
 
     let transaction = db.begin().await?;
-    let acting_membership =
-        require_case_role(&transaction, &auth.id, case_id, &["family", "commander"]).await?;
-    if acting_membership.role == "family" && requested_role != "commander" {
+    let acting_case_role = require_case_role(
+        &transaction,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander],
+    )
+    .await?;
+    if acting_case_role == CaseRole::Family && requested_case_role != CaseRole::Commander {
         return Err(ApiError::Forbidden(
             "family members can only invite a commander".to_owned(),
         ));
@@ -365,9 +377,10 @@ pub async fn add_case_member(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("active user was not found".to_owned()))?;
-    if target.role != requested_role {
-        return Err(ApiError::Validation(
-            "case role must match the user's account role".to_owned(),
+    let target_global_role = global_role_from_database(&target.role)?;
+    if !target_global_role.can_receive_case_role() {
+        return Err(ApiError::Forbidden(
+            "learning-only and platform-admin accounts cannot be assigned to cases".to_owned(),
         ));
     }
     if case_memberships::Entity::find()
@@ -386,7 +399,7 @@ pub async fn add_case_member(
         &transaction,
         case_id,
         &target.id,
-        &requested_role,
+        requested_case_role,
         Some(&auth.id),
         &now(),
     )
@@ -398,7 +411,7 @@ pub async fn add_case_member(
         "case.member_added",
         "user",
         target.id.clone(),
-        Some(json!({ "role": requested_role })),
+        Some(json!({ "case_role": requested_case_role })),
     )
     .await?;
     transaction.commit().await?;
@@ -407,7 +420,8 @@ pub async fn add_case_member(
         user_id: target.id,
         email: target.email,
         display_name: target.display_name,
-        role: target.role,
+        global_role: target_global_role,
+        case_role: requested_case_role,
     })
 }
 
@@ -416,6 +430,7 @@ async fn load_case_detail(
     auth: &AuthenticatedUser,
     membership: case_memberships::Model,
 ) -> Result<CaseDetail, ApiError> {
+    let case_role = case_role_from_database(&membership.role)?;
     let case_model = cases::Entity::find_by_id(&membership.case_id)
         .one(db)
         .await?
@@ -453,18 +468,17 @@ async fn load_case_detail(
                 .as_ref()
                 .and_then(|value| value.submitted_by_user_id.as_deref())
                 == Some(auth.id.as_str());
-            let visible = match membership.role.as_str() {
-                "commander" => true,
-                "family" => clue.status == "confirmed" || own,
-                "volunteer" => clue.status == "confirmed",
-                _ => false,
+            let visible = match case_role {
+                CaseRole::Commander => true,
+                CaseRole::Family => clue.status == "confirmed" || own,
+                CaseRole::Volunteer => clue.status == "confirmed",
             };
             visible.then(|| ClueResponse::new(clue, attribution, &auth.id))
         })
         .collect();
 
     let mut profile_response: ElderProfileResponse = profile.into();
-    if membership.role == "volunteer" {
+    if case_role == CaseRole::Volunteer {
         profile_response.health_notes = None;
     }
 
@@ -472,7 +486,7 @@ async fn load_case_detail(
         case_model,
         profile_response,
         visible_clues,
-        membership.role,
+        case_role,
     ))
 }
 
@@ -493,22 +507,23 @@ async fn require_case_role<C: ConnectionTrait>(
     db: &C,
     user_id: &str,
     case_id: &str,
-    allowed_roles: &[&str],
-) -> Result<case_memberships::Model, ApiError> {
+    allowed_roles: &[CaseRole],
+) -> Result<CaseRole, ApiError> {
     let membership = membership_for_case(db, user_id, case_id).await?;
-    if !allowed_roles.contains(&membership.role.as_str()) {
+    let case_role = case_role_from_database(&membership.role)?;
+    if !allowed_roles.contains(&case_role) {
         return Err(ApiError::Forbidden(
             "this account cannot perform the requested case action".to_owned(),
         ));
     }
-    Ok(membership)
+    Ok(case_role)
 }
 
 async fn insert_membership<C: ConnectionTrait>(
     db: &C,
     case_id: &str,
     user_id: &str,
-    role: &str,
+    case_role: CaseRole,
     created_by_user_id: Option<&str>,
     created_at: &str,
 ) -> Result<(), ApiError> {
@@ -516,13 +531,29 @@ async fn insert_membership<C: ConnectionTrait>(
         id: Set(new_id()),
         case_id: Set(case_id.to_owned()),
         user_id: Set(user_id.to_owned()),
-        role: Set(role.to_owned()),
+        role: Set(case_role.to_string()),
         created_by_user_id: Set(created_by_user_id.map(str::to_owned)),
         created_at: Set(created_at.to_owned()),
     }
     .insert(db)
     .await?;
     Ok(())
+}
+
+fn global_role_from_database(value: &str) -> Result<GlobalRole, ApiError> {
+    GlobalRole::try_from(value).map_err(|error| {
+        ApiError::Database(sea_orm::DbErr::Custom(format!(
+            "users.role violates the global role constraint: {error}"
+        )))
+    })
+}
+
+fn case_role_from_database(value: &str) -> Result<CaseRole, ApiError> {
+    CaseRole::try_from(value).map_err(|error| {
+        ApiError::Database(sea_orm::DbErr::Custom(format!(
+            "case_memberships.role violates the case role constraint: {error}"
+        )))
+    })
 }
 
 async fn write_audit<C: ConnectionTrait>(
@@ -536,7 +567,7 @@ async fn write_audit<C: ConnectionTrait>(
 ) -> Result<(), ApiError> {
     let metadata = metadata.map(|mut value| {
         if let Some(object) = value.as_object_mut() {
-            object.insert("actor_role".to_owned(), json!(auth.role));
+            object.insert("actor_global_role".to_owned(), json!(auth.global_role));
         }
         value.to_string()
     });
@@ -631,6 +662,7 @@ mod tests {
             AddCaseMemberRequest, CreateCaseRequest, CreateClueRequest, LoginRequest,
             ReviewClueRequest, UpdateCaseStatusRequest,
         },
+        roles::CaseRole,
         services::auth_service,
     };
 
@@ -699,7 +731,7 @@ mod tests {
             &case.id,
             AddCaseMemberRequest {
                 email: "commander@demo.invalid".to_owned(),
-                role: "commander".to_owned(),
+                case_role: CaseRole::Commander,
             },
         )
         .await
@@ -711,7 +743,7 @@ mod tests {
             &case.id,
             AddCaseMemberRequest {
                 email: "volunteer@demo.invalid".to_owned(),
-                role: "volunteer".to_owned(),
+                case_role: CaseRole::Volunteer,
             },
         )
         .await
