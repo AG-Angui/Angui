@@ -137,7 +137,10 @@ Branch and internal pull request previews reuse the successful CI artifacts.
 They mount the `angui`, `angui-admin`, `migration`, and frontend `dist` files
 into one fixed local runtime image; they never build or push a new application
 image for each commit. The local runtime image is automatically built once as
-`angui-preview-runtime:bookworm` if it does not already exist.
+`angui-preview-runtime:bookworm` if it does not already exist. Each preview
+uses a project-local Docker volume containing a SQLite database shared by the
+migration, bootstrap, and API containers; no external database service is
+needed for a complete preview.
 
 The VM-local Traefik publishes previews through Docker labels. The parent host's
 Nginx owns the wildcard certificate and forwards requests to the VM while
@@ -153,6 +156,17 @@ PR previews are only deployed when the PR head repository is this repository.
 Artifacts from external forks never run on the Docker-capable deployment host.
 When a PR is closed, `pr-preview-cleanup.yml` runs the trusted default-branch
 cleanup definition without checking out PR code.
+
+Every deployment first removes the preview's SQLite volume, then runs
+`migration up` and `angui-admin bootstrap-demo`. The workflow creates a new
+random password and uses it for the five `.invalid` demo accounts. After the
+API health check passes, `pr-preview.yml` posts the preview URL and those
+credentials to the PR. A later deployment of that preview invalidates all
+previous login sessions, accounts, data, and passwords; old PR comments are
+therefore informational only and must not be used as credentials. The Preview
+Compose configuration explicitly marks the bootstrap container as `preview`
+and enables its one-shot switch; `angui-admin` rejects the command in
+production, an unknown environment, or without that switch.
 
 Pushing a tag matching `v*` runs `release.yml`. It runs the full release checks,
 builds and pushes immutable `ghcr.io/<repository>-api:<tag>` and
@@ -190,11 +204,6 @@ Recommended variables:
 - `PREVIEW_PROXY_NETWORK=angui-proxy`
 - `PREVIEW_RUNTIME_IMAGE=angui-preview-runtime:bookworm`
 - `PREVIEW_ENVIRONMENT=preview`
-
-Required repository secret:
-
-- `PREVIEW_DEMO_PASSWORD` with 12-256 characters; used only by the explicit
-  one-shot demo account bootstrap service.
 
 The VM needs Docker Engine, Compose v2, `curl`, port 80 reachable from the
 parent Nginx, and permission for the runner service account to run Docker. No

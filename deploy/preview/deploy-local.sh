@@ -95,6 +95,10 @@ PREVIEW_DEMO_PASSWORD=${PREVIEW_DEMO_PASSWORD}
 PREVIEW_PROXY_NETWORK=${PREVIEW_PROXY_NETWORK:-angui-proxy}
 EOF
 
+  # A preview is a fresh, disposable environment. Removing its named SQLite
+  # volume before starting ensures prior data, sessions, and demo credentials
+  # cannot survive into the next deployment of the same preview.
+  compose down --volumes --remove-orphans
   compose up --detach --force-recreate --remove-orphans
   for _ in $(seq 1 30); do
     api_id="$(compose ps --quiet api)"

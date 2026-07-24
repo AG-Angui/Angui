@@ -176,7 +176,7 @@ npm run migrate:status
 - 邮箱在写入和登录查询前统一去除首尾空白并转为小写。
 - 账号删除不是当前能力；禁用账号使用 `status=disabled`，认证时立即拒绝。
 - 管理员全局角色不构成案件成员关系，不能绕过 `case_memberships` 读取业务数据。
-- 显式运行 `angui-admin bootstrap-demo` 会创建或更新五个 `.invalid` 演示账号（家属、指挥、志愿者、新人、管理员），并撤销这些账号之前的活动会话。`learner` 与 `admin` 都不是案件成员角色；后者也不能因全局管理员身份绕过 `case_memberships` 读取案件。
+- 显式运行 `angui-admin bootstrap-demo` 会创建或更新五个 `.invalid` 演示账号（家属、指挥、志愿者、新人、管理员），并撤销这些账号之前的活动会话。该命令仅在 `ANGUI_RUNTIME_ENV` 为 `development`、`preview` 或 `test`，且 `ANGUI_ALLOW_DEMO_BOOTSTRAP=1` 时允许执行。`learner` 与 `admin` 都不是案件成员角色；后者也不能因全局管理员身份绕过 `case_memberships` 读取案件。
 
 ## 12. 问询会话
 

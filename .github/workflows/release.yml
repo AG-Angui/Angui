@@ -193,6 +193,13 @@ jobs:
           name: angui-release-preview-${{ github.sha }}
           path: .preview
 
+      - name: Generate this deployment's temporary login password
+        id: credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'password=%s\n' "$(openssl rand -hex 24)" >> "${GITHUB_OUTPUT}"
+
       - name: Deploy permanent tag preview locally
         shell: bash
         env:
@@ -202,7 +209,7 @@ jobs:
           PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'https' }}
           PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
-          PREVIEW_DEMO_PASSWORD: ${{ secrets.PREVIEW_DEMO_PASSWORD }}
+          PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
           PREVIEW_REPOSITORY_DIR: ${{ github.workspace }}
           PREVIEW_BACKEND_DIR: ${{ github.workspace }}/.preview/backend
           PREVIEW_FRONTEND_DIR: ${{ github.workspace }}/.preview/frontend
@@ -217,7 +224,15 @@ jobs:
           chmod +x deploy/preview/deploy-local.sh
           deploy/preview/deploy-local.sh deploy
 
-      - name: Write permanent tag preview URL
+      - name: Write temporary tag preview access
         env:
           PREVIEW_URL: ${{ vars.PREVIEW_SCHEME || 'https' }}://tag-${{ needs.build-and-publish.outputs.tag_slug }}.${{ vars.PREVIEW_BASE_DOMAIN }}
-        run: echo "Tag preview deployed at ${PREVIEW_URL}" >> "${GITHUB_STEP_SUMMARY}"
+          PREVIEW_PASSWORD: ${{ steps.credentials.outputs.password }}
+        run: |
+          {
+            echo "Tag preview deployed at ${PREVIEW_URL}"
+            echo
+            echo "Temporary password for family@demo.invalid, commander@demo.invalid, volunteer@demo.invalid, learner@demo.invalid, and admin@demo.invalid: \`${PREVIEW_PASSWORD}\`"
+            echo
+            echo "The next deployment resets this preview's SQLite database and invalidates these credentials."
+          } >> "${GITHUB_STEP_SUMMARY}"

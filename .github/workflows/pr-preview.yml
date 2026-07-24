@@ -28,6 +28,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -72,6 +73,15 @@ jobs:
             echo "origin=${PREVIEW_SCHEME}://pr-${PR_NUMBER}-${short_sha}.${PREVIEW_BASE_DOMAIN}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Generate this deployment's temporary login password
+        id: credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Hex encoding yields a printable 48-character value that meets the
+          # bootstrap command's 12-256 character requirement without escaping.
+          printf 'password=%s\n' "$(openssl rand -hex 24)" >> "${GITHUB_OUTPUT}"
+
       - name: Deploy pull request preview locally
         shell: bash
         env:
@@ -84,7 +94,7 @@ jobs:
           PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
           PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
-          PREVIEW_DEMO_PASSWORD: ${{ secrets.PREVIEW_DEMO_PASSWORD }}
+          PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
           PREVIEW_REPOSITORY_DIR: ${{ github.workspace }}
           PREVIEW_BACKEND_DIR: ${{ github.workspace }}/.preview/backend
           PREVIEW_FRONTEND_DIR: ${{ github.workspace }}/.preview/frontend
@@ -96,3 +106,48 @@ jobs:
         env:
           PREVIEW_URL: ${{ steps.preview.outputs.origin }}
         run: echo "PR preview deployed at ${PREVIEW_URL}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Reply with temporary preview access
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PREVIEW_URL: ${{ steps.preview.outputs.origin }}
+          PREVIEW_PASSWORD: ${{ steps.credentials.outputs.password }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          comment_body="$(cat <<EOF
+          ## Preview ready
+
+          The preview for this build is available at ${PREVIEW_URL}.
+
+          Temporary demo accounts (all use the password \`${PREVIEW_PASSWORD}\`):
+
+          | Role | Email |
+          | --- | --- |
+          | Family | \`family@demo.invalid\` |
+          | Commander | \`commander@demo.invalid\` |
+          | Volunteer | \`volunteer@demo.invalid\` |
+          | Learner | \`learner@demo.invalid\` |
+          | Administrator | \`admin@demo.invalid\` |
+
+          > These accounts and all preview data belong only to this deployment. The next preview deployment resets the SQLite database and invalidates these credentials.
+          EOF
+          )"
+          json_escape() {
+            local value="$1"
+            value="${value//\\/\\\\}"
+            value="${value//\"/\\\"}"
+            value="${value//$'\n'/\\n}"
+            value="${value//$'\r'/\\r}"
+            value="${value//$'\t'/\\t}"
+            printf '%s' "${value}"
+          }
+          curl --fail --silent --show-error --output /dev/null \
+            --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data "{\"body\":\"$(json_escape "${comment_body}")\"}" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"

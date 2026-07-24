@@ -1,29 +1,13 @@
 services:
-  database:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: angui
-      POSTGRES_USER: angui
-      POSTGRES_PASSWORD: angui
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U angui -d angui"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
   migrate:
     image: ${API_IMAGE:?API_IMAGE is required}
     restart: "no"
     command: ["migration", "up"]
-    depends_on:
-      database:
-        condition: service_healthy
     environment:
-      DATABASE_URL: ${PREVIEW_DATABASE_URL:-postgres://angui:angui@database:5432/angui}
+      DATABASE_URL: ${PREVIEW_DATABASE_URL:-sqlite:///app/data/angui.db?mode=rwc}
       RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - preview-data:/app/data
 
   bootstrap:
     image: ${API_IMAGE:?API_IMAGE is required}
@@ -33,8 +17,12 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: ${PREVIEW_DATABASE_URL:-postgres://angui:angui@database:5432/angui}
+      DATABASE_URL: ${PREVIEW_DATABASE_URL:-sqlite:///app/data/angui.db?mode=rwc}
       ANGUI_DEMO_PASSWORD: ${PREVIEW_DEMO_PASSWORD:?PREVIEW_DEMO_PASSWORD is required}
+      ANGUI_RUNTIME_ENV: preview
+      ANGUI_ALLOW_DEMO_BOOTSTRAP: "1"
+    volumes:
+      - preview-data:/app/data
 
   api:
     image: ${API_IMAGE:?API_IMAGE is required}
@@ -46,8 +34,10 @@ services:
       ANGUI_HOST: 0.0.0.0
       ANGUI_PORT: 8080
       ANGUI_FRONTEND_ORIGIN: ${PREVIEW_ORIGIN:?PREVIEW_ORIGIN is required}
-      DATABASE_URL: ${PREVIEW_DATABASE_URL:-postgres://angui:angui@database:5432/angui}
+      DATABASE_URL: ${PREVIEW_DATABASE_URL:-sqlite:///app/data/angui.db?mode=rwc}
       RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - preview-data:/app/data
 
   web:
     image: ${WEB_IMAGE:?WEB_IMAGE is required}
@@ -59,4 +49,4 @@ services:
       - ${PREVIEW_BIND_ADDRESS:-0.0.0.0}:${PREVIEW_PORT:?PREVIEW_PORT is required}:80
 
 volumes:
-  postgres-data:
+  preview-data:

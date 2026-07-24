@@ -96,6 +96,8 @@ npm run migrate:status
 显式创建固定的模拟账号。密码只通过当前终端环境变量提供，不写入仓库；管理员账号也不自动获得案件成员权限：
 
 ```powershell
+$env:ANGUI_RUNTIME_ENV = "development"
+$env:ANGUI_ALLOW_DEMO_BOOTSTRAP = "1"
 $env:ANGUI_DEMO_PASSWORD = "<set-in-GitHub-Actions-secret>"
 npm run auth:bootstrap-demo
 ```
@@ -146,7 +148,7 @@ npm run migrate:status
 
 GitHub Actions 已配置 Rust/前端质量门禁、PostgreSQL/MySQL 迁移检查、可选 OpenAI-compatible 自定义 API 评审，以及可选 GHCR 分支镜像和远程预览。仓库不再托管独立 Gemini workflow；如需 Gemini，应按当前官方企业集成方式配置。镜像构建与部署默认关闭，只有设置对应仓库变量后才会运行；远程部署还需要明确配置 SSH/GHCR 凭据。详细变量、密钥、配额和自托管 runner 边界见 [.github/WORKFLOWS.md](./.github/WORKFLOWS.md)。
 
-预览容器会先显式运行 `migration up`，再通过 `angui-admin bootstrap-demo` 初始化 `.invalid` 模拟账号，全部成功后才启动 API；应用本身仍不会自动修改数据库结构或创建账号。
+预览容器会在独立 SQLite 卷中显式运行 `migration up`，再通过 `angui-admin bootstrap-demo` 初始化五个 `.invalid` 模拟账号，全部成功后才启动 API；应用本身仍不会自动修改数据库结构或创建账号。Preview Compose 会显式设置 `ANGUI_RUNTIME_ENV=preview` 和 `ANGUI_ALLOW_DEMO_BOOTSTRAP=1`；命令在 production、未知环境或缺少开关时一律拒绝执行。每次预览部署都会销毁并重建该 SQLite 卷，生成新的临时密码；PR 预览健康检查通过后会在对应 PR 回帖给出预览地址和本次账号凭据，下一次预览部署即失效。
 
 任何真实密钥、真实案件数据和个人信息都不得提交到仓库。
 
