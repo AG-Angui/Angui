@@ -15,6 +15,7 @@
 - API 说明：[docs/API.md](./docs/API.md)
 - 数据库与迁移规范：[docs/DATABASE.md](./docs/DATABASE.md)
 - 数据与 AI 规范：[docs/DATA_AND_AI.md](./docs/DATA_AND_AI.md)
+- AI Gateway 配置与协议边界：[docs/AI_GATEWAY.md](./docs/AI_GATEWAY.md)
 - 安全与隐私边界：[docs/SECURITY_AND_PRIVACY.md](./docs/SECURITY_AND_PRIVACY.md)
 - Demo 与初赛交付：[docs/DEMO_AND_DELIVERY.md](./docs/DEMO_AND_DELIVERY.md)
 - 贡献指南：[CONTRIBUTING.md](./CONTRIBUTING.md)
