@@ -377,7 +377,11 @@ export function FamilyIntakeForm({
               </div>
             )}
             <div className="mt-5 flex flex-wrap gap-2">
-              <Button variant="primary" onPress={() => void confirmCase()} isDisabled={isBusy || draft.confirmation_blocked_reasons.length > 0}>
+              <Button
+                variant="primary"
+                onPress={() => void confirmCase()}
+                isDisabled={isBusy || confirmReviewOpen || draft.confirmation_blocked_reasons.length > 0}
+              >
                 {confirmReviewOpen ? '请完成二次确认' : '人工确认并创建案件'}
               </Button>
               <Button variant="ghost" onPress={requestCancel} isDisabled={isBusy}>暂不确认</Button>

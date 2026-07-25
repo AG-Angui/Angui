@@ -146,6 +146,7 @@ describe('FamilyIntakeForm', () => {
 
     expect(mocked.confirmIntakeSession).not.toHaveBeenCalled()
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '请完成二次确认' })).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: '确认并创建案件' }))
     await waitFor(() => expect(mocked.confirmIntakeSession).toHaveBeenCalledTimes(1))
