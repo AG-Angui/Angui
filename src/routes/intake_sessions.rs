@@ -3,7 +3,10 @@ use actix_web::{HttpResponse, web};
 use crate::{
     app_state::AppState,
     error::ApiError,
-    models::{AuthenticatedUser, CreateIntakeSessionRequest, SubmitIntakeAnswerRequest},
+    models::{
+        AuthenticatedUser, ConfirmIntakeSessionRequest, CreateIntakeSessionRequest,
+        SubmitIntakeAnswerRequest,
+    },
     services::intake_session_service,
 };
 
@@ -14,8 +17,42 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route(
                 "/{session_id}/answers",
                 web::post().to(submit_intake_answer),
+            )
+            .route(
+                "/{session_id}/profile-draft",
+                web::get().to(get_intake_profile_draft),
+            )
+            .route(
+                "/{session_id}/confirm",
+                web::post().to(confirm_intake_session),
             ),
     );
+}
+
+async fn get_intake_profile_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    let draft =
+        intake_session_service::get_intake_profile_draft(&state.db, &auth, &session_id).await?;
+    Ok(HttpResponse::Ok().json(draft))
+}
+
+async fn confirm_intake_session(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    request: web::Json<ConfirmIntakeSessionRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let confirmation = intake_session_service::confirm_intake_session(
+        &state.db,
+        &auth,
+        &session_id,
+        request.into_inner(),
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(confirmation))
 }
 
 async fn submit_intake_answer(

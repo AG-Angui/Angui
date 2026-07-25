@@ -1,3 +1,4 @@
+pub mod ai_prompt_templates;
 pub mod audit_events;
 pub mod auth_sessions;
 pub mod case_memberships;

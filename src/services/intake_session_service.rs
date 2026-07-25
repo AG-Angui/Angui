@@ -8,12 +8,14 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, intake_question_definitions, intake_session_answers, intake_sessions,
+        audit_events, cases, intake_question_definitions, intake_session_answers, intake_sessions,
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakeQuestion,
-        IntakeSessionResponse, SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
+        AuthenticatedUser, ConfirmIntakeSessionRequest, ConfirmIntakeSessionResponse,
+        CreateCaseRequest, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakeProfileDraft,
+        IntakeProfileDraftFields, IntakeQuestion, IntakeSessionResponse, SubmitIntakeAnswerRequest,
+        SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
 };
@@ -48,6 +50,8 @@ pub async fn create_intake_session(
         question_set_version: Set(question_set_version),
         status: Set("collecting".to_owned()),
         answers_json: Set(answers_json),
+        confirmed_by_user_id: Set(None),
+        confirmed_at: Set(None),
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp),
     }
@@ -190,6 +194,180 @@ pub async fn submit_intake_answer(
         missing_fields,
         next_question,
     ))
+}
+
+pub async fn get_intake_profile_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<IntakeProfileDraft, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let questions = questions_for_version(db, session.question_set_version).await?;
+    let answers = parse_answers(&session)?;
+
+    Ok(IntakeProfileDraft {
+        status: "draft".to_owned(),
+        source_scope: "family_provided intake answers from this session only".to_owned(),
+        generated_at: session.updated_at.clone(),
+        requires_human_confirmation: true,
+        profile: IntakeProfileDraftFields {
+            physical_description: answers.basic_information.clone(),
+            clothing_description: answers.belongings.clone(),
+            health_notes: answers.health_status.clone(),
+            mobility_notes: answers.health_status.clone(),
+            transportation_ability: answers.transport_ability.clone(),
+            frequent_locations: answers.frequent_locations.clone(),
+            last_seen_information: answers.last_seen.clone(),
+            behavior_habits: answers.behavior_habits.clone(),
+        },
+        missing_fields: missing_fields(&answers, &questions),
+    })
+}
+
+pub async fn confirm_intake_session(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: ConfirmIntakeSessionRequest,
+) -> Result<ConfirmIntakeSessionResponse, ApiError> {
+    require_operational_member(auth)?;
+    if !request.human_confirmed {
+        return Err(ApiError::Validation(
+            "human_confirmed must be true before creating a case".to_owned(),
+        ));
+    }
+    let case_request = case_request_from_confirmed_profile(request);
+    let transaction = db.begin().await?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+
+    if let Some(case_id) = &session.case_id {
+        let case_model = cases::Entity::find_by_id(case_id)
+            .one(&transaction)
+            .await?
+            .ok_or(ApiError::Internal)?;
+        transaction.commit().await?;
+        return Ok(confirmed_response(case_model, session.confirmed_at));
+    }
+    if session.status != "ready_for_confirmation" {
+        return Err(ApiError::Conflict(
+            "intake session is not ready for confirmation".to_owned(),
+        ));
+    }
+
+    let timestamp = now();
+    let case_model =
+        crate::services::case_service::insert_case_records(&transaction, &case_request, &timestamp)
+            .await?;
+    crate::services::case_service::insert_membership(
+        &transaction,
+        &case_model.id,
+        &auth.id,
+        crate::roles::CaseRole::Family,
+        Some(&auth.id),
+        &timestamp,
+    )
+    .await?;
+    crate::services::case_service::write_audit(
+        &transaction,
+        Some(case_model.id.clone()),
+        auth,
+        "case.created",
+        "case",
+        case_model.id.clone(),
+        Some(json!({ "status": "active", "source": "intake_session_confirmation" })),
+    )
+    .await?;
+
+    let mut updated_session = session.into_active_model();
+    updated_session.case_id = Set(Some(case_model.id.clone()));
+    updated_session.status = Set("confirmed".to_owned());
+    updated_session.confirmed_by_user_id = Set(Some(auth.id.clone()));
+    updated_session.confirmed_at = Set(Some(timestamp.clone()));
+    updated_session.updated_at = Set(timestamp.clone());
+    updated_session
+        .update(&transaction)
+        .await
+        .map_err(|error| {
+            if is_unique_constraint_error(&error) {
+                ApiError::Conflict(
+                "intake session was confirmed by a concurrent request; retry to retrieve the case"
+                    .to_owned(),
+            )
+            } else {
+                ApiError::Database(error)
+            }
+        })?;
+    write_audit(
+        &transaction,
+        auth,
+        "intake_session.confirmed",
+        session_id.to_owned(),
+        Some(json!({ "case_id": case_model.id, "confirmation_status": "human_confirmed" })),
+    )
+    .await?;
+
+    transaction.commit().await?;
+    Ok(confirmed_response(case_model, Some(timestamp)))
+}
+
+fn require_operational_member(auth: &AuthenticatedUser) -> Result<(), ApiError> {
+    if auth.account_type != AccountType::Member {
+        return Err(ApiError::Forbidden(
+            "only operational member accounts can use intake sessions".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_session_creator(
+    session: &intake_sessions::Model,
+    auth: &AuthenticatedUser,
+) -> Result<(), ApiError> {
+    if session.created_by_user_id != auth.id {
+        return Err(ApiError::NotFound(
+            "intake session was not found".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_answers(session: &intake_sessions::Model) -> Result<IntakeInitialAnswers, ApiError> {
+    serde_json::from_str(&session.answers_json).map_err(|_| ApiError::Internal)
+}
+
+fn case_request_from_confirmed_profile(request: ConfirmIntakeSessionRequest) -> CreateCaseRequest {
+    CreateCaseRequest {
+        display_name: request.profile.display_name,
+        age: request.profile.age,
+        gender: request.profile.gender,
+        physical_description: request.profile.physical_description,
+        clothing_description: request.profile.clothing_description,
+        health_notes: request.profile.health_notes,
+        last_seen_at: request.profile.last_seen_at,
+        last_seen_location: Some(request.profile.last_seen_location),
+    }
+}
+
+fn confirmed_response(
+    case_model: cases::Model,
+    confirmed_at: Option<String>,
+) -> ConfirmIntakeSessionResponse {
+    ConfirmIntakeSessionResponse {
+        case_id: case_model.id,
+        case_code: case_model.case_code,
+        status: case_model.status,
+        confirmation_status: "human_confirmed".to_owned(),
+        confirmed_at: confirmed_at.unwrap_or(case_model.updated_at),
+    }
 }
 
 fn duplicate_answer_conflict() -> ApiError {

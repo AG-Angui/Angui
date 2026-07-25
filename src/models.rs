@@ -71,6 +71,28 @@ pub struct SubmitIntakeAnswerRequest {
     pub answer: String,
 }
 
+/// A family-reviewed profile is intentionally distinct from the draft built
+/// from intake answers. Only this request can create formal case records.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmIntakeSessionRequest {
+    pub profile: ConfirmedIntakeProfile,
+    pub human_confirmed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmedIntakeProfile {
+    pub display_name: String,
+    pub age: Option<i16>,
+    pub gender: Option<String>,
+    pub physical_description: Option<String>,
+    pub clothing_description: Option<String>,
+    pub health_notes: Option<String>,
+    pub last_seen_at: Option<String>,
+    pub last_seen_location: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct IntakeInitialAnswers {
@@ -136,6 +158,37 @@ pub struct IntakeCandidateField {
     pub generated_at: String,
     pub model: Option<String>,
     pub template_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeProfileDraft {
+    pub status: String,
+    pub source_scope: String,
+    pub generated_at: String,
+    pub requires_human_confirmation: bool,
+    pub profile: IntakeProfileDraftFields,
+    pub missing_fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeProfileDraftFields {
+    pub physical_description: Option<String>,
+    pub clothing_description: Option<String>,
+    pub health_notes: Option<String>,
+    pub mobility_notes: Option<String>,
+    pub transportation_ability: Option<String>,
+    pub frequent_locations: Option<String>,
+    pub last_seen_information: Option<String>,
+    pub behavior_habits: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConfirmIntakeSessionResponse {
+    pub case_id: String,
+    pub case_code: String,
+    pub status: String,
+    pub confirmation_status: String,
+    pub confirmed_at: String,
 }
 
 #[derive(Clone, Debug, Serialize)]

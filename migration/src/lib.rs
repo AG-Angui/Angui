@@ -13,6 +13,8 @@ mod m0010_create_intake_sessions;
 mod m0011_create_intake_question_definitions;
 mod m0012_split_account_type_and_capabilities;
 mod m0013_create_intake_session_answers;
+mod m0014_confirm_intake_sessions;
+mod m0015_create_intake_prompt_templates;
 
 use sea_orm_migration::sea_orm::DbBackend;
 
@@ -35,6 +37,8 @@ impl MigratorTrait for Migrator {
             Box::new(m0011_create_intake_question_definitions::Migration),
             Box::new(m0012_split_account_type_and_capabilities::Migration),
             Box::new(m0013_create_intake_session_answers::Migration),
+            Box::new(m0014_confirm_intake_sessions::Migration),
+            Box::new(m0015_create_intake_prompt_templates::Migration),
         ]
     }
 }
