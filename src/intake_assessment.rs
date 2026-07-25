@@ -18,6 +18,16 @@ pub async fn evaluate(
     else {
         return assessments;
     };
+    let available_seconds = follow_up_at.timestamp() - last_seen_at.timestamp();
+    if available_seconds < 0 {
+        assessments.push(blocking(
+            "structured.follow_up_at",
+            "time_order_impossible",
+            "The follow-up time is earlier than the last-seen time.",
+            "Check the two times or mark the uncertain time as unknown.",
+        ));
+        return assessments;
+    }
     let (Some(origin), Some(destination)) = (&facts.last_seen_location, &facts.follow_up_location)
     else {
         return assessments;
@@ -44,16 +54,6 @@ pub async fn evaluate(
             "coordinate_system_unverified",
             "The route estimate requires GCJ-02 coordinates; please confirm the source coordinate system.",
             "Confirm the coordinate system before relying on route estimates.",
-        ));
-        return assessments;
-    }
-    let available_seconds = follow_up_at.timestamp() - last_seen_at.timestamp();
-    if available_seconds < 0 {
-        assessments.push(blocking(
-            "structured.follow_up_at",
-            "time_order_impossible",
-            "The follow-up time is earlier than the last-seen time.",
-            "Check the two times or mark the uncertain time as unknown.",
         ));
         return assessments;
     }
@@ -349,6 +349,23 @@ mod tests {
                 .iter()
                 .any(|result| result.severity == "blocking")
         );
+    }
+
+    #[actix_web::test]
+    async fn time_order_conflict_blocks_confirmation_without_locations() {
+        let assessment = evaluate(
+            &IntakeStructuredFacts {
+                last_seen_at: Some("2026-07-25T15:00:00+08:00".to_owned()),
+                follow_up_at: Some("2026-07-25T14:59:59+08:00".to_owned()),
+                ..Default::default()
+            },
+            &AmapService::disabled(),
+        )
+        .await;
+
+        assert!(assessment.iter().any(|result| {
+            result.conflict_type == "time_order_impossible" && result.severity == "blocking"
+        }));
     }
 
     #[actix_web::test]
