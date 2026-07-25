@@ -98,17 +98,19 @@ export function FamilyIntakeForm({
   const sourceOptions = useMemo(() => uniqueSourceOptions(draft), [draft])
 
   const loadDraft = useCallback(async (sessionId: string, initializeProfile: boolean) => {
-    if (!token) return
+    if (!token) return null
     try {
       const nextDraft = await getIntakeDraft(token, sessionId)
       setDraft(nextDraft)
       setAssessments(nextDraft.assessments)
       if (initializeProfile) setProfile(profileFromDraft(nextDraft))
+      return nextDraft
     } catch (cause) {
       setError(messageFrom(cause))
       if (cause instanceof ApiClientError && (cause.status === 403 || cause.status === 404)) {
         setDraft(null)
       }
+      return null
     }
   }, [token])
 
@@ -192,7 +194,7 @@ export function FamilyIntakeForm({
         setEditSource(null)
         setEditAnswer('')
         const refreshed = await loadDraft(next.id, false)
-        if (refreshed) syncProfileFields(refreshed, replacedFields)
+        if (refreshed) setProfile((current) => syncProfileFields(current, refreshed, replacedFields))
       } else {
         setAnswer('')
         if (next.status === 'ready_for_confirmation') {
@@ -572,6 +574,27 @@ function profileFromDraft(draft: IntakeDraft): ConfirmedIntakeProfile {
     health_notes: draft.profile.health_notes,
     last_seen_location: draft.profile.last_seen_information ?? '',
   }
+}
+
+function syncProfileFields(current: ConfirmedIntakeProfile, draft: IntakeDraft, replacedFields: string[]) {
+  const next = { ...current }
+  for (const field of replacedFields) {
+    switch (field) {
+      case 'physical_description':
+        next.physical_description = draft.profile.physical_description
+        break
+      case 'clothing_description':
+        next.clothing_description = draft.profile.clothing_description
+        break
+      case 'health_notes':
+        next.health_notes = draft.profile.health_notes
+        break
+      case 'last_seen_information':
+        next.last_seen_location = draft.profile.last_seen_information ?? ''
+        break
+    }
+  }
+  return next
 }
 
 function normalizedProfile(profile: ConfirmedIntakeProfile): ConfirmedIntakeProfile {
