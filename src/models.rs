@@ -382,8 +382,25 @@ pub struct CreateCasePlaceRequest {
     pub address: String,
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
-    pub source: String,
-    pub visibility: String,
+    pub visibility: PlaceVisibility,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceVisibility {
+    Public,
+    Confirmed,
+    Internal,
+}
+
+impl PlaceVisibility {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Confirmed => "confirmed",
+            Self::Internal => "internal",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -493,6 +510,13 @@ pub struct CaseAttachmentResponse {
     pub created_at: String,
     pub updated_at: String,
     pub is_own_submission: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CaseResourceConfigurationResponse {
+    pub attachment_max_image_bytes: usize,
+    pub attachment_max_per_case: u64,
+    pub case_place_types: Vec<String>,
 }
 
 impl From<elder_profiles::Model> for ElderProfileResponse {

@@ -13,9 +13,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addCaseMember,
   createCasePlace,
-  createCase,
   createClue,
   getCase,
+  getCaseResourceConfiguration,
   listCases,
   reviewClue,
   updateCaseStatus,
@@ -25,9 +25,9 @@ import type {
   CaseDetail,
   CaseListItem,
   CaseRole,
+  CaseResourceConfiguration,
   CaseStatus,
   ClueReviewStatus,
-  CreateCasePayload,
   CreateCasePlacePayload,
   PlaceType,
   PlaceVisibility,
@@ -57,15 +57,13 @@ const statusLabels: Record<string, string> = {
   duplicate: '重复',
 }
 
-const emptyCase: CreateCasePayload = {
-  display_name: '',
-  age: null,
-  gender: null,
-  physical_description: null,
-  clothing_description: null,
-  health_notes: null,
-  last_seen_at: null,
-  last_seen_location: '',
+const placeTypeLabels: Record<string, string> = {
+  frequent: '常去地点',
+  key_location: '关键地点',
+  last_seen_context: '最后出现相关',
+  medical: '医疗',
+  shelter: '临时安置',
+  other: '其他',
 }
 
 export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
@@ -73,6 +71,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   const [cases, setCases] = useState<CaseListItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<CaseDetail | null>(null)
+  const [resourceConfiguration, setResourceConfiguration] = useState<CaseResourceConfiguration | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isDetailLoading, setIsDetailLoading] = useState(false)
   const [listError, setListError] = useState('')
@@ -107,13 +106,18 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     setIsDetailLoading(true)
     setDetailError('')
     try {
-      const nextDetail = await getCase(token, caseId)
+      const [nextDetail, nextResourceConfiguration] = await Promise.all([
+        getCase(token, caseId),
+        getCaseResourceConfiguration(token, caseId),
+      ])
       if (requestVersion !== detailRequestVersion.current) return
       setDetail(nextDetail)
+      setResourceConfiguration(nextResourceConfiguration)
     } catch (cause) {
       if (requestVersion !== detailRequestVersion.current) return
       setDetailError(messageFrom(cause))
       setDetail(null)
+      setResourceConfiguration(null)
     } finally {
       if (requestVersion === detailRequestVersion.current) setIsDetailLoading(false)
     }
@@ -130,6 +134,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     }
     detailRequestVersion.current += 1
     setDetail(null)
+    setResourceConfiguration(null)
     setDetailError('')
     setIsDetailLoading(false)
   }, [loadDetail, selectedId])
@@ -223,9 +228,10 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
               message={detailError}
               onRetry={() => selectedId && void loadDetail(selectedId)}
             />
-          ) : detail ? (
+          ) : detail && resourceConfiguration ? (
             <CaseDetailView
               detail={detail}
+              resourceConfiguration={resourceConfiguration}
               pendingCount={pendingCount}
               onChanged={async (message) => {
                 setNotice(message)
@@ -244,89 +250,14 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   )
 }
 
-export function CreateCaseForm({
-  onCancel,
-  onCreated,
-}: {
-  onCancel: () => void
-  onCreated: (detail: CaseDetail) => Promise<void>
-}) {
-  const { token } = useAuth()
-  const [form, setForm] = useState<CreateCasePayload>(emptyCase)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState('')
-
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!token) return
-    const validationError = validateCreateCase(form)
-    if (validationError) {
-      setError(validationError)
-      return
-    }
-    setIsSubmitting(true)
-    setError('')
-    try {
-      await onCreated(
-        await createCase(token, {
-          ...form,
-          display_name: form.display_name.trim(),
-          last_seen_location: form.last_seen_location?.trim() ?? '',
-          last_seen_at: form.last_seen_at ? new Date(form.last_seen_at).toISOString() : null,
-        }),
-      )
-      setForm(emptyCase)
-    } catch (cause) {
-      setError(messageFrom(cause))
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  return (
-    <section className="border-y border-slate-200 bg-white px-4 py-5 sm:px-5" aria-labelledby="create-case-title">
-      <h2 id="create-case-title" className="m-0 text-base font-bold text-slate-950">建立模拟案件</h2>
-      <form onSubmit={submit} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Field label="案件内称呼" required>
-          <Input value={form.display_name} maxLength={120} onChange={(event) => setForm({ ...form, display_name: event.target.value })} fullWidth required />
-        </Field>
-        <Field label="年龄">
-          <Input type="number" min={0} max={130} step={1} value={form.age ?? ''} onChange={(event) => setForm({ ...form, age: event.target.value ? Number(event.target.value) : null })} fullWidth />
-        </Field>
-        <Field label="性别">
-          <Input value={form.gender ?? ''} onChange={(event) => setForm({ ...form, gender: nullable(event.target.value) })} fullWidth />
-        </Field>
-        <Field label="最后出现地点" required>
-          <Input value={form.last_seen_location ?? ''} onChange={(event) => setForm({ ...form, last_seen_location: event.target.value })} fullWidth required />
-        </Field>
-        <Field label="最后出现时间">
-          <Input type="datetime-local" value={form.last_seen_at ?? ''} onChange={(event) => setForm({ ...form, last_seen_at: nullable(event.target.value) })} fullWidth />
-        </Field>
-        <Field label="衣着描述">
-          <Input value={form.clothing_description ?? ''} onChange={(event) => setForm({ ...form, clothing_description: nullable(event.target.value) })} fullWidth />
-        </Field>
-        <div className="sm:col-span-2 lg:col-span-3">
-          <Field label="体貌描述"><TextArea value={form.physical_description ?? ''} onChange={(event) => setForm({ ...form, physical_description: nullable(event.target.value) })} fullWidth rows={3} /></Field>
-        </div>
-        <div className="sm:col-span-2 lg:col-span-3">
-          <Field label="健康注意事项"><TextArea value={form.health_notes ?? ''} onChange={(event) => setForm({ ...form, health_notes: nullable(event.target.value) })} fullWidth rows={3} /></Field>
-        </div>
-        {error && <div className="sm:col-span-2 lg:col-span-3"><Message tone="error">{error}</Message></div>}
-        <div className="flex gap-2 sm:col-span-2 lg:col-span-3">
-          <Button type="submit" variant="primary" isDisabled={isSubmitting}><CirclePlus size={16} />{isSubmitting ? '正在建立' : '建立案件'}</Button>
-          <Button type="button" variant="ghost" onPress={onCancel}>取消</Button>
-        </div>
-      </form>
-    </section>
-  )
-}
-
 function CaseDetailView({
   detail,
+  resourceConfiguration,
   pendingCount,
   onChanged,
 }: {
   detail: CaseDetail
+  resourceConfiguration: CaseResourceConfiguration
   pendingCount: number
   onChanged: (message: string) => Promise<void>
 }) {
@@ -334,7 +265,7 @@ function CaseDetailView({
   const [clueContent, setClueContent] = useState('')
   const [clueLocation, setClueLocation] = useState('')
   const [clueOccurredAt, setClueOccurredAt] = useState('')
-  const [place, setPlace] = useState<CreateCasePlacePayload>({ name: '', place_type: 'frequent', address: '', longitude: null, latitude: null, source: 'family_report', visibility: 'confirmed' })
+  const [place, setPlace] = useState<CreateCasePlacePayload>({ name: '', place_type: '', address: '', longitude: null, latitude: null, visibility: 'confirmed' })
   const [attachment, setAttachment] = useState<File | null>(null)
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status)
   const [memberEmail, setMemberEmail] = useState('')
@@ -342,6 +273,8 @@ function CaseDetailView({
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const isCommander = detail.access_role === 'commander'
+  const canSubmitPlace = detail.access_role === 'family' || isCommander
+  const placeTypes = resourceConfiguration.case_place_types
   const statusOptions: CaseStatus[] = detail.status === 'active'
     ? ['active', 'resolved', 'closed']
     : detail.status === 'resolved'
@@ -349,6 +282,13 @@ function CaseDetailView({
       : ['closed']
 
   useEffect(() => setNextStatus(detail.status), [detail.status])
+  useEffect(() => {
+    setPlace((current) => (
+      placeTypes.includes(current.place_type)
+        ? current
+        : { ...current, place_type: placeTypes[0] ?? '' }
+    ))
+  }, [placeTypes])
 
   async function run(key: string, action: () => Promise<unknown>, message: string) {
     setBusy(key)
@@ -505,9 +445,8 @@ function CaseDetailView({
         )}
       </section>
 
-      {(detail.access_role === 'family' || isCommander) && (
-        <section className="grid gap-6 border-t border-slate-200 bg-slate-50 px-5 py-5 sm:px-6 lg:grid-cols-2" aria-label="补充地点和图片">
-          <div>
+      <section className={`grid gap-6 border-t border-slate-200 bg-slate-50 px-5 py-5 sm:px-6 ${canSubmitPlace ? 'lg:grid-cols-2' : ''}`} aria-label="补充地点和图片">
+          {canSubmitPlace && <div>
             <div className="flex items-center justify-between gap-3">
               <h3 className="m-0 text-base font-bold text-slate-950">补充地点</h3>
               <span className="text-xs text-slate-500">提交后待人工审核</span>
@@ -522,14 +461,15 @@ function CaseDetailView({
             </div>
             {detail.status !== 'closed' && <form className="mt-3 grid gap-3" onSubmit={(event) => {
               event.preventDefault()
-              if (!token || !place.name.trim() || !place.address.trim()) { setError('请填写地点名称和文字地址后再提交。'); return }
-              void run('place', () => createCasePlace(token, detail.id, { ...place, name: place.name.trim(), address: place.address.trim(), source: detail.access_role }), '地点已提交，正在等待人工审核').then((ok) => {
-                if (ok) setPlace({ name: '', place_type: 'frequent', address: '', longitude: null, latitude: null, source: 'family_report', visibility: 'confirmed' })
+              if (!token || !place.name.trim() || !place.address.trim() || !place.place_type) { setError('请填写地点名称、类型和文字地址后再提交。'); return }
+              if ((place.longitude === null) !== (place.latitude === null)) { setError('经度和纬度必须同时填写或同时留空。'); return }
+              void run('place', () => createCasePlace(token, detail.id, { ...place, name: place.name.trim(), address: place.address.trim() }), '地点已提交，正在等待人工审核').then((ok) => {
+                if (ok) setPlace({ name: '', place_type: placeTypes[0] ?? '', address: '', longitude: null, latitude: null, visibility: 'confirmed' })
               })
             }}>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="地点名称" required><Input value={place.name} maxLength={120} onChange={(event) => setPlace({ ...place, name: event.target.value })} fullWidth required /></Field>
-                <Field label="类型"><select className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={place.place_type} onChange={(event) => setPlace({ ...place, place_type: event.target.value as PlaceType })}><option value="frequent">常去地点</option><option value="key_location">关键地点</option><option value="last_seen_context">最后出现相关</option><option value="medical">医疗</option><option value="shelter">临时安置</option><option value="other">其他</option></select></Field>
+                <Field label="类型"><select className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={place.place_type} onChange={(event) => setPlace({ ...place, place_type: event.target.value as PlaceType })}>{placeTypes.map((type) => <option key={type} value={type}>{placeTypeLabels[type] ?? type}</option>)}</select></Field>
               </div>
               <Field label="文字地址" required><Input value={place.address} maxLength={500} onChange={(event) => setPlace({ ...place, address: event.target.value })} fullWidth required /></Field>
               <div className="grid gap-3 sm:grid-cols-3">
@@ -539,24 +479,23 @@ function CaseDetailView({
               </div>
               <Button type="submit" variant="secondary" isDisabled={busy === 'place'}>提交地点</Button>
             </form>}
-          </div>
+          </div>}
           <div>
-            <div className="flex items-center justify-between gap-3"><h3 className="m-0 text-base font-bold text-slate-950">补充图片</h3><span className="text-xs text-slate-500">仅 JPEG/PNG，最大 5 MiB</span></div>
+            <div className="flex items-center justify-between gap-3"><h3 className="m-0 text-base font-bold text-slate-950">补充图片</h3><span className="text-xs text-slate-500">仅 JPEG/PNG，最大 {formatBytes(resourceConfiguration.attachment_max_image_bytes)}</span></div>
             <div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
               {detail.attachments.length === 0 ? <p className="m-0 px-3 py-3 text-xs text-slate-500">暂无可查看的图片</p> : detail.attachments.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 px-3 py-3 text-sm"><span className="truncate text-slate-800">{item.original_filename}</span><span className="shrink-0 text-xs text-slate-500">{item.review_status === 'pending_review' ? '待人工审核' : item.review_status}</span></div>)}
             </div>
             {detail.status !== 'closed' && <form className="mt-3 grid gap-3" onSubmit={(event) => {
               event.preventDefault()
               if (!token || !attachment) { setError('请选择一张图片后再提交。'); return }
-              void run('attachment', () => uploadCaseAttachment(token, detail.id, attachment), '图片已提交，正在等待人工审核').then((ok) => { if (ok) setAttachment(null) })
+              void run('attachment', () => uploadCaseAttachment(token, detail.id, attachment, resourceConfiguration.attachment_max_image_bytes), '图片已提交，正在等待人工审核').then((ok) => { if (ok) setAttachment(null) })
             }}>
-              <input type="file" accept="image/jpeg,image/png" onChange={(event) => setAttachment(event.target.files?.[0] ?? null)} className="block w-full text-sm text-slate-700" />
+              <input key={attachment ? `${attachment.name}-${attachment.lastModified}` : 'no-file'} type="file" accept="image/jpeg,image/png" onChange={(event) => setAttachment(event.target.files?.[0] ?? null)} className="block w-full text-sm text-slate-700" />
               <Button type="submit" variant="secondary" isDisabled={busy === 'attachment'}>上传图片</Button>
               <p className="m-0 text-xs leading-5 text-slate-500">上传会由服务端重新编码并移除非必要的 EXIF/GPS 元数据；失败时不会显示为上传成功。</p>
             </form>}
           </div>
-        </section>
-      )}
+      </section>
     </div>
   )
 }
@@ -620,18 +559,6 @@ function nullable(value: string): string | null {
   return trimmed ? trimmed : null
 }
 
-function validateCreateCase(form: CreateCasePayload): string | null {
-  if (!form.display_name.trim()) return '请填写案件内称呼。'
-  if (!form.last_seen_location?.trim()) return '请填写最后出现地点。'
-  if (form.age !== null && (!Number.isInteger(form.age) || form.age < 0 || form.age > 130)) {
-    return '年龄应为 0 到 130 之间的整数。'
-  }
-  if (form.last_seen_at && Number.isNaN(new Date(form.last_seen_at).getTime())) {
-    return '最后出现时间格式无效。'
-  }
-  return null
-}
-
 function toIsoOrNull(value: string): string | null {
   if (!value) return null
   const date = new Date(value)
@@ -647,4 +574,8 @@ function formatDate(value: string | null): string | null {
   if (!value) return null
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatBytes(value: number): string {
+  return value >= 1024 * 1024 ? `${(value / (1024 * 1024)).toFixed(1)} MiB` : `${value} 字节`
 }

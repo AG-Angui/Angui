@@ -1,4 +1,4 @@
-import { apiRequest } from './client'
+import { ApiClientError, apiRequest } from './client'
 import type { AccountType, GlobalCapability } from './auth'
 
 export type CaseRole = 'family' | 'commander' | 'volunteer'
@@ -62,7 +62,7 @@ export interface CaseDetail {
   updated_at: string
 }
 
-export type PlaceType = 'frequent' | 'key_location' | 'last_seen_context' | 'medical' | 'shelter' | 'other'
+export type PlaceType = string
 export type PlaceVisibility = 'public' | 'confirmed' | 'internal'
 
 export interface CasePlace {
@@ -73,7 +73,7 @@ export interface CasePlace {
   address: string
   longitude: number | null
   latitude: number | null
-  source: string
+  source: CaseRole
   visibility: PlaceVisibility
   review_status: 'pending_review' | 'confirmed' | 'rejected'
   created_at: string
@@ -100,8 +100,13 @@ export interface CreateCasePlacePayload {
   address: string
   longitude: number | null
   latitude: number | null
-  source: string
   visibility: PlaceVisibility
+}
+
+export interface CaseResourceConfiguration {
+  attachment_max_image_bytes: number
+  attachment_max_per_case: number
+  case_place_types: string[]
 }
 
 export interface CreateCasePayload {
@@ -139,6 +144,13 @@ export function getCase(token: string, caseId: string): Promise<CaseDetail> {
   return apiRequest<CaseDetail>(`/cases/${caseId}`, {}, token)
 }
 
+export function getCaseResourceConfiguration(
+  token: string,
+  caseId: string,
+): Promise<CaseResourceConfiguration> {
+  return apiRequest<CaseResourceConfiguration>(`/cases/${caseId}/resource-configuration`, {}, token)
+}
+
 export function createCase(token: string, payload: CreateCasePayload): Promise<CaseDetail> {
   return apiRequest<CaseDetail>(
     '/cases',
@@ -163,7 +175,18 @@ export function createCasePlace(token: string, caseId: string, payload: CreateCa
   return apiRequest<CasePlace>(`/cases/${caseId}/places`, { method: 'POST', body: JSON.stringify(payload) }, token)
 }
 
-export function uploadCaseAttachment(token: string, caseId: string, file: File): Promise<CaseAttachment> {
+export function uploadCaseAttachment(
+  token: string,
+  caseId: string,
+  file: File,
+  maximumBytes: number,
+): Promise<CaseAttachment> {
+  if (!['image/jpeg', 'image/png'].includes(file.type)) {
+    throw new ApiClientError(400, 'validation_error', '仅可上传 JPEG 或 PNG 图片。')
+  }
+  if (file.size > maximumBytes) {
+    throw new ApiClientError(400, 'validation_error', `图片不能超过 ${maximumBytes} 字节。`)
+  }
   const body = new FormData()
   body.append('file', file, file.name)
   return apiRequest<CaseAttachment>(`/cases/${caseId}/attachments`, { method: 'POST', body }, token)

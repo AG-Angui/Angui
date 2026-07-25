@@ -26,6 +26,7 @@
 | `PATCH` | `/api/cases/{case_id}/status` | `200` | 人工更新案件状态 |
 | `POST` | `/api/cases/{case_id}/clues` | `201` | 提交待审核线索 |
 | `POST` | `/api/cases/{case_id}/places` | `201` | 家属或指挥提交常去/关键地点，始终待人工审核 |
+| `GET` | `/api/cases/{case_id}/resource-configuration` | `200` | 获取当前案件可用的地点类型和图片限制 |
 | `POST` | `/api/cases/{case_id}/attachments` | `201` | 上传受控 JPEG/PNG 案件图片，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/attachments/{attachment_id}` | `200` | 按案件权限下载本人上传的图片，指挥可下载案件全部图片 |
 | `POST` | `/api/cases/{case_id}/members` | `201` | 家属邀请指挥，或指挥添加案件成员 |
@@ -185,9 +186,9 @@ Example:
 
 ## 地点与图片补充
 
-`POST /api/cases/{case_id}/places` 只允许该案件的 `family` 或 `commander` 成员调用。请求需要地点名称、受限的地点类型、文字地址、来源和 `public`、`confirmed` 或 `internal` 可见级别；经纬度必须同时提供，且服务端校验 longitude 在 -180..180、latitude 在 -90..90。新地点的 `review_status` 固定为 `pending_review`，不会直接成为确认进展。志愿者不能通过此接口添加家庭地址或其他敏感地点。
+`POST /api/cases/{case_id}/places` 只允许该案件的 `family` 或 `commander` 成员调用。请求需要地点名称、由 `GET /api/cases/{case_id}/resource-configuration` 返回的地点类型、文字地址和 `public`、`confirmed` 或 `internal` 可见级别；经纬度必须同时提供，且服务端校验 longitude 在 -180..180、latitude 在 -90..90。地点来源由服务端按提交者的案件角色写入，客户端不能伪造。新地点的 `review_status` 初始为 `pending_review`，不会直接成为确认进展。志愿者不能通过此接口添加家庭地址或其他敏感地点。
 
-`POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能被静态目录直接公开。
+`POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
 
 以下限制均由启动配置统一控制，服务层和 multipart 读取层会使用同一份值：
 

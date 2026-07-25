@@ -540,8 +540,31 @@ paths:
               schema: { $ref: "#/components/schemas/CaseAttachment" }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/cases/{case_id}/resource-configuration:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: getCaseResourceConfiguration
+      summary: 获取案件补充资源配置
+      description: 返回当前案件成员可使用的图片限制和地点类型。客户端应使用本响应而非内置限制。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      responses:
+        "200":
+          description: 当前资源配置
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaseResourceConfiguration" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /api/cases/{case_id}/attachments/{attachment_id}:
@@ -1313,14 +1336,13 @@ components:
     CreateCasePlaceRequest:
       type: object
       additionalProperties: false
-      required: [name, place_type, address, source, visibility]
+      required: [name, place_type, address, visibility]
       properties:
         name: { type: string, minLength: 1, maxLength: 120 }
-        place_type: { type: string, enum: [frequent, key_location, last_seen_context, medical, shelter, other] }
+        place_type: { type: string, description: Value must appear in the current case resource configuration. }
         address: { type: string, minLength: 1, maxLength: 500 }
         longitude: { type: [number, "null"], minimum: -180, maximum: 180 }
         latitude: { type: [number, "null"], minimum: -90, maximum: 90 }
-        source: { type: string, minLength: 1, maxLength: 64 }
         visibility: { type: string, enum: [public, confirmed, internal] }
 
     CasePlace:
@@ -1331,13 +1353,13 @@ components:
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
         name: { type: string }
-        place_type: { type: string, enum: [frequent, key_location, last_seen_context, medical, shelter, other] }
+        place_type: { type: string }
         address: { type: string }
         longitude: { type: [number, "null"] }
         latitude: { type: [number, "null"] }
-        source: { type: string }
+        source: { type: string, enum: [family, commander, volunteer], description: Set by the server from the submitter's case role. }
         visibility: { type: string, enum: [public, confirmed, internal] }
-        review_status: { type: string, const: pending_review }
+        review_status: { type: string, enum: [pending_review, confirmed, rejected] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         is_own_submission: { type: boolean }
@@ -1353,10 +1375,21 @@ components:
         content_type: { type: string, enum: [image/jpeg, image/png] }
         byte_size: { type: integer, minimum: 1, description: 默认最大 5242880；实际值由 ANGUI_ATTACHMENT_MAX_IMAGE_BYTES 配置。 }
         source: { type: string, enum: [family, commander, volunteer] }
-        review_status: { type: string, const: pending_review }
+        review_status: { type: string, enum: [pending_review, confirmed, rejected] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         is_own_submission: { type: boolean }
+
+    CaseResourceConfiguration:
+      type: object
+      additionalProperties: false
+      required: [attachment_max_image_bytes, attachment_max_per_case, case_place_types]
+      properties:
+        attachment_max_image_bytes: { type: integer, minimum: 1024 }
+        attachment_max_per_case: { type: integer, minimum: 1 }
+        case_place_types:
+          type: array
+          items: { type: string }
 
     ErrorResponse:
       type: object

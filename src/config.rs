@@ -1,5 +1,8 @@
 use std::env;
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Component, PathBuf},
+};
 
 use crate::ai_gateway::{ProviderConfig, validate_provider_configurations};
 
@@ -75,6 +78,15 @@ impl Settings {
         );
         if attachment_storage_directory.as_os_str().is_empty() {
             return Err("ANGUI_ATTACHMENT_STORAGE_DIRECTORY must not be empty".to_owned());
+        }
+        if attachment_storage_directory
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(
+                "ANGUI_ATTACHMENT_STORAGE_DIRECTORY must not contain '..' path components"
+                    .to_owned(),
+            );
         }
         let attachment_max_image_bytes = parse_bounded_usize(
             value("ANGUI_ATTACHMENT_MAX_IMAGE_BYTES")
@@ -379,6 +391,16 @@ mod tests {
         assert_eq!(
             empty_attachment_directory,
             "ANGUI_ATTACHMENT_STORAGE_DIRECTORY must not be empty"
+        );
+
+        let parent_attachment_directory = settings_with(&[(
+            "ANGUI_ATTACHMENT_STORAGE_DIRECTORY",
+            "private/../attachments",
+        )])
+        .expect_err("parent-directory components must be rejected");
+        assert_eq!(
+            parent_attachment_directory,
+            "ANGUI_ATTACHMENT_STORAGE_DIRECTORY must not contain '..' path components"
         );
 
         let malformed_providers = settings_with(&[("ANGUI_AI_PROVIDERS_JSON", "{")])

@@ -1,10 +1,15 @@
-use std::{fs, io::Cursor, path::Path};
+use std::{
+    fs,
+    io::Cursor,
+    path::{Path, PathBuf},
+};
 
+use actix_web::web;
 use chrono::{SecondsFormat, Utc};
 use image::ImageFormat;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -19,8 +24,6 @@ use crate::{
     roles::CaseRole,
     services::case_service::{require_case_role, write_audit},
 };
-
-const VISIBILITY_LEVELS: &[&str] = &["public", "confirmed", "internal"];
 
 pub struct AttachmentUpload<'a> {
     pub filename: &'a str,
@@ -60,8 +63,8 @@ pub async fn create_place(
         address: Set(request.address.trim().to_owned()),
         longitude: Set(request.longitude),
         latitude: Set(request.latitude),
-        source: Set(request.source.trim().to_owned()),
-        visibility: Set(request.visibility.trim().to_lowercase()),
+        source: Set(role.to_string()),
+        visibility: Set(request.visibility.as_str().to_owned()),
         review_status: Set("pending_review".to_owned()),
         created_by_user_id: Set(auth.id.clone()),
         created_at: Set(timestamp.clone()),
@@ -81,11 +84,14 @@ pub async fn store_image_attachment(
     upload: AttachmentUpload<'_>,
     storage: AttachmentStorage<'_>,
 ) -> Result<CaseAttachmentResponse, ApiError> {
-    let (content_type, extension, normalized) = normalize_image(
-        upload.declared_content_type,
-        upload.bytes,
-        storage.max_image_bytes,
-    )?;
+    let declared_content_type = upload.declared_content_type.to_owned();
+    let uploaded_bytes = upload.bytes.to_vec();
+    let max_image_bytes = storage.max_image_bytes;
+    let (content_type, extension, normalized) = web::block(move || {
+        normalize_image(&declared_content_type, &uploaded_bytes, max_image_bytes)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)??;
     let original_filename = safe_filename(upload.filename, extension)?;
     let transaction = db.begin().await?;
     let role = require_case_role(
@@ -108,8 +114,16 @@ pub async fn store_image_attachment(
     let id = new_id();
     let storage_key = format!("{id}.{extension}");
     let storage_path = storage.directory.join(&storage_key);
-    fs::create_dir_all(storage.directory).map_err(|_| ApiError::Internal)?;
-    fs::write(&storage_path, &normalized).map_err(|_| ApiError::Internal)?;
+    let storage_directory = storage.directory.to_path_buf();
+    let path_for_write = storage_path.clone();
+    let bytes_for_write = normalized.clone();
+    web::block(move || {
+        fs::create_dir_all(storage_directory)?;
+        fs::write(path_for_write, bytes_for_write)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(|_| ApiError::Internal)?;
     let timestamp = now();
     let model = case_attachments::ActiveModel {
         id: Set(id),
@@ -130,7 +144,7 @@ pub async fn store_image_attachment(
     let model = match model {
         Ok(model) => model,
         Err(error) => {
-            let _ = fs::remove_file(&storage_path);
+            remove_file_best_effort(storage_path.clone()).await;
             return Err(ApiError::Database(error));
         }
     };
@@ -145,11 +159,11 @@ pub async fn store_image_attachment(
     )
     .await
     {
-        let _ = fs::remove_file(&storage_path);
+        remove_file_best_effort(storage_path.clone()).await;
         return Err(error);
     }
     if let Err(error) = transaction.commit().await {
-        let _ = fs::remove_file(&storage_path);
+        remove_file_best_effort(storage_path).await;
         return Err(ApiError::Database(error));
     }
     Ok(attachment_response(model, &auth.id))
@@ -180,7 +194,10 @@ pub async fn load_attachment_for_download(
             "this attachment is not available to the current case role".to_owned(),
         ));
     }
-    let bytes = fs::read(storage_directory.join(&attachment.storage_key))
+    let storage_path = storage_directory.join(&attachment.storage_key);
+    let bytes = web::block(move || fs::read(storage_path))
+        .await
+        .map_err(|_| ApiError::Internal)?
         .map_err(|_| ApiError::Internal)?;
     Ok(DownloadedAttachment {
         bytes,
@@ -195,22 +212,24 @@ pub async fn visible_places(
     viewer_id: &str,
     role: CaseRole,
 ) -> Result<Vec<CasePlaceResponse>, ApiError> {
-    let records = case_places::Entity::find()
-        .filter(case_places::Column::CaseId.eq(case_id))
+    let mut query = case_places::Entity::find().filter(case_places::Column::CaseId.eq(case_id));
+    query = match role {
+        CaseRole::Commander => query,
+        CaseRole::Family => query.filter(
+            Condition::any()
+                .add(case_places::Column::Visibility.ne("internal"))
+                .add(case_places::Column::CreatedByUserId.eq(viewer_id)),
+        ),
+        CaseRole::Volunteer => query
+            .filter(case_places::Column::Visibility.eq("public"))
+            .filter(case_places::Column::ReviewStatus.eq("confirmed")),
+    };
+    let records = query
         .order_by_desc(case_places::Column::CreatedAt)
         .all(db)
         .await?;
     Ok(records
         .into_iter()
-        .filter(|place| match role {
-            CaseRole::Commander => true,
-            CaseRole::Family => {
-                place.visibility != "internal" || place.created_by_user_id == viewer_id
-            }
-            CaseRole::Volunteer => {
-                place.visibility == "public" && place.review_status == "confirmed"
-            }
-        })
         .map(|place| place_response(place, viewer_id))
         .collect())
 }
@@ -221,8 +240,12 @@ pub async fn visible_attachments(
     viewer_id: &str,
     role: CaseRole,
 ) -> Result<Vec<CaseAttachmentResponse>, ApiError> {
-    let records = case_attachments::Entity::find()
-        .filter(case_attachments::Column::CaseId.eq(case_id))
+    let mut query =
+        case_attachments::Entity::find().filter(case_attachments::Column::CaseId.eq(case_id));
+    if role != CaseRole::Commander {
+        query = query.filter(case_attachments::Column::CreatedByUserId.eq(viewer_id));
+    }
+    let records = query
         .order_by_desc(case_attachments::Column::CreatedAt)
         .all(db)
         .await?;
@@ -248,7 +271,6 @@ fn validate_place(
     for (label, value, maximum) in [
         ("name", request.name.trim(), 120),
         ("address", request.address.trim(), 500),
-        ("source", request.source.trim(), 64),
     ] {
         if value.is_empty() || value.chars().count() > maximum {
             return Err(ApiError::Validation(format!(
@@ -263,12 +285,6 @@ fn validate_place(
     {
         return Err(ApiError::Validation(
             "place_type is not supported".to_owned(),
-        ));
-    }
-    let visibility = request.visibility.trim().to_lowercase();
-    if !VISIBILITY_LEVELS.contains(&visibility.as_str()) {
-        return Err(ApiError::Validation(
-            "visibility must be public, confirmed, or internal".to_owned(),
         ));
     }
     match (request.longitude, request.latitude) {
@@ -305,7 +321,13 @@ fn normalize_image(
             ));
         }
     };
-    if declared_content_type != content_type {
+    let declared_essence = declared_content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if declared_essence != content_type {
         return Err(ApiError::Validation(
             "declared content type does not match image content".to_owned(),
         ));
@@ -331,6 +353,10 @@ fn normalize_image(
         )));
     }
     Ok((content_type.to_owned(), extension, output))
+}
+
+async fn remove_file_best_effort(path: PathBuf) {
+    let _ = web::block(move || fs::remove_file(path)).await;
 }
 
 fn safe_filename(filename: &str, extension: &str) -> Result<String, ApiError> {

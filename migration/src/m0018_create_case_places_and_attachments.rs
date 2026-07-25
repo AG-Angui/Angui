@@ -109,6 +109,7 @@ impl MigrationTrait for Migration {
                     .name("idx_case_places_case_id")
                     .table(CasePlaces::Table)
                     .col(CasePlaces::CaseId)
+                    .if_not_exists()
                     .to_owned(),
             )
             .await?;
@@ -189,6 +190,7 @@ impl MigrationTrait for Migration {
                     .name("idx_case_attachments_case_id")
                     .table(CaseAttachments::Table)
                     .col(CaseAttachments::CaseId)
+                    .if_not_exists()
                     .to_owned(),
             )
             .await

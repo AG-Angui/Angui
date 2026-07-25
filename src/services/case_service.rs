@@ -471,20 +471,20 @@ async fn load_case_detail(
         profile_response.health_notes = None;
     }
 
-    let places = crate::services::case_resource_service::visible_places(
-        db,
-        &membership.case_id,
-        &auth.id,
-        case_role,
-    )
-    .await?;
-    let attachments = crate::services::case_resource_service::visible_attachments(
-        db,
-        &membership.case_id,
-        &auth.id,
-        case_role,
-    )
-    .await?;
+    let (places, attachments) = futures_util::try_join!(
+        crate::services::case_resource_service::visible_places(
+            db,
+            &membership.case_id,
+            &auth.id,
+            case_role,
+        ),
+        crate::services::case_resource_service::visible_attachments(
+            db,
+            &membership.case_id,
+            &auth.id,
+            case_role,
+        ),
+    )?;
 
     Ok(CaseDetail::new(
         case_model,

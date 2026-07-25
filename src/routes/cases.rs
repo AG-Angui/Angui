@@ -6,9 +6,10 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AddCaseMemberRequest, AuthenticatedUser, CreateCasePlaceRequest, CreateCaseRequest,
-        CreateClueRequest, UpdateCaseStatusRequest,
+        AddCaseMemberRequest, AuthenticatedUser, CaseResourceConfigurationResponse,
+        CreateCasePlaceRequest, CreateCaseRequest, CreateClueRequest, UpdateCaseStatusRequest,
     },
+    roles::CaseRole,
     services::case_service,
 };
 
@@ -21,6 +22,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/status", web::patch().to(update_case_status))
             .route("/{case_id}/clues", web::post().to(create_clue))
             .route("/{case_id}/places", web::post().to(create_place))
+            .route(
+                "/{case_id}/resource-configuration",
+                web::get().to(get_resource_configuration),
+            )
             .route("/{case_id}/attachments", web::post().to(create_attachment))
             .route(
                 "/{case_id}/attachments/{attachment_id}",
@@ -28,6 +33,25 @@ pub fn configure(config: &mut web::ServiceConfig) {
             )
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn get_resource_configuration(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    case_service::require_case_role(
+        &state.db,
+        &auth.id,
+        &case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(CaseResourceConfigurationResponse {
+        attachment_max_image_bytes: state.attachment_max_image_bytes,
+        attachment_max_per_case: state.attachment_max_per_case,
+        case_place_types: state.case_place_types.clone(),
+    }))
 }
 
 async fn create_place(
@@ -69,7 +93,7 @@ async fn create_attachment(
             .to_owned();
         let content_type = field
             .content_type()
-            .map(ToString::to_string)
+            .map(|value| value.essence_str().to_owned())
             .ok_or_else(|| ApiError::Validation("file content type is required".to_owned()))?;
         let mut bytes = Vec::new();
         while let Some(chunk) = field.next().await {
@@ -122,6 +146,8 @@ async fn download_attachment(
     .await?;
     Ok(HttpResponse::Ok()
         .insert_header((header::CONTENT_TYPE, attachment.content_type))
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .insert_header((header::CACHE_CONTROL, "no-store, private"))
         .insert_header((
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{}\"", attachment.filename),
