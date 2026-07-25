@@ -175,7 +175,9 @@ struct AmapPath {
 
 #[cfg(test)]
 mod tests {
-    use super::Coordinate;
+    use std::env;
+
+    use super::{AmapService, Coordinate, RouteEstimate, RouteMode};
 
     #[test]
     fn coordinates_use_longitude_before_latitude() {
@@ -196,5 +198,50 @@ mod tests {
             }
             .is_valid()
         );
+    }
+
+    #[actix_web::test]
+    async fn live_route_estimates_work_with_an_explicit_non_production_key() {
+        let Ok(key) = env::var("AMAP_WEBSERVICE_KEY") else {
+            eprintln!(
+                "skipping AMap live integration test: set AMAP_WEBSERVICE_KEY to run it with a restricted non-production key"
+            );
+            return;
+        };
+        if key.trim().is_empty() {
+            eprintln!("skipping AMap live integration test: AMAP_WEBSERVICE_KEY is empty");
+            return;
+        }
+
+        let service = AmapService::new(key.into(), "https://restapi.amap.com".to_owned(), 10_000)
+            .expect("a fixed AMap integration-test client should initialize");
+        // Tiananmen East and Dongdan are public, nearby Beijing landmarks. The
+        // coordinates are GCJ-02 and intentionally avoid application data.
+        let origin = Coordinate {
+            longitude: 116.404,
+            latitude: 39.915,
+        };
+        let destination = Coordinate {
+            longitude: 116.418,
+            latitude: 39.914,
+        };
+
+        for mode in [RouteMode::Walking, RouteMode::Driving] {
+            match service.estimate_route(origin, destination, mode).await {
+                RouteEstimate::Available {
+                    distance_meters,
+                    duration_seconds,
+                    mode: actual_mode,
+                    ..
+                } => {
+                    assert_eq!(actual_mode, mode);
+                    assert!(distance_meters > 0, "AMap returned a zero-distance route");
+                    assert!(duration_seconds > 0, "AMap returned a zero-duration route");
+                }
+                RouteEstimate::Unavailable { reason } => panic!(
+                    "AMap live route integration failed for {mode:?}; check the non-production key's Web Service route entitlement and quota: {reason:?}"
+                ),
+            }
+        }
     }
 }
