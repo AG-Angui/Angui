@@ -259,6 +259,7 @@ dependencies = [
  "actix-web",
  "argon2",
  "chrono",
+ "dotenvy",
  "env_logger",
  "futures-util",
  "hex",

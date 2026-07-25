@@ -2,6 +2,16 @@ use std::env;
 
 use crate::ai_gateway::{ProviderConfig, validate_provider_configurations};
 
+/// Load a local development `.env` file without overriding process-level
+/// configuration. A missing file is normal in production and CI.
+pub fn load_local_env_file() -> Result<(), String> {
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(dotenvy::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not load local .env configuration: {error}")),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub host: String,
@@ -18,6 +28,7 @@ pub struct Settings {
 
 impl Settings {
     pub fn from_env() -> Result<Self, String> {
+        load_local_env_file()?;
         let host = env::var("ANGUI_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
         let port_value = env::var("ANGUI_PORT").unwrap_or_else(|_| "8080".to_owned());
         let port = port_value

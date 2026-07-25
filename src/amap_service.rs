@@ -201,16 +201,15 @@ mod tests {
     }
 
     #[actix_web::test]
+    #[ignore = "requires AMAP_WEBSERVICE_KEY from the process environment or local .env"]
     async fn live_route_estimates_work_with_an_explicit_non_production_key() {
-        let Ok(key) = env::var("AMAP_WEBSERVICE_KEY") else {
-            eprintln!(
-                "skipping AMap live integration test: set AMAP_WEBSERVICE_KEY to run it with a restricted non-production key"
-            );
-            return;
-        };
+        crate::config::load_local_env_file()
+            .expect("the local .env file must be parseable before the AMap integration test runs");
+        let key = env::var("AMAP_WEBSERVICE_KEY").expect(
+            "AMAP_WEBSERVICE_KEY must be set in the process environment or the local .env file",
+        );
         if key.trim().is_empty() {
-            eprintln!("skipping AMap live integration test: AMAP_WEBSERVICE_KEY is empty");
-            return;
+            panic!("AMAP_WEBSERVICE_KEY must not be empty");
         }
 
         let service = AmapService::new(key.into(), "https://restapi.amap.com".to_owned(), 10_000)
