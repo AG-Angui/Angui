@@ -12,10 +12,11 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 function AuthProbe() {
-  const { login, logout, user } = useAuth()
+  const { login, logout, sessionNotice, user } = useAuth()
   return (
     <div>
       <span>{user ? user.email : 'anonymous'}</span>
+      {sessionNotice && <span role="status">{sessionNotice}</span>}
       <button type="button" onClick={() => void login('family@demo.invalid', 'local-test-input').catch(() => undefined)}>登录</button>
       <button type="button" onClick={() => void logout()}>退出</button>
     </div>
@@ -91,6 +92,7 @@ describe('AuthProvider', () => {
     expect(await screen.findByText('family@demo.invalid')).toBeInTheDocument()
     await expect(apiRequest('/cases', {}, 'existing-session')).rejects.toMatchObject({ status: 401 })
     await waitFor(() => expect(screen.getByText('anonymous')).toBeInTheDocument())
+    expect(screen.getByRole('status')).toHaveTextContent('登录状态已失效，请重新登录。')
     expect(sessionStorage.getItem('angui.session.token')).toBeNull()
   })
 })
