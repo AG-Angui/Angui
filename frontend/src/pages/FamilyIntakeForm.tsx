@@ -186,9 +186,13 @@ export function FamilyIntakeForm({
       setSession(next)
       setAssessments(next.assessments)
       if (replace) {
+        const replacedFields = draft?.field_metadata
+          .filter((item) => item.source_field === field)
+          .map((item) => item.field) ?? []
         setEditSource(null)
         setEditAnswer('')
-        await loadDraft(next.id, false)
+        const refreshed = await loadDraft(next.id, false)
+        if (refreshed) syncProfileFields(refreshed, replacedFields)
       } else {
         setAnswer('')
         if (next.status === 'ready_for_confirmation') {
