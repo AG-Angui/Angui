@@ -350,6 +350,53 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn sqlite_two_phase_question_rollback_refuses_manual_question_changes() {
+        let v2_database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&v2_database, None)
+            .await
+            .expect("all migrations should succeed");
+        v2_database
+            .execute_unprepared(
+                "UPDATE intake_question_definitions SET prompt = 'Operator-edited prompt' WHERE id = 'intake-q-0201'",
+            )
+            .await
+            .expect("operator edit should be stored without changing the migration timestamp");
+        assert!(Migrator::down(&v2_database, Some(1)).await.is_err());
+        assert!(v2_database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0201' AND prompt = 'Operator-edited prompt'",
+            ))
+            .await
+            .expect("edited version 2 question query should succeed")
+            .is_some());
+
+        let v1_database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&v1_database, None)
+            .await
+            .expect("all migrations should succeed");
+        v1_database
+            .execute_unprepared(
+                "UPDATE intake_question_definitions SET status = 'active' WHERE id = 'intake-q-0001'",
+            )
+            .await
+            .expect("operator status change should be stored");
+        assert!(Migrator::down(&v1_database, Some(1)).await.is_err());
+        assert!(v1_database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0001' AND status = 'active'",
+            ))
+            .await
+            .expect("operator status query should succeed")
+            .is_some());
+    }
+
     async fn insert_member_and_session(database: &impl ConnectionTrait, prefix: &str) {
         let user_id = format!("{prefix}-user");
         let session_id = format!("{prefix}-session");

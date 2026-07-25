@@ -1,7 +1,8 @@
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, RuntimeErr, Set, SqlxError, TransactionTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, RuntimeErr, Set, SqlxError,
+    TransactionTrait,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -332,6 +333,7 @@ pub async fn confirm_intake_session(
     let case_request = case_request_from_confirmed_profile(request);
     let transaction = db.begin().await?;
     let session = intake_sessions::Entity::find_by_id(session_id)
+        .lock_exclusive()
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
