@@ -2,6 +2,7 @@ mod auth_login_post;
 mod auth_logout_post;
 mod auth_me_get;
 mod authentication_guards;
+mod case_clues_get;
 mod case_clues_post;
 mod case_detail_get;
 mod case_members_post;

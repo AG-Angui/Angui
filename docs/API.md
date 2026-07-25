@@ -24,6 +24,7 @@
 | `POST` | `/api/cases` | `201` | 创建案件和老人画像 |
 | `GET` | `/api/cases/{case_id}` | `200` | 查询案件、老人画像和线索 |
 | `PATCH` | `/api/cases/{case_id}/status` | `200` | 人工更新案件状态 |
+| `GET` | `/api/cases/{case_id}/clues` | `200` | 获取角色裁剪、可分页的线索时间轴 |
 | `POST` | `/api/cases/{case_id}/clues` | `201` | 提交待审核线索 |
 | `POST` | `/api/cases/{case_id}/places` | `201` | 家属或指挥提交常去/关键地点，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/resource-configuration` | `200` | 获取当前案件可用的地点类型和图片限制 |
@@ -114,6 +115,8 @@ duplicate
 ```
 
 AI 或其他自动化能力未来只能生成草稿或待审核输入，不得绕过人工审核直接创建 `confirmed` 线索。
+
+线索时间轴使用 `page`（默认 `1`）、`page_size`（默认 `25`，最大 `100`）、`status`、`sort`（`created_at` 或 `occurred_at`）和 `order`（`asc` 或 `desc`）查询参数。所有参数均为白名单；响应中的 `total` 只统计当前认证用户可见的线索。指挥可见全量，家属可见已确认或本人提交的线索，志愿者仅可见已确认线索；无案件成员关系一律返回 `404`。
 
 ## 6. 请求示例
 

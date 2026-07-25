@@ -20,6 +20,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("", web::post().to(create_case))
             .route("/{case_id}", web::get().to(get_case))
             .route("/{case_id}/status", web::patch().to(update_case_status))
+            .route("/{case_id}/clues", web::get().to(list_clues))
             .route("/{case_id}/clues", web::post().to(create_clue))
             .route("/{case_id}/places", web::post().to(create_place))
             .route(
@@ -200,6 +201,16 @@ async fn create_clue(
 ) -> Result<HttpResponse, ApiError> {
     let clue = case_service::create_clue(&state.db, &auth, &case_id, request.into_inner()).await?;
     Ok(HttpResponse::Created().json(clue))
+}
+
+async fn list_clues(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    query: web::Query<crate::models::ClueTimelineQuery>,
+) -> Result<HttpResponse, ApiError> {
+    let clues = case_service::list_clues(&state.db, &auth, &case_id, query.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(clues))
 }
 
 async fn add_case_member(

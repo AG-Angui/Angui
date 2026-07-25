@@ -389,6 +389,16 @@ pub struct CreateClueRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ClueTimelineQuery {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+    pub status: Option<String>,
+    pub sort: Option<String>,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateCasePlaceRequest {
     pub name: String,
     pub place_type: String,
@@ -492,6 +502,14 @@ pub struct ClueResponse {
     pub updated_at: String,
     pub reviewed_at: Option<String>,
     pub is_own_submission: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClueTimelineResponse {
+    pub items: Vec<ClueResponse>,
+    pub page: u64,
+    pub page_size: u64,
+    pub total: u64,
 }
 
 #[derive(Debug, Serialize)]

@@ -2,6 +2,7 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::Value;
 
 use crate::support::{COMMANDER, FAMILY, TestContext, VOLUNTEER, assert_error, create_clue_json};
@@ -26,6 +27,25 @@ async fn post_case_clues_creates_pending_review_clues_for_case_members() {
     assert_eq!(body["case_id"], case_id);
     assert_eq!(body["status"], "pending_review");
     assert_eq!(body["is_own_submission"], true);
+    assert!(body["reviewed_at"].is_null());
+
+    let audit = angui::entities::audit_events::Entity::find()
+        .filter(angui::entities::audit_events::Column::EntityId.eq(body["id"].as_str()))
+        .one(&context.database)
+        .await
+        .expect("audit lookup should succeed")
+        .expect("clue submission should be audited");
+    let metadata = audit
+        .metadata_json
+        .expect("audit metadata should be present");
+    assert!(metadata.contains("pending_review"));
+    assert!(
+        !metadata.contains(
+            create_clue_json()["content"]
+                .as_str()
+                .expect("content is text")
+        )
+    );
 }
 
 #[actix_web::test]
@@ -59,4 +79,36 @@ async fn post_case_clues_hides_non_member_cases_and_rejects_closed_cases() {
     )
     .await;
     assert_error(closed, StatusCode::CONFLICT, "conflict").await;
+}
+
+#[actix_web::test]
+async fn post_case_clues_rejects_client_controlled_status_and_unknown_fields() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+
+    for payload in [
+        serde_json::json!({
+            "source": "family",
+            "content": "untrusted status",
+            "status": "confirmed"
+        }),
+        serde_json::json!({
+            "source": "family",
+            "content": "unknown field",
+            "reviewed_by_user_id": "forged"
+        }),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/cases/{case_id}/clues"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(payload)
+                .to_request(),
+        )
+        .await;
+        assert_error(response, StatusCode::BAD_REQUEST, "validation_error").await;
+    }
 }

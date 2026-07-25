@@ -140,3 +140,36 @@ fn intake_openapi_contract_covers_draft_provenance_assessments_and_confirmation(
         &["#/components/schemas/CaseStatus"],
     );
 }
+
+#[test]
+fn clue_timeline_openapi_contract_covers_pagination_and_visibility() {
+    let (_, operation) = OPENAPI
+        .split_once("  /api/cases/{case_id}/clues:\n")
+        .expect("OpenAPI clue path must exist");
+    let get_operation = operation
+        .split_once("    get:\n")
+        .and_then(|(_, after_get)| after_get.split_once("    post:\n").map(|(get, _)| get))
+        .expect("OpenAPI clue path must declare GET before POST");
+    for expected in [
+        "operationId: listCaseClues",
+        "name: page",
+        "name: page_size",
+        "name: status",
+        "name: sort",
+        "name: order",
+        "#/components/schemas/ClueTimelinePage",
+    ] {
+        assert!(
+            get_operation.contains(expected),
+            "OpenAPI clue timeline operation must declare {expected:?}"
+        );
+    }
+    assert_schema_contains(
+        "ClueTimelinePage",
+        &[
+            "required: [items, page, page_size, total]",
+            "items:",
+            "total:",
+        ],
+    );
+}
