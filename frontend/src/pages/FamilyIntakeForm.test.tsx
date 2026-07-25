@@ -105,6 +105,16 @@ describe('FamilyIntakeForm', () => {
     expect(mocked.createIntakeSession).not.toHaveBeenCalled()
   })
 
+  it('discards a malformed stored session before rendering the intake flow', async () => {
+    const malformedSession = { ...collectingSession, missing_phase_one_fields: undefined }
+    window.sessionStorage.setItem('angui:intake-tab-draft:family-1', JSON.stringify({ session: malformedSession, answer: 'stale answer' }))
+
+    render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
+
+    expect(await screen.findByRole('button', { name: '开始问询' })).toBeInTheDocument()
+    expect(window.sessionStorage.getItem('angui:intake-tab-draft:family-1')).toBeNull()
+  })
+
   it('shows field-level provenance and sends a replacement when the family corrects a draft answer', async () => {
     mocked.createIntakeSession.mockResolvedValue(collectingSession)
     mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(readySession))
@@ -145,7 +155,8 @@ describe('FamilyIntakeForm', () => {
     fireEvent.click(screen.getByRole('button', { name: '人工确认并创建案件' }))
 
     expect(mocked.confirmIntakeSession).not.toHaveBeenCalled()
-    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    const confirmationDialog = screen.getByRole('alertdialog')
+    expect(confirmationDialog).toHaveFocus()
     expect(screen.getByRole('button', { name: '请完成二次确认' })).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: '确认并创建案件' }))

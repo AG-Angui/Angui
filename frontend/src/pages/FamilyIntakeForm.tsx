@@ -1,6 +1,6 @@
 import { Button, Chip, Input, Spinner, TextArea } from '@heroui/react'
 import { AlertTriangle, ArrowLeft, CheckCircle2, CircleHelp, FilePenLine, ShieldCheck } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiClientError } from '../api/client'
 import {
   confirmIntakeSession,
@@ -92,10 +92,15 @@ export function FamilyIntakeForm({
   const [busyAction, setBusyAction] = useState<'begin' | 'answer' | 'replace' | 'confirm' | null>(null)
   const [error, setError] = useState('')
   const [hasHydrated, setHasHydrated] = useState(false)
+  const confirmDialogRef = useRef<HTMLDivElement>(null)
 
   const isBusy = busyAction !== null
   const displayedAssessments = draft?.assessments ?? assessments
   const sourceOptions = useMemo(() => uniqueSourceOptions(draft), [draft])
+
+  useEffect(() => {
+    if (confirmReviewOpen) confirmDialogRef.current?.focus()
+  }, [confirmReviewOpen])
 
   const loadDraft = useCallback(async (sessionId: string, initializeProfile: boolean) => {
     if (!token) return null
@@ -366,7 +371,7 @@ export function FamilyIntakeForm({
               }}
             />
             {confirmReviewOpen && (
-              <div className="mt-4 rounded-md border border-brand-100 bg-brand-50 p-4" role="alertdialog" aria-labelledby="confirm-case-title">
+              <div ref={confirmDialogRef} tabIndex={-1} className="mt-4 rounded-md border border-brand-100 bg-brand-50 p-4" role="alertdialog" aria-labelledby="confirm-case-title">
                 <h4 id="confirm-case-title" className="m-0 text-sm font-bold text-slate-950">确认创建案件？</h4>
                 <p className="mb-3 mt-1 text-sm leading-6 text-slate-700">创建后将生成正式案件。问询草稿会保留为本次确认的依据，但不会替代您刚刚核对的资料。</p>
                 <div className="flex flex-wrap gap-2">
@@ -629,11 +634,24 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
     const value = window.sessionStorage.getItem(storageKey)
     if (!value) return null
     const parsed = JSON.parse(value) as Partial<StoredIntakeState>
-    if (!parsed.session?.id || !parsed.session.next_question && parsed.session.status !== 'ready_for_confirmation') return null
-    return { session: parsed.session as StoredIntakeSession, answer: typeof parsed.answer === 'string' ? parsed.answer : '' }
+    const session = parsed.session
+    if (!session || typeof session.id !== 'string') return discardStoredState(storageKey)
+    if (!Array.isArray(session.missing_fields)) return discardStoredState(storageKey)
+    if (!Array.isArray(session.completed_phase_one_fields)) return discardStoredState(storageKey)
+    if (!Array.isArray(session.missing_phase_one_fields)) return discardStoredState(storageKey)
+    if (!session.next_question && (session.status !== 'ready_for_confirmation')) return discardStoredState(storageKey)
+    return {
+      session: session as StoredIntakeSession,
+      answer: typeof parsed.answer === 'string' ? parsed.answer : '',
+    }
   } catch {
-    return null
+    return discardStoredState(storageKey)
   }
+}
+
+function discardStoredState(storageKey: string): null {
+  window.sessionStorage.removeItem(storageKey)
+  return null
 }
 
 function clearStoredState(storageKey: string) {
