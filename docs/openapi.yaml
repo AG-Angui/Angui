@@ -188,12 +188,16 @@ paths:
       operationId: submitIntakeSessionAnswer
       summary: Submit one intake answer and receive the next rule-based question
       description: |
-        Only the session creator can append a field that has not already been answered. The raw
-        free-text answer is stored separately from its unconfirmed draft candidate field. This
-        endpoint does not call an AI provider, so model and template_version are null; text that
-        resembles an instruction is treated only as an unconfirmed answer. Closed or confirmed
-        sessions and duplicate field submissions return 409. Raw answer content is never copied
-        into audit metadata.
+        Only the session creator can append a field that has not already been answered. Send
+        `replace: true` to correct a previously submitted field; the server retains a revision
+        record and replaces the current unconfirmed draft answer. The raw free-text answer is
+        stored separately from its unconfirmed draft candidate field. Optional `structured`
+        facts are merged into the session's structured draft and produce rule assessments; an
+        assessment can block confirmation but does not turn any draft value into a formal fact.
+        This endpoint does not call an AI provider, so model and template_version are null; text
+        that resembles an instruction is treated only as an unconfirmed answer. Closed or
+        confirmed sessions and duplicate field submissions without `replace` return 409. Raw
+        answer content is never copied into audit metadata.
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -234,7 +238,7 @@ paths:
       tags: [Intake sessions]
       operationId: getIntakeSessionProfileDraft
       summary: Get the unconfirmed profile draft for an intake session
-      description: Only the session creator can read this sensitive draft. It is assembled only from that session's family-provided answers, is explicitly marked `draft`, and is never a formal case fact.
+      description: Only the session creator can read this sensitive draft. It is assembled only from that session's family-provided answers, is explicitly marked `draft`, and is never a formal case fact. Each non-empty display field has field-level provenance and a generation time so it can be reviewed before confirmation.
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -262,7 +266,7 @@ paths:
       tags: [Intake sessions]
       operationId: confirmIntakeSession
       summary: Human-confirm a profile and create the formal case
-      description: The session creator submits family-reviewed final values. Creation of the case, elder profile, family membership, `case.created` audit event, and session link is one transaction. A successful repeat is idempotent and returns the same case.
+      description: The session creator submits family-reviewed final values. Only display_name and last_seen_location are required by the current service; all other profile fields are optional overrides. Creation of the case, elder profile, family membership, `case.created` audit event, and session link is one transaction. A successful repeat is idempotent and returns the linked case's current status.
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -275,7 +279,7 @@ paths:
               $ref: "#/components/schemas/ConfirmIntakeSessionRequest"
       responses:
         "201":
-          description: Formal active case created or returned from an idempotent confirmation
+          description: Formal case created, or the linked case returned from an idempotent confirmation retry
           content:
             application/json:
               schema:
@@ -947,6 +951,7 @@ components:
         belongings: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
         transport_ability: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
         follow_up_clues: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        suspicious_motive: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
 
     SubmitIntakeAnswerRequest:
       type: object
@@ -961,11 +966,66 @@ components:
           type: string
           minLength: 1
           description: Trimmed server-side and limited by both the question configuration and the independent hard cap.
+        replace:
+          type: boolean
+          default: false
+          description: Set true to correct an existing answer for this field; the current draft is replaced and its prior value is retained as a revision.
+        structured:
+          oneOf:
+            - $ref: "#/components/schemas/IntakeStructuredFacts"
+            - type: "null"
+          description: Optional structured facts merged into the session draft for rule-based assessments.
+
+    IntakeStructuredFacts:
+      type: object
+      additionalProperties: false
+      properties:
+        last_seen_at:
+          type: [string, "null"]
+          description: Expected as RFC 3339 with an explicit offset. Invalid values are retained as draft input and produce a blocking assessment rather than a request validation error.
+        last_seen_location:
+          oneOf:
+            - $ref: "#/components/schemas/IntakeLocation"
+            - type: "null"
+        follow_up_at:
+          type: [string, "null"]
+          description: Expected as RFC 3339 with an explicit offset. Invalid values produce a blocking assessment.
+        follow_up_location:
+          oneOf:
+            - $ref: "#/components/schemas/IntakeLocation"
+            - type: "null"
+        mobility:
+          type: [string, "null"]
+          description: Preferred controlled values are limited, independent, or unknown; unsupported values produce a blocking assessment.
+        transport_modes:
+          type: array
+          default: []
+          items:
+            type: string
+          description: Preferred controlled values are walking, driving, public_transit, or unknown; unsupported values produce a blocking assessment.
+        companion_status:
+          type: [string, "null"]
+          description: Preferred controlled values are alone, accompanied, or unknown; unsupported values produce a blocking assessment.
+        belongings:
+          type: array
+          default: []
+          items:
+            type: string
+
+    IntakeLocation:
+      type: object
+      additionalProperties: false
+      required: [name, longitude, latitude, coordinate_system]
+      properties:
+        name: { type: string }
+        longitude: { type: number }
+        latitude: { type: number }
+        coordinate_system: { type: string, description: Route estimates require gcj02; other values produce an informational assessment. }
 
     IntakeCandidateField:
       type: object
       additionalProperties: false
-      required: [field, value, source, status, generated_at, model, template_version]
+      required: [field, value, source, status, generated_at, model, template_version, source_text, confidence]
       properties:
         field: { type: string }
         value: { type: string, description: Unconfirmed candidate value; it is not a formal case fact. }
@@ -974,11 +1034,39 @@ components:
         generated_at: { type: string, format: date-time }
         model: { type: [string, "null"], description: Null for the current rule-based path. }
         template_version: { type: [string, "null"], description: Null for the current rule-based path. }
+        source_text: { type: string, description: Original raw answer from which the unconfirmed candidate was produced. }
+        confidence: { type: [number, "null"], minimum: 0, maximum: 1, description: Null for the current rule-based path. }
+
+    IntakeRouteEstimate:
+      type: object
+      additionalProperties: false
+      required: [distance_meters, available_seconds, minimum_seconds, basis, degraded]
+      properties:
+        distance_meters: { type: integer, minimum: 0 }
+        available_seconds: { type: integer }
+        minimum_seconds: { type: [integer, "null"], minimum: 0 }
+        basis: { type: string, description: Routing provider name or a straight-line fallback reason. }
+        degraded: { type: boolean, description: True when the estimate was produced from a fallback rather than a route provider. }
+
+    IntakeAssessment:
+      type: object
+      additionalProperties: false
+      required: [field_path, conflict_type, severity, evidence_summary, suggested_action, route_estimate]
+      properties:
+        field_path: { type: string, description: Path of the draft field that needs review. }
+        conflict_type: { type: string, description: Machine-readable rule result identifier. }
+        severity: { type: string, enum: [blocking, warning, info] }
+        evidence_summary: { type: string }
+        suggested_action: { type: string }
+        route_estimate:
+          oneOf:
+            - $ref: "#/components/schemas/IntakeRouteEstimate"
+            - type: "null"
 
     SubmitIntakeAnswerResponse:
       type: object
       additionalProperties: false
-      required: [session_id, status, raw_answer, candidate_fields, missing_fields, next_question, guidance_mode, privacy_notice, updated_at]
+      required: [session_id, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, privacy_notice, updated_at]
       properties:
         session_id: { type: string, format: uuid }
         status: { type: string, enum: [collecting, ready_for_confirmation] }
@@ -991,6 +1079,18 @@ components:
         missing_fields:
           type: array
           items: { type: string }
+        phase: { type: string, enum: [phase_one, phase_two] }
+        completed_phase_one_fields:
+          type: array
+          items: { type: string }
+        missing_phase_one_fields:
+          type: array
+          items: { type: string }
+        phase_transition_ready: { type: boolean }
+        assessments:
+          type: array
+          items:
+            $ref: "#/components/schemas/IntakeAssessment"
         next_question:
           oneOf:
             - $ref: "#/components/schemas/IntakeQuestion"
@@ -1002,21 +1102,47 @@ components:
     IntakeProfileDraft:
       type: object
       additionalProperties: false
-      required: [status, source_scope, generated_at, requires_human_confirmation, profile, missing_fields]
+      required: [status, source_scope, generated_at, requires_human_confirmation, profile, field_metadata, missing_fields, assessments, confirmation_blocked_reasons, direction_hypotheses]
       properties:
         status: { type: string, const: draft }
         source_scope: { type: string }
         generated_at: { type: string, format: date-time }
         requires_human_confirmation: { type: boolean, const: true }
         profile: { $ref: "#/components/schemas/IntakeProfileDraftFields" }
+        field_metadata:
+          type: array
+          items:
+            $ref: "#/components/schemas/IntakeProfileDraftFieldMetadata"
         missing_fields:
           type: array
           items: { type: string }
+        assessments:
+          type: array
+          items:
+            $ref: "#/components/schemas/IntakeAssessment"
+        confirmation_blocked_reasons:
+          type: array
+          items: { type: string }
+        direction_hypotheses:
+          type: array
+          items:
+            $ref: "#/components/schemas/IntakeDirectionHypothesis"
+
+    IntakeProfileDraftFieldMetadata:
+      type: object
+      additionalProperties: false
+      required: [field, source_field, source, status, generated_at]
+      properties:
+        field: { type: string, description: Display field in profile. }
+        source_field: { type: string, description: Intake answer field that supplied the display value. }
+        source: { type: string, enum: [family_provided, ai_extracted] }
+        status: { type: string, const: draft }
+        generated_at: { type: string, format: date-time }
 
     IntakeProfileDraftFields:
       type: object
       additionalProperties: false
-      required: [physical_description, clothing_description, health_notes, mobility_notes, transportation_ability, frequent_locations, last_seen_information, behavior_habits]
+      required: [physical_description, clothing_description, health_notes, mobility_notes, transportation_ability, frequent_locations, last_seen_information, behavior_habits, suspicious_motive]
       properties:
         physical_description: { type: [string, "null"] }
         clothing_description: { type: [string, "null"] }
@@ -1026,6 +1152,20 @@ components:
         frequent_locations: { type: [string, "null"] }
         last_seen_information: { type: [string, "null"] }
         behavior_habits: { type: [string, "null"] }
+        suspicious_motive: { type: [string, "null"] }
+
+    IntakeDirectionHypothesis:
+      type: object
+      additionalProperties: false
+      required: [status, source_fields, generated_at, uncertainty_notice, description]
+      properties:
+        status: { type: string, const: hypothesis }
+        source_fields:
+          type: array
+          items: { type: string }
+        generated_at: { type: string, format: date-time }
+        uncertainty_notice: { type: string }
+        description: { type: string }
 
     ConfirmIntakeSessionRequest:
       type: object
@@ -1038,7 +1178,7 @@ components:
     ConfirmedIntakeProfile:
       type: object
       additionalProperties: false
-      required: [display_name, age, gender, physical_description, clothing_description, health_notes, last_seen_at, last_seen_location]
+      required: [display_name, last_seen_location]
       properties:
         display_name: { type: string, minLength: 1, maxLength: 120 }
         age: { type: [integer, "null"], minimum: 0, maximum: 130 }
@@ -1046,7 +1186,7 @@ components:
         physical_description: { type: [string, "null"] }
         clothing_description: { type: [string, "null"] }
         health_notes: { type: [string, "null"] }
-        last_seen_at: { type: [string, "null"], format: date-time }
+        last_seen_at: { type: [string, "null"], description: Trimmed server-side but not parsed or format-validated during confirmation. }
         last_seen_location: { type: string, minLength: 1 }
 
     ConfirmIntakeSessionResponse:
@@ -1056,7 +1196,9 @@ components:
       properties:
         case_id: { type: string, format: uuid }
         case_code: { type: string }
-        status: { type: string, const: active }
+        status:
+          $ref: "#/components/schemas/CaseStatus"
+          description: Active on first confirmation; an idempotent retry returns the linked case's current status.
         confirmation_status: { type: string, const: human_confirmed }
         confirmed_at: { type: string, format: date-time }
 
@@ -1072,15 +1214,23 @@ components:
     IntakeSession:
       type: object
       additionalProperties: false
-      required: [id, status, question_set_version, initial_answers, missing_fields, next_question, guidance_mode, privacy_notice, created_at, updated_at]
+      required: [id, status, question_set_version, initial_answers, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, next_question, guidance_mode, privacy_notice, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
-        status: { type: string, const: collecting }
+        status: { type: string, enum: [collecting, ready_for_confirmation] }
         question_set_version: { type: integer, minimum: 1 }
         initial_answers: { $ref: "#/components/schemas/IntakeInitialAnswers" }
         missing_fields:
           type: array
           items: { type: string }
+        phase: { type: string, enum: [phase_one, phase_two] }
+        completed_phase_one_fields:
+          type: array
+          items: { type: string }
+        missing_phase_one_fields:
+          type: array
+          items: { type: string }
+        phase_transition_ready: { type: boolean }
         next_question:
           oneOf:
             - $ref: "#/components/schemas/IntakeQuestion"

@@ -16,8 +16,9 @@ use crate::{
     models::{
         AuthenticatedUser, ConfirmIntakeSessionRequest, ConfirmIntakeSessionResponse,
         CreateCaseRequest, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakePhaseProgress,
-        IntakeProfileDraft, IntakeProfileDraftFields, IntakeQuestion, IntakeSessionResponse,
-        IntakeStructuredFacts, SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
+        IntakeProfileDraft, IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields,
+        IntakeQuestion, IntakeSessionResponse, IntakeStructuredFacts, SubmitIntakeAnswerRequest,
+        SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
 };
@@ -288,6 +289,10 @@ pub async fn get_intake_profile_draft(
     require_session_creator(&session, auth)?;
     let questions = questions_for_version(db, session.question_set_version).await?;
     let answers = parse_answers(&session)?;
+    let stored_answers = intake_session_answers::Entity::find()
+        .filter(intake_session_answers::Column::SessionId.eq(session_id))
+        .all(db)
+        .await?;
     let assessments = parse_assessments(&session)?;
     let confirmation_blocked_reasons = assessments
         .iter()
@@ -311,11 +316,71 @@ pub async fn get_intake_profile_draft(
             behavior_habits: answers.behavior_habits.clone(),
             suspicious_motive: answers.suspicious_motive.clone(),
         },
+        field_metadata: profile_draft_field_metadata(&answers, &stored_answers, &session),
         missing_fields: missing_fields(&answers, &questions),
         assessments,
         confirmation_blocked_reasons,
         direction_hypotheses: direction_hypotheses(&answers, &session.updated_at),
     })
+}
+
+fn profile_draft_field_metadata(
+    answers: &IntakeInitialAnswers,
+    stored_answers: &[intake_session_answers::Model],
+    session: &intake_sessions::Model,
+) -> Vec<IntakeProfileDraftFieldMetadata> {
+    [
+        (
+            "physical_description",
+            "basic_information",
+            &answers.basic_information,
+        ),
+        ("clothing_description", "belongings", &answers.belongings),
+        ("health_notes", "health_status", &answers.health_status),
+        ("mobility_notes", "health_status", &answers.health_status),
+        (
+            "transportation_ability",
+            "transport_ability",
+            &answers.transport_ability,
+        ),
+        (
+            "frequent_locations",
+            "frequent_locations",
+            &answers.frequent_locations,
+        ),
+        ("last_seen_information", "last_seen", &answers.last_seen),
+        (
+            "behavior_habits",
+            "behavior_habits",
+            &answers.behavior_habits,
+        ),
+        (
+            "suspicious_motive",
+            "suspicious_motive",
+            &answers.suspicious_motive,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(field, source_field, value)| {
+        value.as_ref()?;
+        let stored = stored_answers
+            .iter()
+            .find(|answer| answer.field_code == source_field);
+        Some(IntakeProfileDraftFieldMetadata {
+            field: field.to_owned(),
+            source_field: source_field.to_owned(),
+            source: stored
+                .map(|answer| answer.source.clone())
+                .unwrap_or_else(|| "family_provided".to_owned()),
+            status: stored
+                .map(|answer| answer.status.clone())
+                .unwrap_or_else(|| "draft".to_owned()),
+            generated_at: stored
+                .map(|answer| answer.generated_at.clone())
+                .unwrap_or_else(|| session.created_at.clone()),
+        })
+    })
+    .collect()
 }
 
 pub async fn confirm_intake_session(

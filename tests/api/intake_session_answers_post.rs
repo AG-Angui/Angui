@@ -98,6 +98,21 @@ async fn post_intake_session_answers_stores_raw_and_draft_candidate_then_returns
     assert_eq!(body["candidate_fields"][0]["status"], "draft");
     assert_eq!(body["candidate_fields"][0]["model"], Value::Null);
     assert_eq!(body["candidate_fields"][0]["template_version"], Value::Null);
+    assert_eq!(body["candidate_fields"][0]["source_text"], raw_answer);
+    assert_eq!(body["candidate_fields"][0]["confidence"], Value::Null);
+    assert_eq!(body["phase"], "phase_one");
+    assert_eq!(body["phase_transition_ready"], false);
+    assert!(
+        body["completed_phase_one_fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field == "basic_information"))
+    );
+    assert!(
+        body["missing_phase_one_fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field == "last_seen"))
+    );
+    assert_eq!(body["assessments"], serde_json::json!([]));
     assert_eq!(body["guidance_mode"], "rule_based");
     assert_eq!(body["next_question"]["field"], "behavior_habits");
 

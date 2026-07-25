@@ -15,3 +15,4 @@ mod intake_session_answers_post;
 mod intake_session_confirm_post;
 mod intake_session_profile_draft_get;
 mod intake_sessions_create_post;
+mod openapi_intake_contract;

@@ -230,6 +230,34 @@ async fn post_confirm_creates_one_active_case_from_human_confirmed_overrides() {
 }
 
 #[actix_web::test]
+async fn post_confirm_accepts_the_two_runtime_required_profile_fields() {
+    let context = TestContext::new().await;
+    let session_id = ready_session(&context).await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/intake-sessions/{session_id}/confirm"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({
+                "human_confirmed": true,
+                "profile": {
+                    "display_name": "Minimal fictional elder",
+                    "last_seen_location": "Fictional community gate"
+                }
+            }))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["status"], "active");
+}
+
+#[actix_web::test]
 async fn post_confirm_requires_creator_human_confirmation_and_valid_profile_without_partial_case() {
     let context = TestContext::new().await;
     let session_id = ready_session(&context).await;
