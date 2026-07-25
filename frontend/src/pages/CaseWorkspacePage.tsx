@@ -339,9 +339,9 @@ function CaseDetailView({
               void run('status', () => updateCaseStatus(token, detail.id, nextStatus), '案件状态已更新')
             }}
           >
-            <h3 className="m-0 text-sm font-bold text-slate-950">案件状态</h3>
+            <h3 id="case-status-title" className="m-0 text-sm font-bold text-slate-950">案件状态</h3>
             <div className="mt-3 flex gap-2">
-              <select className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm" value={nextStatus} onChange={(event) => setNextStatus(event.target.value as CaseStatus)} disabled={detail.status === 'closed'}>
+              <select aria-labelledby="case-status-title" className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm" value={nextStatus} onChange={(event) => setNextStatus(event.target.value as CaseStatus)} disabled={detail.status === 'closed'}>
                 {statusOptions.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}
               </select>
               <Button type="submit" size="sm" variant="secondary" isDisabled={busy === 'status' || nextStatus === detail.status}>保存</Button>

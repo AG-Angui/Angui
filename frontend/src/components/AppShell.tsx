@@ -12,28 +12,24 @@ import { useAuth } from '../auth/useAuth'
 import type { AccountType, GlobalCapability } from '../api/auth'
 import { ServiceStatus } from './ServiceStatus'
 
-type LegacyRole = 'family' | 'commander' | 'volunteer' | 'learner' | 'admin'
-
 interface NavigationItem {
   to: string
   label: string
   icon: typeof LayoutDashboard
   end?: boolean
-  roles: LegacyRole[]
+  capability?: 'commander' | 'volunteer'
 }
 
 const navigation: NavigationItem[] = [
-  { to: '/', label: '总览', icon: LayoutDashboard, end: true, roles: ['family', 'commander', 'volunteer', 'learner', 'admin'] },
-  { to: '/family', label: '家属端', icon: HeartHandshake, roles: ['family', 'commander', 'volunteer'] },
-  { to: '/command', label: '指挥端', icon: RadioTower, roles: ['family', 'commander', 'volunteer'] },
-  { to: '/volunteer', label: '志愿者端', icon: Navigation, roles: ['family', 'commander', 'volunteer'] },
+  { to: '/', label: '总览', icon: LayoutDashboard, end: true },
+  { to: '/family', label: '家属端', icon: HeartHandshake },
+  { to: '/command', label: '指挥端', icon: RadioTower, capability: 'commander' },
+  { to: '/volunteer', label: '志愿者端', icon: Navigation, capability: 'volunteer' },
 ]
 
-const roleLabels: Record<LegacyRole, string> = {
-  family: '家属',
+const roleLabels: Record<GlobalCapability, string> = {
   commander: '指挥',
   volunteer: '志愿者',
-  learner: '新人',
   admin: '管理员',
 }
 
@@ -44,7 +40,10 @@ function identityLabel(accountType: AccountType, capabilities: GlobalCapability[
 
 export function AppShell() {
   const { user, logout, isLoggingOut } = useAuth()
-  const visibleNavigation = navigation.filter((item) => user && (item.to === '/' || user.account_type === 'member'))
+  const visibleNavigation = navigation.filter((item) => user && (
+    item.to === '/'
+    || (user.account_type === 'member' && (!item.capability || user.global_capabilities.includes(item.capability)))
+  ))
 
   return (
     <div className="min-h-screen bg-canvas text-slate-700 lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
