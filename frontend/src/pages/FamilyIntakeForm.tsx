@@ -113,11 +113,19 @@ export function FamilyIntakeForm({
     } catch (cause) {
       setError(messageFrom(cause))
       if (cause instanceof ApiClientError && (cause.status === 403 || cause.status === 404)) {
+        clearStoredState(storageKey)
+        setSession(null)
         setDraft(null)
+        setAssessments([])
+        setAnswer('')
+        setProfile(blankProfile)
+        setEditSource(null)
+        setEditAnswer('')
+        setConfirmReviewOpen(false)
       }
       return null
     }
-  }, [token])
+  }, [storageKey, token])
 
   useEffect(() => {
     setHasHydrated(false)
@@ -636,9 +644,18 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
     const parsed = JSON.parse(value) as Partial<StoredIntakeState>
     const session = parsed.session
     if (!session || typeof session.id !== 'string') return discardStoredState(storageKey)
+    if (!['collecting', 'ready_for_confirmation'].includes(session.status)) return discardStoredState(storageKey)
+    if (!['phase_one', 'phase_two'].includes(session.phase)) return discardStoredState(storageKey)
     if (!Array.isArray(session.missing_fields)) return discardStoredState(storageKey)
     if (!Array.isArray(session.completed_phase_one_fields)) return discardStoredState(storageKey)
     if (!Array.isArray(session.missing_phase_one_fields)) return discardStoredState(storageKey)
+    if (typeof session.phase_transition_ready !== 'boolean') return discardStoredState(storageKey)
+    if (session.next_question !== null && (
+      typeof session.next_question !== 'object'
+      || typeof session.next_question.field !== 'string'
+      || typeof session.next_question.prompt !== 'string'
+      || typeof session.next_question.required !== 'boolean'
+    )) return discardStoredState(storageKey)
     if (!session.next_question && (session.status !== 'ready_for_confirmation')) return discardStoredState(storageKey)
     return {
       session: session as StoredIntakeSession,

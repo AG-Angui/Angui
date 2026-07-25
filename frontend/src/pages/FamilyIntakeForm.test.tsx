@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IntakeDraft, IntakeSession, SubmitIntakeAnswerResponse } from '../api/intake'
+import { ApiClientError } from '../api/client'
 import { FamilyIntakeForm } from './FamilyIntakeForm'
 
 const mocked = vi.hoisted(() => ({
@@ -113,6 +114,32 @@ describe('FamilyIntakeForm', () => {
 
     expect(await screen.findByRole('button', { name: '开始问询' })).toBeInTheDocument()
     expect(window.sessionStorage.getItem('angui:intake-tab-draft:family-1')).toBeNull()
+  })
+
+  it('discards cached sessions with invalid enums or next-question structures', async () => {
+    const malformedSession = {
+      ...collectingSession,
+      status: 'stale',
+      phase: 'unknown_phase',
+      next_question: { field: 'last_seen', prompt: 'Missing required flag' },
+    }
+    window.sessionStorage.setItem('angui:intake-tab-draft:family-1', JSON.stringify({ session: malformedSession, answer: '' }))
+
+    render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
+
+    expect(await screen.findByRole('button', { name: '开始问询' })).toBeInTheDocument()
+    expect(window.sessionStorage.getItem('angui:intake-tab-draft:family-1')).toBeNull()
+  })
+
+  it('clears an expired ready-for-confirmation session when its draft is unavailable', async () => {
+    window.sessionStorage.setItem('angui:intake-tab-draft:family-1', JSON.stringify({ session: readySession, answer: '' }))
+    mocked.getIntakeDraft.mockRejectedValue(new ApiClientError(404, 'not_found', 'Draft is no longer available'))
+
+    render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
+
+    expect(await screen.findByRole('button', { name: '开始问询' })).toBeInTheDocument()
+    expect(window.sessionStorage.getItem('angui:intake-tab-draft:family-1')).toBeNull()
+    expect(screen.getByText('Draft is no longer available')).toBeInTheDocument()
   })
 
   it('shows field-level provenance and sends a replacement when the family corrects a draft answer', async () => {
