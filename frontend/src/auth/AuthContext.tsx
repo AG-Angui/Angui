@@ -78,6 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsLoggingOut(true)
         try {
           await requestLogout(token)
+        } catch {
+          // Remote revocation is best effort; always complete the local safety exit.
         } finally {
           clearSession()
           setIsLoggingOut(false)

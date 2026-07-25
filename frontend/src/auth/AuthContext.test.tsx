@@ -77,6 +77,23 @@ describe('AuthProvider', () => {
     expect(sessionStorage.getItem('angui.session.token')).toBeNull()
   })
 
+  it('completes the local logout when remote revocation fails', async () => {
+    sessionStorage.setItem('angui.session.token', 'existing-session')
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, {
+        id: 'family-1', email: 'family@demo.invalid', display_name: '模拟家属', account_type: 'member', global_capabilities: [],
+      }))
+      .mockResolvedValueOnce(jsonResponse(503, { error: { code: 'service_unavailable' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AuthProvider><AuthProbe /></AuthProvider>)
+
+    expect(await screen.findByText('family@demo.invalid')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '退出' }))
+
+    expect(await screen.findByText('anonymous')).toBeInTheDocument()
+    expect(sessionStorage.getItem('angui.session.token')).toBeNull()
+  })
+
   it('removes stale session data when an authenticated request receives 401', async () => {
     sessionStorage.setItem('angui.session.token', 'existing-session')
     vi.stubGlobal(
