@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { CaseDetail } from '../api/cases'
+import type { CaseDetail, CaseRole, CaseStatus } from '../api/cases'
 import { CaseWorkspacePage } from './CaseWorkspacePage'
 
 const mocked = vi.hoisted(() => ({
   getCase: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
+  addCaseMember: vi.fn(),
 }))
 
 vi.mock('../auth/useAuth', () => ({
@@ -16,7 +17,7 @@ vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
-  addCaseMember: vi.fn(),
+  addCaseMember: (...args: unknown[]) => mocked.addCaseMember(...args),
   createCase: vi.fn(),
   createClue: vi.fn(),
   reviewClue: vi.fn(),
@@ -35,12 +36,17 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function detail(id: string, displayName: string): CaseDetail {
+function detail(
+  id: string,
+  displayName: string,
+  accessRole: CaseRole = 'family',
+  status: CaseStatus = 'active',
+): CaseDetail {
   return {
     id,
     case_code: `AG-${id}`,
-    status: 'active',
-    access_role: 'family',
+    status,
+    access_role: accessRole,
     elder_profile: {
       id: `profile-${id}`,
       display_name: displayName,
@@ -101,5 +107,57 @@ describe('CaseWorkspacePage', () => {
     })
     expect(screen.getByRole('heading', { name: '最新案件详情' })).toBeInTheDocument()
     expect(screen.queryByText('过期请求')).not.toBeInTheDocument()
+  })
+
+  it('lets an authorized commander invite the demo volunteer to an active case', async () => {
+    mocked.listCases.mockResolvedValue([
+      {
+        id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: '指挥案件',
+        last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z',
+      },
+    ])
+    mocked.getCase.mockResolvedValue(detail('case-command', '指挥案件', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ['frequent'],
+    })
+    mocked.addCaseMember.mockResolvedValue({})
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: '指挥案件' })
+    fireEvent.change(screen.getByPlaceholderText('成员邮箱'), { target: { value: 'volunteer@demo.invalid' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加案件成员' }))
+
+    await waitFor(() => expect(mocked.addCaseMember).toHaveBeenCalledWith(
+      'test-session',
+      'case-command',
+      'volunteer@demo.invalid',
+      'volunteer',
+    ))
+  })
+
+  it('does not expose closed-case controls that create supplementary information', async () => {
+    mocked.listCases.mockResolvedValue([
+      {
+        id: 'case-closed', case_code: 'AG-CLOSED', status: 'closed', access_role: 'commander', display_name: '已关闭案件',
+        last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z',
+      },
+    ])
+    mocked.getCase.mockResolvedValue(detail('case-closed', '已关闭案件', 'commander', 'closed'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ['frequent'],
+    })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: '已关闭案件' })
+    expect(screen.queryByRole('button', { name: '提交线索' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '提交地点' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '上传图片' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('combobox')[0]).toBeDisabled()
   })
 })

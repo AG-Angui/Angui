@@ -7,9 +7,15 @@ import { CaseWorkspacePage } from './pages/CaseWorkspacePage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 
-function CaseRoleRoute({ children }: { children: ReactNode }) {
+function CaseRoleRoute({
+  capability,
+  children,
+}: {
+  capability?: 'commander' | 'volunteer'
+  children: ReactNode
+}) {
   const { user } = useAuth()
-  return user?.account_type === 'member'
+  return user?.account_type === 'member' && (!capability || user.global_capabilities.includes(capability))
     ? children
     : <Navigate to="/" replace />
 }
@@ -44,7 +50,7 @@ function App() {
         <Route
           path="command"
           element={
-            <CaseRoleRoute>
+            <CaseRoleRoute capability="commander">
               <CaseWorkspacePage mode="commander" />
             </CaseRoleRoute>
           }
@@ -52,7 +58,7 @@ function App() {
         <Route
           path="volunteer"
           element={
-            <CaseRoleRoute>
+            <CaseRoleRoute capability="volunteer">
               <CaseWorkspacePage mode="volunteer" />
             </CaseRoleRoute>
           }
