@@ -1,0 +1,135 @@
+use actix_web::{
+    http::{StatusCode, header},
+    test,
+};
+use serde_json::Value;
+
+use crate::support::{COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
+
+#[actix_web::test]
+async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+
+    let confirmed_clue = context.create_clue(&case_id, FAMILY).await;
+    let commander = context.authenticated(COMMANDER).await;
+    angui::services::case_service::review_clue(
+        &context.database,
+        &commander,
+        &confirmed_clue,
+        angui::models::ReviewClueRequest {
+            status: "confirmed".to_owned(),
+        },
+    )
+    .await
+    .expect("fixture clue should be confirmed");
+    context.create_clue(&case_id, COMMANDER).await;
+    context.create_clue(&case_id, FAMILY).await;
+
+    let family_token = context.token(FAMILY).await;
+    let volunteer_token = context.token(VOLUNTEER).await;
+    let commander_token = context.token(COMMANDER).await;
+    let learner_token = context.token(LEARNER).await;
+    let app = crate::init_api_app!(&context);
+
+    let family = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .to_request(),
+    )
+    .await;
+    let family_body: Value = test::read_body_json(family).await;
+    assert_eq!(family_body["total"], 2);
+    assert!(
+        family_body["items"]
+            .as_array()
+            .expect("items should be an array")
+            .iter()
+            .all(|clue| clue["status"] == "confirmed" || clue["is_own_submission"] == true)
+    );
+
+    let volunteer = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .to_request(),
+    )
+    .await;
+    let volunteer_body: Value = test::read_body_json(volunteer).await;
+    assert_eq!(volunteer_body["total"], 1);
+    assert_eq!(volunteer_body["items"][0]["status"], "confirmed");
+
+    let paged = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/cases/{case_id}/clues?page=1&page_size=2&sort=created_at&order=asc"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    let paged_body: Value = test::read_body_json(paged).await;
+    assert_eq!(paged_body["total"], 3);
+    assert_eq!(paged_body["items"].as_array().map(Vec::len), Some(2));
+    assert_eq!(paged_body["page"], 1);
+    assert_eq!(paged_body["page_size"], 2);
+
+    let filtered = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues?status=confirmed"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    let filtered_body: Value = test::read_body_json(filtered).await;
+    assert_eq!(filtered_body["total"], 1);
+    assert_eq!(filtered_body["items"][0]["id"], confirmed_clue);
+
+    let unavailable = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_error(unavailable, StatusCode::NOT_FOUND, "not_found").await;
+}
+
+#[actix_web::test]
+async fn get_case_clues_rejects_invalid_whitelisted_query_values() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+
+    for query in [
+        "page=0",
+        "page_size=101",
+        "status=unreviewed",
+        "sort=status",
+        "order=sideways",
+        "unexpected=value",
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/cases/{case_id}/clues?{query}"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_error(response, StatusCode::BAD_REQUEST, "validation_error").await;
+    }
+}

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, TransactionTrait,
+    IntoActiveModel, Order, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -16,8 +16,8 @@ use crate::{
     error::ApiError,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseDetail, CaseListItem, CaseMemberResponse,
-        ClueResponse, CreateCaseRequest, CreateClueRequest, ElderProfileResponse,
-        ReviewClueRequest, UpdateCaseStatusRequest,
+        ClueResponse, ClueTimelineQuery, ClueTimelineResponse, CreateCaseRequest,
+        CreateClueRequest, ElderProfileResponse, ReviewClueRequest, UpdateCaseStatusRequest,
     },
     roles::{AccountType, CaseRole, GlobalCapability},
 };
@@ -30,6 +30,15 @@ const CLUE_REVIEW_STATUSES: &[&str] = &[
     "expired",
     "duplicate",
 ];
+const CLUE_STATUSES: &[&str] = &[
+    "pending_review",
+    "needs_verification",
+    "confirmed",
+    "rejected",
+    "expired",
+    "duplicate",
+];
+const MAX_CLUE_TIMELINE_PAGE_SIZE: u64 = 100;
 
 pub async fn list_cases(
     db: &DatabaseConnection,
@@ -254,6 +263,59 @@ pub async fn create_clue(
     Ok(ClueResponse::new(clue_model, Some(attribution), &auth.id))
 }
 
+pub async fn list_clues(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    query: ClueTimelineQuery,
+) -> Result<ClueTimelineResponse, ApiError> {
+    let query = ValidatedClueTimelineQuery::try_from(query)?;
+    let membership = membership_for_case(db, &auth.id, case_id).await?;
+    let case_role = case_role_from_database(&membership.role)?;
+    let mut clue_query = clues::Entity::find().filter(clues::Column::CaseId.eq(case_id));
+
+    if let Some(status) = &query.status {
+        clue_query = clue_query.filter(clues::Column::Status.eq(status));
+    }
+
+    clue_query = match query.sort.as_str() {
+        "created_at" => clue_query.order_by(clues::Column::CreatedAt, query.order.clone()),
+        "occurred_at" => clue_query
+            .order_by(clues::Column::OccurredAt, query.order.clone())
+            .order_by(clues::Column::CreatedAt, query.order.clone()),
+        _ => return Err(ApiError::Internal),
+    }
+    .order_by(clues::Column::Id, query.order.clone());
+
+    let clue_models = clue_query.all(db).await?;
+    let clue_ids: Vec<_> = clue_models.iter().map(|clue| clue.id.clone()).collect();
+    let attributions = clue_attributions_for_clues(db, clue_ids).await?;
+    let visible_clues: Vec<_> = clue_models
+        .into_iter()
+        .filter_map(|clue| {
+            let clue_id = clue.id.clone();
+            visible_clue_response(clue, attributions.get(&clue_id).cloned(), auth, case_role)
+        })
+        .collect();
+    let total = u64::try_from(visible_clues.len()).map_err(|_| ApiError::Internal)?;
+    let start = query.offset()?;
+    let end = start
+        .saturating_add(query.page_size_usize())
+        .min(visible_clues.len());
+    let items = visible_clues
+        .into_iter()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect();
+
+    Ok(ClueTimelineResponse {
+        items,
+        page: query.page,
+        page_size: query.page_size,
+        total,
+    })
+}
+
 pub async fn review_clue(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -319,6 +381,80 @@ pub async fn review_clue(
 
     transaction.commit().await?;
     Ok(ClueResponse::new(updated, Some(attribution), &auth.id))
+}
+
+struct ValidatedClueTimelineQuery {
+    page: u64,
+    page_size: u64,
+    status: Option<String>,
+    sort: String,
+    order: Order,
+}
+
+impl ValidatedClueTimelineQuery {
+    fn offset(&self) -> Result<usize, ApiError> {
+        let page_offset = self
+            .page
+            .checked_sub(1)
+            .and_then(|page| page.checked_mul(self.page_size))
+            .ok_or_else(|| ApiError::Validation("page is too large".to_owned()))?;
+        usize::try_from(page_offset)
+            .map_err(|_| ApiError::Validation("page is too large".to_owned()))
+    }
+
+    fn page_size_usize(&self) -> usize {
+        self.page_size as usize
+    }
+}
+
+impl TryFrom<ClueTimelineQuery> for ValidatedClueTimelineQuery {
+    type Error = ApiError;
+
+    fn try_from(value: ClueTimelineQuery) -> Result<Self, Self::Error> {
+        let page = value.page.unwrap_or(1);
+        if page == 0 {
+            return Err(ApiError::Validation("page must be at least 1".to_owned()));
+        }
+        let page_size = value.page_size.unwrap_or(25);
+        if page_size == 0 || page_size > MAX_CLUE_TIMELINE_PAGE_SIZE {
+            return Err(ApiError::Validation(format!(
+                "page_size must be between 1 and {MAX_CLUE_TIMELINE_PAGE_SIZE}"
+            )));
+        }
+        let status = value.status.map(|status| status.trim().to_lowercase());
+        if status
+            .as_deref()
+            .is_some_and(|status| !CLUE_STATUSES.contains(&status))
+        {
+            return Err(ApiError::Validation("status is unsupported".to_owned()));
+        }
+        let sort = value
+            .sort
+            .unwrap_or_else(|| "created_at".to_owned())
+            .trim()
+            .to_lowercase();
+        if !matches!(sort.as_str(), "created_at" | "occurred_at") {
+            return Err(ApiError::Validation("sort is unsupported".to_owned()));
+        }
+        let order = match value
+            .order
+            .unwrap_or_else(|| "desc".to_owned())
+            .trim()
+            .to_lowercase()
+            .as_str()
+        {
+            "asc" => Order::Asc,
+            "desc" => Order::Desc,
+            _ => return Err(ApiError::Validation("order is unsupported".to_owned())),
+        };
+        Ok(Self {
+            page,
+            page_size,
+            status,
+            sort,
+            order,
+        })
+    }
 }
 
 pub async fn add_case_member(
@@ -437,32 +573,13 @@ async fn load_case_detail(
         .all(db)
         .await?;
     let clue_ids: Vec<_> = clue_models.iter().map(|clue| clue.id.clone()).collect();
-    let attributions: HashMap<_, _> = if clue_ids.is_empty() {
-        HashMap::new()
-    } else {
-        clue_attributions::Entity::find()
-            .filter(clue_attributions::Column::ClueId.is_in(clue_ids))
-            .all(db)
-            .await?
-            .into_iter()
-            .map(|attribution| (attribution.clue_id.clone(), attribution))
-            .collect()
-    };
+    let attributions = clue_attributions_for_clues(db, clue_ids).await?;
 
     let visible_clues = clue_models
         .into_iter()
         .filter_map(|clue| {
-            let attribution = attributions.get(&clue.id).cloned();
-            let own = attribution
-                .as_ref()
-                .and_then(|value| value.submitted_by_user_id.as_deref())
-                == Some(auth.id.as_str());
-            let visible = match case_role {
-                CaseRole::Commander => true,
-                CaseRole::Family => clue.status == "confirmed" || own,
-                CaseRole::Volunteer => clue.status == "confirmed",
-            };
-            visible.then(|| ClueResponse::new(clue, attribution, &auth.id))
+            let clue_id = clue.id.clone();
+            visible_clue_response(clue, attributions.get(&clue_id).cloned(), auth, case_role)
         })
         .collect();
 
@@ -494,6 +611,40 @@ async fn load_case_detail(
         attachments,
         case_role,
     ))
+}
+
+async fn clue_attributions_for_clues<C: ConnectionTrait>(
+    db: &C,
+    clue_ids: Vec<String>,
+) -> Result<HashMap<String, clue_attributions::Model>, ApiError> {
+    if clue_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(clue_attributions::Entity::find()
+        .filter(clue_attributions::Column::ClueId.is_in(clue_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|attribution| (attribution.clue_id.clone(), attribution))
+        .collect())
+}
+
+fn visible_clue_response(
+    clue: clues::Model,
+    attribution: Option<clue_attributions::Model>,
+    auth: &AuthenticatedUser,
+    case_role: CaseRole,
+) -> Option<ClueResponse> {
+    let own = attribution
+        .as_ref()
+        .and_then(|value| value.submitted_by_user_id.as_deref())
+        == Some(auth.id.as_str());
+    let visible = match case_role {
+        CaseRole::Commander => true,
+        CaseRole::Family => clue.status == "confirmed" || own,
+        CaseRole::Volunteer => clue.status == "confirmed",
+    };
+    visible.then(|| ClueResponse::new(clue, attribution, &auth.id))
 }
 
 async fn membership_for_case<C: ConnectionTrait>(
