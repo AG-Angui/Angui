@@ -116,13 +116,11 @@ describe('FamilyIntakeForm', () => {
     expect(window.sessionStorage.getItem('angui:intake-tab-draft:family-1')).toBeNull()
   })
 
-  it('discards cached sessions with invalid enums or next-question structures', async () => {
-    const malformedSession = {
-      ...collectingSession,
-      status: 'stale',
-      phase: 'unknown_phase',
-      next_question: { field: 'last_seen', prompt: 'Missing required flag' },
-    }
+  it.each([
+    ['an invalid status', { ...collectingSession, status: 'stale' }],
+    ['an invalid phase', { ...collectingSession, phase: 'unknown_phase' }],
+    ['a malformed next question', { ...collectingSession, next_question: { field: 'last_seen', prompt: 'Missing required flag' } }],
+  ])('discards cached sessions with %s', async (_description, malformedSession) => {
     window.sessionStorage.setItem('angui:intake-tab-draft:family-1', JSON.stringify({ session: malformedSession, answer: '' }))
 
     render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
@@ -131,15 +129,16 @@ describe('FamilyIntakeForm', () => {
     expect(window.sessionStorage.getItem('angui:intake-tab-draft:family-1')).toBeNull()
   })
 
-  it('clears an expired ready-for-confirmation session when its draft is unavailable', async () => {
+  it.each([403, 404])('clears a %i unavailable ready-for-confirmation session', async (status) => {
     window.sessionStorage.setItem('angui:intake-tab-draft:family-1', JSON.stringify({ session: readySession, answer: '' }))
-    mocked.getIntakeDraft.mockRejectedValue(new ApiClientError(404, 'not_found', 'Draft is no longer available'))
+    const message = `Draft is no longer available (${status})`
+    mocked.getIntakeDraft.mockRejectedValue(new ApiClientError(status, status === 403 ? 'forbidden' : 'not_found', message))
 
     render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
 
     expect(await screen.findByRole('button', { name: '开始问询' })).toBeInTheDocument()
     expect(window.sessionStorage.getItem('angui:intake-tab-draft:family-1')).toBeNull()
-    expect(screen.getByText('Draft is no longer available')).toBeInTheDocument()
+    expect(screen.getByText(message)).toBeInTheDocument()
   })
 
   it('shows field-level provenance and sends a replacement when the family corrects a draft answer', async () => {
