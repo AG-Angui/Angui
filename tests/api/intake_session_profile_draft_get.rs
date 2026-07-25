@@ -68,6 +68,16 @@ async fn get_profile_draft_returns_only_unconfirmed_family_source_data() {
         body["profile"]["last_seen_information"],
         "Fictional community gate; time is not yet verified."
     );
+    let health_notes_metadata = body["field_metadata"]
+        .as_array()
+        .expect("profile draft metadata must be an array")
+        .iter()
+        .find(|metadata| metadata["field"] == "health_notes")
+        .expect("health notes must include field-level draft metadata");
+    assert_eq!(health_notes_metadata["source_field"], "health_status");
+    assert_eq!(health_notes_metadata["source"], "family_provided");
+    assert_eq!(health_notes_metadata["status"], "draft");
+    assert!(health_notes_metadata["generated_at"].is_string());
     assert!(
         body["missing_fields"]
             .as_array()

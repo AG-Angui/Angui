@@ -38,6 +38,13 @@ async fn post_intake_sessions_creates_a_family_owned_rule_guided_draft() {
     assert_eq!(body["status"], "ready_for_confirmation");
     assert_eq!(body["question_set_version"], 2);
     assert_eq!(body["guidance_mode"], "rule_based");
+    assert_eq!(body["phase"], "phase_two");
+    assert_eq!(body["phase_transition_ready"], true);
+    assert_eq!(
+        body["completed_phase_one_fields"],
+        serde_json::json!(["basic_information", "last_seen"])
+    );
+    assert_eq!(body["missing_phase_one_fields"], serde_json::json!([]));
     assert_eq!(
         body["initial_answers"]["basic_information"],
         "Fictional elder profile"

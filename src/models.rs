@@ -225,10 +225,23 @@ pub struct IntakeProfileDraft {
     pub generated_at: String,
     pub requires_human_confirmation: bool,
     pub profile: IntakeProfileDraftFields,
+    pub field_metadata: Vec<IntakeProfileDraftFieldMetadata>,
     pub missing_fields: Vec<String>,
     pub assessments: Vec<IntakeAssessment>,
     pub confirmation_blocked_reasons: Vec<String>,
     pub direction_hypotheses: Vec<IntakeDirectionHypothesis>,
+}
+
+/// Provenance for a non-empty field in an unconfirmed intake profile draft.
+/// The value itself remains in `profile`; this metadata lets clients display
+/// the draft's origin without treating it as a confirmed case fact.
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeProfileDraftFieldMetadata {
+    pub field: String,
+    pub source_field: String,
+    pub source: String,
+    pub status: String,
+    pub generated_at: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
