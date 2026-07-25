@@ -1018,8 +1018,8 @@ components:
       required: [name, longitude, latitude, coordinate_system]
       properties:
         name: { type: string }
-        longitude: { type: number }
-        latitude: { type: number }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        latitude: { type: number, minimum: -90, maximum: 90 }
         coordinate_system: { type: string, description: Route estimates require gcj02; other values produce an informational assessment. }
 
     IntakeCandidateField:
