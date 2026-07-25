@@ -1,0 +1,3 @@
+[submodule ".codex/skills/Amap_webservice_api_skill"]
+	path = .codex/skills/Amap_webservice_api_skill
+	url = https://github.com/cg8-5712/Amap_webservice_api_skill.git
