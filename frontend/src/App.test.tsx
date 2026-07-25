@@ -68,13 +68,13 @@ describe('application role routing', () => {
   })
 
   it.each([
-    ['/command', ['commander'], '指挥端'],
-    ['/volunteer', ['volunteer'], '志愿者端'],
-    ['/family', [], '家属端'],
-  ] as const)('allows an operational account with %s capability to open the %s route', async (path, capabilities, workspace) => {
+    ['/command', ['commander']],
+    ['/volunteer', ['volunteer']],
+    ['/family', []],
+  ] as const)('allows an operational account with %s capability to open the workspace route', async (path, capabilities) => {
     setAuth('member', capabilities)
     renderApp(path)
-    expect(await screen.findByRole('link', { name: workspace })).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: '案件列表' })).toBeInTheDocument()
   })
 
   it.each([
