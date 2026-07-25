@@ -2,10 +2,10 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde_json::Value;
 
-use angui::entities::{user_global_capabilities, users};
+use angui::entities::{audit_events, user_global_capabilities, users};
 
 use crate::support::{ADMIN, COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
 
@@ -34,6 +34,21 @@ async fn post_case_members_applies_invitation_role_and_duplicate_rules() {
     );
     assert_eq!(body["case_role"], "commander");
 
+    let family = context.authenticated(FAMILY).await;
+    let audit = audit_events::Entity::find()
+        .filter(audit_events::Column::CaseId.eq(&case_id))
+        .filter(audit_events::Column::Action.eq("case.member_added"))
+        .one(&context.database)
+        .await
+        .expect("member invitation audit should be readable")
+        .expect("successful invitation should be audited");
+    assert_eq!(audit.actor, family.id);
+    assert_eq!(audit.entity_type, "user");
+    let metadata: Value =
+        serde_json::from_str(audit.metadata_json.as_deref().expect("audit metadata"))
+            .expect("audit metadata should be JSON");
+    assert_eq!(metadata["case_role"], "commander");
+
     let duplicate = test::call_service(
         &app,
         test::TestRequest::post()
@@ -59,6 +74,19 @@ async fn post_case_members_applies_invitation_role_and_duplicate_rules() {
         "forbidden",
     )
     .await;
+
+    let unrelated_case_id = context.create_case().await;
+    let commander_token = context.token(COMMANDER).await;
+    let unrelated_case = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{unrelated_case_id}/members"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(serde_json::json!({ "email": VOLUNTEER, "case_role": "volunteer" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(unrelated_case, StatusCode::NOT_FOUND, "not_found").await;
 }
 
 #[actix_web::test]
