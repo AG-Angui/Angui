@@ -13,8 +13,12 @@ mod m0010_create_intake_sessions;
 mod m0011_create_intake_question_definitions;
 mod m0012_split_account_type_and_capabilities;
 mod m0013_create_intake_session_answers;
+mod m0014_confirm_intake_sessions;
+mod m0015_create_intake_prompt_templates;
+mod m0016_add_intake_assessments;
+mod m0017_add_two_phase_intake_questions;
 
-use sea_orm_migration::sea_orm::DbBackend;
+use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
 pub struct Migrator;
 
@@ -35,6 +39,10 @@ impl MigratorTrait for Migrator {
             Box::new(m0011_create_intake_question_definitions::Migration),
             Box::new(m0012_split_account_type_and_capabilities::Migration),
             Box::new(m0013_create_intake_session_answers::Migration),
+            Box::new(m0014_confirm_intake_sessions::Migration),
+            Box::new(m0015_create_intake_prompt_templates::Migration),
+            Box::new(m0016_add_intake_assessments::Migration),
+            Box::new(m0017_add_two_phase_intake_questions::Migration),
         ]
     }
 }
@@ -59,6 +67,11 @@ pub(crate) async fn execute_script(manager: &SchemaManager<'_>, script: &str) ->
         .filter(|statement| !statement.is_empty())
         .collect();
 
+    let restores_sqlite_foreign_keys = manager.get_database_backend() == DbBackend::Sqlite
+        && script
+            .to_ascii_lowercase()
+            .contains("pragma foreign_keys = off");
+
     for (index, statement) in statements.iter().enumerate() {
         // InnoDB rejects dropping an index that backs a foreign key (error 1553).
         // A later DROP TABLE removes that table's indexes and constraints itself,
@@ -69,10 +82,42 @@ pub(crate) async fn execute_script(manager: &SchemaManager<'_>, script: &str) ->
             continue;
         }
 
-        manager
+        if let Err(error) = manager.get_connection().execute_unprepared(statement).await {
+            if restores_sqlite_foreign_keys {
+                let _ = manager
+                    .get_connection()
+                    .execute_unprepared("PRAGMA foreign_keys = ON;")
+                    .await;
+            }
+            return Err(error);
+        }
+    }
+
+    Ok(())
+}
+
+/// Refuses a rollback before it discards data written after the migration ran.
+///
+/// Each query must return at least one row when rollback is unsafe. Keeping this
+/// check in Rust makes the invariant consistent across SQLite, PostgreSQL, and
+/// MySQL without relying on dialect-specific SQL error tricks.
+pub(crate) async fn ensure_rollback_is_safe(
+    manager: &SchemaManager<'_>,
+    checks: &[(&str, &str)],
+) -> Result<(), DbErr> {
+    for (description, query) in checks {
+        let found = manager
             .get_connection()
-            .execute_unprepared(statement)
+            .query_one(Statement::from_string(
+                manager.get_database_backend(),
+                (*query).to_owned(),
+            ))
             .await?;
+        if found.is_some() {
+            return Err(DbErr::Custom(format!(
+                "destructive rollback blocked: {description}; archive or remove the data explicitly before retrying"
+            )));
+        }
     }
 
     Ok(())
@@ -191,6 +236,176 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[tokio::test]
+    async fn sqlite_rollbacks_refuse_to_discard_post_migration_data() {
+        let confirmation_database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&confirmation_database, Some(14))
+            .await
+            .expect("schema through confirmation migration should succeed");
+        insert_member_and_session(&confirmation_database, "confirmation").await;
+        confirmation_database
+            .execute_unprepared(
+                "UPDATE intake_sessions SET confirmed_by_user_id = 'confirmation-user', confirmed_at = '2026-07-25T01:00:00.000Z' WHERE id = 'confirmation-session'",
+            )
+            .await
+            .expect("confirmation data should be stored");
+        assert!(
+            Migrator::down(&confirmation_database, Some(1))
+                .await
+                .is_err()
+        );
+
+        let template_database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&template_database, Some(15))
+            .await
+            .expect("schema through prompt template migration should succeed");
+        template_database
+            .execute_unprepared(
+                "INSERT INTO ai_prompt_templates (id, purpose, version, system_instruction, status, created_by_user_id, published_by_user_id, published_at, created_at, updated_at) VALUES ('operator-template', 'case_summary_draft', 'operator-v1', 'Operator-managed configuration.', 'draft', NULL, NULL, NULL, '2026-07-25T01:00:00.000Z', '2026-07-25T01:00:00.000Z')",
+            )
+            .await
+            .expect("operator template should be stored");
+        assert!(Migrator::down(&template_database, Some(1)).await.is_err());
+        assert!(
+            template_database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM ai_prompt_templates WHERE id = 'operator-template'",
+                ))
+                .await
+                .expect("template query should succeed")
+                .is_some()
+        );
+
+        let assessment_database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&assessment_database, Some(16))
+            .await
+            .expect("schema through assessment migration should succeed");
+        insert_member_and_session(&assessment_database, "assessment").await;
+        assessment_database
+            .execute_unprepared(
+                "UPDATE intake_sessions SET assessment_json = '[{\"kind\":\"risk\"}]' WHERE id = 'assessment-session'",
+            )
+            .await
+            .expect("assessment data should be stored");
+        assert!(Migrator::down(&assessment_database, Some(1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_two_phase_question_migration_preserves_scope_and_refuses_unsafe_rollback() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, Some(16))
+            .await
+            .expect("schema before two-phase question migration should succeed");
+        database
+            .execute_unprepared(
+                "INSERT INTO intake_question_definitions (id, version, field_code, prompt, display_order, is_required, max_answer_chars, status, created_at, updated_at) VALUES ('operator-question', 99, 'operator_defined', 'Operator-owned question', 1, 0, 100, 'active', '2026-07-25T01:00:00.000Z', '2026-07-25T01:00:00.000Z')",
+            )
+            .await
+            .expect("operator-owned question should be stored");
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("two-phase question migration should succeed");
+
+        let operator_question = database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT status FROM intake_question_definitions WHERE id = 'operator-question'",
+            ))
+            .await
+            .expect("operator question query should succeed")
+            .expect("operator question should remain");
+        assert_eq!(
+            operator_question.try_get::<String>("", "status").unwrap(),
+            "active"
+        );
+
+        insert_member_and_session(&database, "v2").await;
+        database
+            .execute_unprepared(
+                "UPDATE intake_sessions SET question_set_version = 2 WHERE id = 'v2-session'",
+            )
+            .await
+            .expect("version 2 session should be stored");
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        assert!(
+            database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0201'",
+                ))
+                .await
+                .expect("version 2 question query should succeed")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_two_phase_question_rollback_refuses_manual_question_changes() {
+        let v2_database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&v2_database, None)
+            .await
+            .expect("all migrations should succeed");
+        v2_database
+            .execute_unprepared(
+                "UPDATE intake_question_definitions SET prompt = 'Operator-edited prompt' WHERE id = 'intake-q-0201'",
+            )
+            .await
+            .expect("operator edit should be stored without changing the migration timestamp");
+        assert!(Migrator::down(&v2_database, Some(1)).await.is_err());
+        assert!(v2_database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0201' AND prompt = 'Operator-edited prompt'",
+            ))
+            .await
+            .expect("edited version 2 question query should succeed")
+            .is_some());
+
+        let v1_database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&v1_database, None)
+            .await
+            .expect("all migrations should succeed");
+        v1_database
+            .execute_unprepared(
+                "UPDATE intake_question_definitions SET status = 'active' WHERE id = 'intake-q-0001'",
+            )
+            .await
+            .expect("operator status change should be stored");
+        assert!(Migrator::down(&v1_database, Some(1)).await.is_err());
+        assert!(v1_database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0001' AND status = 'active'",
+            ))
+            .await
+            .expect("operator status query should succeed")
+            .is_some());
+    }
+
+    async fn insert_member_and_session(database: &impl ConnectionTrait, prefix: &str) {
+        let user_id = format!("{prefix}-user");
+        let session_id = format!("{prefix}-session");
+        database
+            .execute_unprepared(&format!(
+                "INSERT INTO users (id, email, display_name, account_type, password_hash, status, created_at, updated_at) VALUES ('{user_id}', '{prefix}@demo.invalid', 'Test member', 'member', 'hash', 'active', '2026-07-25T00:00:00.000Z', '2026-07-25T00:00:00.000Z'); INSERT INTO intake_sessions (id, created_by_user_id, case_id, question_set_version, status, answers_json, created_at, updated_at) VALUES ('{session_id}', '{user_id}', NULL, 1, 'collecting', '{{}}', '2026-07-25T00:00:00.000Z', '2026-07-25T00:00:00.000Z')"
+            ))
+            .await
+            .expect("test member and intake session should be stored");
     }
 
     #[tokio::test]
@@ -385,5 +600,13 @@ mod tests {
             "DROP INDEX idx_users_role_status ON users;",
             &["DROP TABLE IF EXISTS cases;"]
         ));
+    }
+
+    #[test]
+    fn postgres_confirmation_foreign_key_defers_historical_validation() {
+        let script = include_str!("../sql/postgres/up/0014_confirm_intake_sessions.sql")
+            .to_ascii_lowercase();
+        assert!(script.contains("constraint fk_intake_sessions_confirmer"));
+        assert!(script.contains("not valid"));
     }
 }

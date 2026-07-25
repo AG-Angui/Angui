@@ -112,36 +112,8 @@ pub async fn create_case(
 
     let transaction = db.begin().await?;
     let timestamp = now();
-    let case_id = new_id();
-    let profile_id = new_id();
-    let case_code = format!("AG-{}", case_id[..8].to_uppercase());
-
-    cases::ActiveModel {
-        id: Set(case_id.clone()),
-        case_code: Set(case_code),
-        status: Set("active".to_owned()),
-        created_at: Set(timestamp.clone()),
-        updated_at: Set(timestamp.clone()),
-    }
-    .insert(&transaction)
-    .await?;
-
-    elder_profiles::ActiveModel {
-        id: Set(profile_id),
-        case_id: Set(case_id.clone()),
-        display_name: Set(request.display_name.trim().to_owned()),
-        age: Set(request.age),
-        gender: Set(trim_optional(request.gender)),
-        physical_description: Set(trim_optional(request.physical_description)),
-        clothing_description: Set(trim_optional(request.clothing_description)),
-        health_notes: Set(trim_optional(request.health_notes)),
-        last_seen_at: Set(trim_optional(request.last_seen_at)),
-        last_seen_location: Set(trim_optional(request.last_seen_location)),
-        created_at: Set(timestamp.clone()),
-        updated_at: Set(timestamp.clone()),
-    }
-    .insert(&transaction)
-    .await?;
+    let case_model = insert_case_records(&transaction, &request, &timestamp).await?;
+    let case_id = case_model.id.clone();
 
     insert_membership(
         &transaction,
@@ -536,7 +508,7 @@ async fn require_case_role<C: ConnectionTrait>(
     Ok(case_role)
 }
 
-async fn insert_membership<C: ConnectionTrait>(
+pub(crate) async fn insert_membership<C: ConnectionTrait>(
     db: &C,
     case_id: &str,
     user_id: &str,
@@ -555,6 +527,46 @@ async fn insert_membership<C: ConnectionTrait>(
     .insert(db)
     .await?;
     Ok(())
+}
+
+/// Creates the formal case and elder profile within a caller-owned transaction.
+/// Intake confirmation uses the same implementation so a case cannot be
+/// committed without its profile or its source-session link.
+pub(crate) async fn insert_case_records<C: ConnectionTrait>(
+    db: &C,
+    request: &CreateCaseRequest,
+    timestamp: &str,
+) -> Result<cases::Model, ApiError> {
+    validate_case_request(request)?;
+    let case_id = new_id();
+    let case_model = cases::ActiveModel {
+        id: Set(case_id.clone()),
+        case_code: Set(format!("AG-{}", case_id[..8].to_uppercase())),
+        status: Set("active".to_owned()),
+        created_at: Set(timestamp.to_owned()),
+        updated_at: Set(timestamp.to_owned()),
+    }
+    .insert(db)
+    .await?;
+
+    elder_profiles::ActiveModel {
+        id: Set(new_id()),
+        case_id: Set(case_id),
+        display_name: Set(request.display_name.trim().to_owned()),
+        age: Set(request.age),
+        gender: Set(trim_optional(request.gender.clone())),
+        physical_description: Set(trim_optional(request.physical_description.clone())),
+        clothing_description: Set(trim_optional(request.clothing_description.clone())),
+        health_notes: Set(trim_optional(request.health_notes.clone())),
+        last_seen_at: Set(trim_optional(request.last_seen_at.clone())),
+        last_seen_location: Set(trim_optional(request.last_seen_location.clone())),
+        created_at: Set(timestamp.to_owned()),
+        updated_at: Set(timestamp.to_owned()),
+    }
+    .insert(db)
+    .await?;
+
+    Ok(case_model)
 }
 
 fn account_type_from_database(value: &str) -> Result<AccountType, ApiError> {
@@ -593,7 +605,7 @@ fn case_role_from_database(value: &str) -> Result<CaseRole, ApiError> {
     })
 }
 
-async fn write_audit<C: ConnectionTrait>(
+pub(crate) async fn write_audit<C: ConnectionTrait>(
     db: &C,
     case_id: Option<String>,
     auth: &AuthenticatedUser,

@@ -2,6 +2,16 @@ use std::env;
 
 use crate::ai_gateway::{ProviderConfig, validate_provider_configurations};
 
+/// Load a local development `.env` file without overriding process-level
+/// configuration. A missing file is normal in production and CI.
+pub fn load_local_env_file() -> Result<(), String> {
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(dotenvy::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not load local .env configuration: {error}")),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub host: String,
@@ -10,11 +20,15 @@ pub struct Settings {
     pub database_url: String,
     pub session_ttl_hours: i64,
     pub intake_answer_hard_max: usize,
+    pub amap_webservice_key: Option<String>,
+    pub amap_webservice_base_url: String,
+    pub amap_timeout_ms: u64,
     pub ai_provider_configurations: Vec<ProviderConfig>,
 }
 
 impl Settings {
     pub fn from_env() -> Result<Self, String> {
+        load_local_env_file()?;
         let host = env::var("ANGUI_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
         let port_value = env::var("ANGUI_PORT").unwrap_or_else(|_| "8080".to_owned());
         let port = port_value
@@ -42,6 +56,21 @@ impl Settings {
         if !(1..=10_000).contains(&intake_answer_hard_max) {
             return Err("ANGUI_INTAKE_ANSWER_HARD_MAX must be between 1 and 10000".to_owned());
         }
+        let amap_webservice_key = env::var("AMAP_WEBSERVICE_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let amap_webservice_base_url = env::var("AMAP_WEBSERVICE_BASE_URL")
+            .unwrap_or_else(|_| "https://restapi.amap.com".to_owned());
+        if !amap_webservice_base_url.starts_with("https://") {
+            return Err("AMAP_WEBSERVICE_BASE_URL must use https".to_owned());
+        }
+        let amap_timeout_value = env::var("AMAP_TIMEOUT_MS").unwrap_or_else(|_| "2500".to_owned());
+        let amap_timeout_ms = amap_timeout_value.parse::<u64>().map_err(|_| {
+            format!("AMAP_TIMEOUT_MS must be a positive integer, got {amap_timeout_value:?}")
+        })?;
+        if !(100..=10_000).contains(&amap_timeout_ms) {
+            return Err("AMAP_TIMEOUT_MS must be between 100 and 10000".to_owned());
+        }
         let provider_configurations_value =
             env::var("ANGUI_AI_PROVIDERS_JSON").unwrap_or_else(|_| "[]".to_owned());
         let ai_provider_configurations: Vec<ProviderConfig> = serde_json::from_str(
@@ -62,6 +91,9 @@ impl Settings {
             database_url,
             session_ttl_hours,
             intake_answer_hard_max,
+            amap_webservice_key,
+            amap_webservice_base_url,
+            amap_timeout_ms,
             ai_provider_configurations,
         })
     }
@@ -84,6 +116,9 @@ mod tests {
             database_url: "sqlite::memory:".to_owned(),
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
+            amap_webservice_key: None,
+            amap_webservice_base_url: "https://restapi.amap.com".to_owned(),
+            amap_timeout_ms: 2_500,
             ai_provider_configurations: Vec::new(),
         };
 

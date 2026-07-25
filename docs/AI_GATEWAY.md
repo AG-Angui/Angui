@@ -66,3 +66,9 @@ Candidates are ordered deterministically by priority, then weight, then provider
 Each future execution is expected to persist the Gateway's `AiExecutionAudit` through `persist_execution_audit`. The record includes Provider ID, model, template version, input-scope reference, SHA-256 input hash, redaction-policy version, and task status. It never contains the raw request, response, health history, contact data, or precise locations.
 
 This PR provides the shared boundary and audit writer only. It does not yet call external AI services or allow an AI result to create a confirmed clue, publish a case update, or dispatch a task.
+
+## Prompt Templates
+
+Approved system instructions are stored in the versioned `ai_prompt_templates` database table, not in provider environment variables or an MCP server. The common table is keyed by purpose, so it can serve `intake_next_question`, `intake_profile_draft`, `clue_draft`, `case_summary_draft`, `knowledge_answer`, and `case_archive_draft` without duplicating publication and audit rules for every module. The currently seeded intake template is reserved for the future model-backed path; the shipped intake flow is deterministic and rule-based.
+
+The future management API must restrict draft, publication, and retirement actions to the appropriate administrative capability, create a corresponding audit event, preserve published versions for reproducibility, and prohibit direct client-supplied prompt text in normal business requests. MCP may be useful as a separate, authenticated operator integration, but it is not the runtime source of prompt configuration.

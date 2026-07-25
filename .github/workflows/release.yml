@@ -210,6 +210,7 @@ jobs:
           PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
           PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
+          AMAP_WEBSERVICE_KEY: ${{ secrets.AMAP_WEBSERVICE_KEY }}
           PREVIEW_REPOSITORY_DIR: ${{ github.workspace }}
           PREVIEW_BACKEND_DIR: ${{ github.workspace }}/.preview/backend
           PREVIEW_FRONTEND_DIR: ${{ github.workspace }}/.preview/frontend

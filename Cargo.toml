@@ -14,10 +14,12 @@ actix-cors = "0.7.1"
 actix-web = "4.14.0"
 argon2 = "0.5.3"
 chrono = "0.4.42"
+dotenvy = "0.15.7"
 env_logger = "0.11.11"
 futures-util = "0.3.32"
 hex = "0.4.3"
 http = "0.2.12"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 sea-orm = { version = "1.1.19", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

@@ -11,6 +11,10 @@ pub struct Model {
     pub question_set_version: i32,
     pub status: String,
     pub answers_json: String,
+    pub assessment_json: String,
+    pub structured_answers_json: String,
+    pub confirmed_by_user_id: Option<String>,
+    pub confirmed_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -2,11 +2,13 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, Set,
+};
 use serde_json::Value;
 
 use angui::{
-    entities::{audit_events, intake_session_answers, intake_sessions},
+    entities::{audit_events, intake_answer_revisions, intake_session_answers, intake_sessions},
     models::{CreateIntakeSessionRequest, IntakeInitialAnswers},
     services::intake_session_service,
 };
@@ -205,6 +207,31 @@ async fn post_intake_session_answers_handles_prompt_injection_limits_and_duplica
             .to_request(),
     )
     .await;
+    assert_error(injection_response, StatusCode::CONFLICT, "conflict").await;
+
+    let phase_one_response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/intake-sessions/{session_id}/answers"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(answer_request(
+                "last_seen",
+                "Fictional community gate, approximate time.",
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(phase_one_response.status(), StatusCode::CREATED);
+
+    let injection_response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/intake-sessions/{session_id}/answers"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(answer_request("follow_up_clues", injection))
+            .to_request(),
+    )
+    .await;
     assert_eq!(injection_response.status(), StatusCode::CREATED);
     let body: Value = test::read_body_json(injection_response).await;
     assert_eq!(body["guidance_mode"], "rule_based");
@@ -243,6 +270,30 @@ async fn post_intake_session_answers_handles_prompt_injection_limits_and_duplica
     )
     .await;
     assert_error(duplicate, StatusCode::CONFLICT, "conflict").await;
+
+    let corrected = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/intake-sessions/{session_id}/answers"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "field": "health_status",
+                "answer": "Corrected fictional health detail",
+                "replace": true
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(corrected.status(), StatusCode::CREATED);
+    assert_eq!(
+        intake_answer_revisions::Entity::find()
+            .filter(intake_answer_revisions::Column::SessionId.eq(&session_id))
+            .filter(intake_answer_revisions::Column::FieldCode.eq("health_status"))
+            .count(&context.database)
+            .await
+            .unwrap(),
+        2
+    );
 
     let audit = audit_events::Entity::find()
         .filter(audit_events::Column::EntityId.eq(&session_id))

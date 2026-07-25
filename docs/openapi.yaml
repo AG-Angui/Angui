@@ -227,6 +227,72 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/intake-sessions/{session_id}/profile-draft:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    get:
+      tags: [Intake sessions]
+      operationId: getIntakeSessionProfileDraft
+      summary: Get the unconfirmed profile draft for an intake session
+      description: Only the session creator can read this sensitive draft. It is assembled only from that session's family-provided answers, is explicitly marked `draft`, and is never a formal case fact.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200":
+          description: Unconfirmed profile draft requiring human confirmation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntakeProfileDraft"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/intake-sessions/{session_id}/confirm:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    post:
+      tags: [Intake sessions]
+      operationId: confirmIntakeSession
+      summary: Human-confirm a profile and create the formal case
+      description: The session creator submits family-reviewed final values. Creation of the case, elder profile, family membership, `case.created` audit event, and session link is one transaction. A successful repeat is idempotent and returns the same case.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmIntakeSessionRequest"
+      responses:
+        "201":
+          description: Formal active case created or returned from an idempotent confirmation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmIntakeSessionResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/cases:
     get:
       tags: [Cases]
@@ -812,6 +878,67 @@ components:
         guidance_mode: { type: string, const: rule_based }
         privacy_notice: { type: string }
         updated_at: { type: string, format: date-time }
+
+    IntakeProfileDraft:
+      type: object
+      additionalProperties: false
+      required: [status, source_scope, generated_at, requires_human_confirmation, profile, missing_fields]
+      properties:
+        status: { type: string, const: draft }
+        source_scope: { type: string }
+        generated_at: { type: string, format: date-time }
+        requires_human_confirmation: { type: boolean, const: true }
+        profile: { $ref: "#/components/schemas/IntakeProfileDraftFields" }
+        missing_fields:
+          type: array
+          items: { type: string }
+
+    IntakeProfileDraftFields:
+      type: object
+      additionalProperties: false
+      required: [physical_description, clothing_description, health_notes, mobility_notes, transportation_ability, frequent_locations, last_seen_information, behavior_habits]
+      properties:
+        physical_description: { type: [string, "null"] }
+        clothing_description: { type: [string, "null"] }
+        health_notes: { type: [string, "null"] }
+        mobility_notes: { type: [string, "null"] }
+        transportation_ability: { type: [string, "null"] }
+        frequent_locations: { type: [string, "null"] }
+        last_seen_information: { type: [string, "null"] }
+        behavior_habits: { type: [string, "null"] }
+
+    ConfirmIntakeSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [profile, human_confirmed]
+      properties:
+        human_confirmed: { type: boolean, const: true }
+        profile: { $ref: "#/components/schemas/ConfirmedIntakeProfile" }
+
+    ConfirmedIntakeProfile:
+      type: object
+      additionalProperties: false
+      required: [display_name, age, gender, physical_description, clothing_description, health_notes, last_seen_at, last_seen_location]
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 120 }
+        age: { type: [integer, "null"], minimum: 0, maximum: 130 }
+        gender: { type: [string, "null"] }
+        physical_description: { type: [string, "null"] }
+        clothing_description: { type: [string, "null"] }
+        health_notes: { type: [string, "null"] }
+        last_seen_at: { type: [string, "null"], format: date-time }
+        last_seen_location: { type: string, minLength: 1 }
+
+    ConfirmIntakeSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [case_id, case_code, status, confirmation_status, confirmed_at]
+      properties:
+        case_id: { type: string, format: uuid }
+        case_code: { type: string }
+        status: { type: string, const: active }
+        confirmation_status: { type: string, const: human_confirmed }
+        confirmed_at: { type: string, format: date-time }
 
     IntakeQuestion:
       type: object

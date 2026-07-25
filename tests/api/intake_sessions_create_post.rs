@@ -35,14 +35,14 @@ async fn post_intake_sessions_creates_a_family_owned_rule_guided_draft() {
 
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = test::read_body_json(response).await;
-    assert_eq!(body["status"], "collecting");
-    assert_eq!(body["question_set_version"], 1);
+    assert_eq!(body["status"], "ready_for_confirmation");
+    assert_eq!(body["question_set_version"], 2);
     assert_eq!(body["guidance_mode"], "rule_based");
     assert_eq!(
         body["initial_answers"]["basic_information"],
         "Fictional elder profile"
     );
-    assert_eq!(body["next_question"]["field"], "health_status");
+    assert_eq!(body["next_question"]["field"], "frequent_locations");
     assert!(
         body["missing_fields"]
             .as_array()
@@ -56,7 +56,7 @@ async fn post_intake_sessions_creates_a_family_owned_rule_guided_draft() {
         .await
         .unwrap()
         .expect("session should be stored");
-    assert_eq!(stored.status, "collecting");
+    assert_eq!(stored.status, "ready_for_confirmation");
     assert!(stored.answers_json.contains("Fictional elder profile"));
 
     let audit = audit_events::Entity::find()
@@ -79,6 +79,7 @@ async fn post_intake_sessions_reads_question_order_prompt_and_limit_from_databas
     let context = TestContext::new().await;
     let health_question = intake_question_definitions::Entity::find()
         .filter(intake_question_definitions::Column::FieldCode.eq("health_status"))
+        .filter(intake_question_definitions::Column::Status.eq("active"))
         .one(&context.database)
         .await
         .unwrap()

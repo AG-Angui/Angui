@@ -1,0 +1,1 @@
+ALTER TABLE intake_sessions ADD COLUMN confirmed_by_user_id VARCHAR(36), ADD COLUMN confirmed_at VARCHAR(40), ADD CONSTRAINT fk_intake_sessions_confirmer FOREIGN KEY (confirmed_by_user_id) REFERENCES users(id) ON DELETE RESTRICT;

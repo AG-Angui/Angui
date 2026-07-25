@@ -3,8 +3,8 @@ use std::io;
 use actix_cors::Cors;
 use actix_web::{App, HttpServer, http, middleware::Logger, web};
 use angui::{
-    ai_gateway::AiGateway, app_state::AppState, config::Settings, rate_limit::LoginRateLimiter,
-    routes,
+    ai_gateway::AiGateway, amap_service::AmapService, app_state::AppState, config::Settings,
+    rate_limit::LoginRateLimiter, routes,
 };
 use sea_orm::Database;
 
@@ -24,6 +24,12 @@ async fn main() -> io::Result<()> {
         db: database,
         session_ttl_hours: settings.session_ttl_hours,
         intake_answer_hard_max: settings.intake_answer_hard_max,
+        amap_service: AmapService::new(
+            settings.amap_webservice_key,
+            settings.amap_webservice_base_url,
+            settings.amap_timeout_ms,
+        )
+        .map_err(|error| io::Error::other(format!("AMap client initialization failed: {error}")))?,
         ai_gateway,
         login_limiter: LoginRateLimiter::default(),
     });

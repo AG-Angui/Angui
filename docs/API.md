@@ -17,6 +17,9 @@
 | `GET` | `/api/auth/me` | `200` | 获取当前认证用户 |
 | `POST` | `/api/auth/logout` | `204` | 撤销当前服务端会话 |
 | `POST` | `/api/intake-sessions` | `201` | 创建成员的未确认走失信息问询会话 |
+| `POST` | `/api/intake-sessions/{session_id}/answers` | `201` | 追加一个未确认答案并获取下一问 |
+| `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
+| `POST` | `/api/intake-sessions/{session_id}/confirm` | `201` | 家属确认画像并创建正式案件 |
 | `GET` | `/api/cases` | `200` | 按创建时间倒序列出案件 |
 | `POST` | `/api/cases` | `201` | 创建案件和老人画像 |
 | `GET` | `/api/cases/{case_id}` | `200` | 查询案件、老人画像和线索 |
@@ -170,6 +173,12 @@ Example:
   }
 }
 ```
+
+## Intake draft and confirmation
+
+`GET /api/intake-sessions/{session_id}/profile-draft` returns the session creator's standardized profile draft. It is explicitly marked `draft`, lists its family-provided source scope and missing fields, includes a generated timestamp, and sets `requires_human_confirmation: true`. The endpoint does not infer a certain destination or expose the draft to commanders, volunteers, or other families before formal confirmation.
+
+`POST /api/intake-sessions/{session_id}/confirm` is available only to that session creator after required answers are complete. The request must set `human_confirmed: true` and contains the family-reviewed profile, so corrected values supersede any draft value. One database transaction creates the active case, elder profile, creator's `family` membership, `case.created` audit event, and confirmed-session link. A repeat submission returns the already-created case instead of creating a duplicate. See `docs/openapi.yaml` for the exact schemas.
 
 ## 7. 错误响应
 
