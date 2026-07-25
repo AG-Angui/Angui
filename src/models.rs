@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entities::{cases, clue_attributions, clues, elder_profiles, intake_sessions},
+    entities::{
+        cases, clue_attributions, clues, elder_profiles, intake_session_answers, intake_sessions,
+    },
     roles::{AccountType, CaseRole, GlobalCapability},
 };
 
@@ -60,6 +62,15 @@ pub struct CreateIntakeSessionRequest {
     pub initial_answers: IntakeInitialAnswers,
 }
 
+/// A single answer is kept separate from the candidate field generated from
+/// it. Both remain unconfirmed until the later explicit confirmation flow.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitIntakeAnswerRequest {
+    pub field: String,
+    pub answer: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct IntakeInitialAnswers {
@@ -112,6 +123,59 @@ impl IntakeSessionResponse {
             privacy_notice: "Answers are visible only to the session creator and, after case authorization, the case's authorized commanders. They are unconfirmed drafts and are not copied into audit metadata.".to_owned(),
             created_at: model.created_at,
             updated_at: model.updated_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeCandidateField {
+    pub field: String,
+    pub value: String,
+    pub source: String,
+    pub status: String,
+    pub generated_at: String,
+    pub model: Option<String>,
+    pub template_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SubmitIntakeAnswerResponse {
+    pub session_id: String,
+    pub status: String,
+    pub raw_answer: String,
+    pub candidate_fields: Vec<IntakeCandidateField>,
+    pub missing_fields: Vec<String>,
+    pub next_question: Option<IntakeQuestion>,
+    pub guidance_mode: String,
+    pub privacy_notice: String,
+    pub updated_at: String,
+}
+
+impl SubmitIntakeAnswerResponse {
+    pub fn new(
+        session: intake_sessions::Model,
+        answer: intake_session_answers::Model,
+        missing_fields: Vec<String>,
+        next_question: Option<IntakeQuestion>,
+    ) -> Self {
+        Self {
+            session_id: session.id,
+            status: session.status,
+            raw_answer: answer.raw_answer,
+            candidate_fields: vec![IntakeCandidateField {
+                field: answer.field_code,
+                value: answer.candidate_value,
+                source: answer.source,
+                status: answer.status,
+                generated_at: answer.generated_at,
+                model: answer.model,
+                template_version: answer.template_version,
+            }],
+            missing_fields,
+            next_question,
+            guidance_mode: "rule_based".to_owned(),
+            privacy_notice: "Answers and candidate fields are unconfirmed drafts. They remain visible only to the session creator and are not copied into audit metadata.".to_owned(),
+            updated_at: session.updated_at,
         }
     }
 }

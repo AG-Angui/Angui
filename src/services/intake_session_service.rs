@@ -1,17 +1,19 @@
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, RuntimeErr, Set, SqlxError, TransactionTrait,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    entities::{audit_events, intake_question_definitions, intake_sessions},
+    entities::{
+        audit_events, intake_question_definitions, intake_session_answers, intake_sessions,
+    },
     error::ApiError,
     models::{
         AuthenticatedUser, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakeQuestion,
-        IntakeSessionResponse,
+        IntakeSessionResponse, SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
 };
@@ -57,6 +59,7 @@ pub async fn create_intake_session(
     write_audit(
         &transaction,
         auth,
+        "intake_session.created",
         session_id,
         Some(json!({ "status": "collecting", "guidance_mode": "rule_based" })),
     )
@@ -64,6 +67,141 @@ pub async fn create_intake_session(
 
     transaction.commit().await?;
     Ok(response_for(session, answers, &questions))
+}
+
+pub async fn submit_intake_answer(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: SubmitIntakeAnswerRequest,
+    answer_hard_max: usize,
+) -> Result<SubmitIntakeAnswerResponse, ApiError> {
+    if auth.account_type != AccountType::Member {
+        return Err(ApiError::Forbidden(
+            "only operational member accounts can submit intake answers".to_owned(),
+        ));
+    }
+
+    let transaction = db.begin().await?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    if session.created_by_user_id != auth.id {
+        return Err(ApiError::NotFound(
+            "intake session was not found".to_owned(),
+        ));
+    }
+    if session.status == "closed" || session.status == "confirmed" {
+        return Err(ApiError::Conflict(
+            "closed or confirmed intake sessions cannot receive answers".to_owned(),
+        ));
+    }
+    if !matches!(
+        session.status.as_str(),
+        "collecting" | "ready_for_confirmation"
+    ) {
+        return Err(ApiError::Conflict(
+            "intake session is not accepting answers".to_owned(),
+        ));
+    }
+
+    let questions = questions_for_version(&transaction, session.question_set_version).await?;
+    let field = request.field.trim().to_owned();
+    let question = questions
+        .iter()
+        .find(|question| question.field_code == field)
+        .ok_or_else(|| {
+            ApiError::Validation("field is not enabled for this intake session".to_owned())
+        })?;
+    let raw_answer =
+        normalize_single_answer(request.answer, question.max_answer_chars, answer_hard_max)?;
+    let mut answers: IntakeInitialAnswers =
+        serde_json::from_str(&session.answers_json).map_err(|_| ApiError::Internal)?;
+    if answer_for(&answers, &field).is_some()
+        || intake_session_answers::Entity::find()
+            .filter(intake_session_answers::Column::SessionId.eq(session_id))
+            .filter(intake_session_answers::Column::FieldCode.eq(field.as_str()))
+            .one(&transaction)
+            .await?
+            .is_some()
+    {
+        return Err(duplicate_answer_conflict());
+    }
+    set_answer(&mut answers, &field, raw_answer.clone())?;
+
+    let timestamp = now();
+    let answer = intake_session_answers::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        session_id: Set(session.id.clone()),
+        field_code: Set(field.clone()),
+        raw_answer: Set(raw_answer.clone()),
+        candidate_value: Set(raw_answer),
+        source: Set("family_provided".to_owned()),
+        status: Set("draft".to_owned()),
+        generated_at: Set(timestamp.clone()),
+        model: Set(None),
+        template_version: Set(None),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await
+    .map_err(|error| {
+        if is_unique_constraint_error(&error) {
+            duplicate_answer_conflict()
+        } else {
+            ApiError::Database(error)
+        }
+    })?;
+
+    let missing_fields = missing_fields(&answers, &questions);
+    let next_question = next_question(&questions, &missing_fields);
+    let next_status = if required_fields_are_complete(&answers, &questions) {
+        "ready_for_confirmation"
+    } else {
+        "collecting"
+    };
+    let mut updated_session = session.into_active_model();
+    updated_session.answers_json =
+        Set(serde_json::to_string(&answers).map_err(|_| ApiError::Internal)?);
+    updated_session.status = Set(next_status.to_owned());
+    updated_session.updated_at = Set(timestamp);
+    let updated_session = updated_session.update(&transaction).await?;
+
+    write_audit(
+        &transaction,
+        auth,
+        "intake_session.answer_submitted",
+        updated_session.id.clone(),
+        Some(json!({
+            "field": field,
+            "candidate_source": "family_provided",
+            "candidate_status": "draft",
+            "guidance_mode": "rule_based",
+        })),
+    )
+    .await?;
+
+    transaction.commit().await?;
+    Ok(SubmitIntakeAnswerResponse::new(
+        updated_session,
+        answer,
+        missing_fields,
+        next_question,
+    ))
+}
+
+fn duplicate_answer_conflict() -> ApiError {
+    ApiError::Conflict("an answer for this intake field has already been submitted".to_owned())
+}
+
+fn is_unique_constraint_error(error: &DbErr) -> bool {
+    matches!(
+        error,
+        DbErr::Exec(RuntimeErr::SqlxError(SqlxError::Database(database_error)))
+            if database_error.is_unique_violation()
+    )
 }
 
 async fn active_questions<C: ConnectionTrait>(
@@ -85,9 +223,23 @@ async fn active_questions<C: ConnectionTrait>(
     Ok(questions)
 }
 
+async fn questions_for_version<C: ConnectionTrait>(
+    db: &C,
+    version: i32,
+) -> Result<Vec<intake_question_definitions::Model>, ApiError> {
+    let questions = intake_question_definitions::Entity::find()
+        .filter(intake_question_definitions::Column::Version.eq(version))
+        .order_by_asc(intake_question_definitions::Column::DisplayOrder)
+        .all(db)
+        .await?;
+    validate_question_configuration(&questions)?;
+    Ok(questions)
+}
+
 async fn write_audit<C: ConnectionTrait>(
     db: &C,
     auth: &AuthenticatedUser,
+    action: &str,
     session_id: String,
     metadata: Option<serde_json::Value>,
 ) -> Result<(), ApiError> {
@@ -105,7 +257,7 @@ async fn write_audit<C: ConnectionTrait>(
         id: Set(Uuid::new_v4().to_string()),
         case_id: Set(None),
         actor: Set(auth.id.clone()),
-        action: Set("intake_session.created".to_owned()),
+        action: Set(action.to_owned()),
         entity_type: Set("intake_session".to_owned()),
         entity_id: Set(session_id),
         metadata_json: Set(metadata_json),
@@ -164,15 +316,22 @@ fn response_for(
     questions: &[intake_question_definitions::Model],
 ) -> IntakeSessionResponse {
     let missing_fields = missing_fields(&answers, questions);
-    let next_question = questions
+    let next_question = next_question(questions, &missing_fields);
+    IntakeSessionResponse::new(model, answers, missing_fields, next_question)
+}
+
+fn next_question(
+    questions: &[intake_question_definitions::Model],
+    missing_fields: &[String],
+) -> Option<IntakeQuestion> {
+    questions
         .iter()
         .find(|question| missing_fields.contains(&question.field_code))
         .map(|question| IntakeQuestion {
             field: question.field_code.clone(),
             prompt: question.prompt.clone(),
             required: question.is_required,
-        });
-    IntakeSessionResponse::new(model, answers, missing_fields, next_question)
+        })
 }
 
 fn missing_fields(
@@ -198,6 +357,56 @@ fn answer_for<'a>(answers: &'a IntakeInitialAnswers, field_code: &str) -> Option
         "follow_up_clues" => answers.follow_up_clues.as_ref(),
         _ => None,
     }
+}
+
+fn set_answer(
+    answers: &mut IntakeInitialAnswers,
+    field_code: &str,
+    answer: String,
+) -> Result<(), ApiError> {
+    match field_code {
+        "basic_information" => answers.basic_information = Some(answer),
+        "health_status" => answers.health_status = Some(answer),
+        "behavior_habits" => answers.behavior_habits = Some(answer),
+        "last_seen" => answers.last_seen = Some(answer),
+        "frequent_locations" => answers.frequent_locations = Some(answer),
+        "belongings" => answers.belongings = Some(answer),
+        "transport_ability" => answers.transport_ability = Some(answer),
+        "follow_up_clues" => answers.follow_up_clues = Some(answer),
+        _ => {
+            return Err(ApiError::Validation(
+                "field is not enabled for this intake session".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_single_answer(
+    answer: String,
+    configured_limit: i32,
+    answer_hard_max: usize,
+) -> Result<String, ApiError> {
+    let answer_limit = usize::try_from(configured_limit)
+        .map_err(|_| ApiError::Internal)?
+        .min(answer_hard_max);
+    let trimmed = answer.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > answer_limit {
+        return Err(ApiError::Validation(format!(
+            "answer must contain between 1 and {answer_limit} characters"
+        )));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn required_fields_are_complete(
+    answers: &IntakeInitialAnswers,
+    questions: &[intake_question_definitions::Model],
+) -> bool {
+    questions
+        .iter()
+        .filter(|question| question.is_required)
+        .all(|question| answer_for(answers, &question.field_code).is_some())
 }
 
 fn validate_question_configuration(

@@ -180,6 +180,53 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/intake-sessions/{session_id}/answers:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    post:
+      tags: [Intake sessions]
+      operationId: submitIntakeSessionAnswer
+      summary: Submit one intake answer and receive the next rule-based question
+      description: |
+        Only the session creator can append a field that has not already been answered. The raw
+        free-text answer is stored separately from its unconfirmed draft candidate field. This
+        endpoint does not call an AI provider, so model and template_version are null; text that
+        resembles an instruction is treated only as an unconfirmed answer. Closed or confirmed
+        sessions and duplicate field submissions return 409. Raw answer content is never copied
+        into audit metadata.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitIntakeAnswerRequest"
+            example:
+              field: health_status
+              answer: Fictional mobility note; verification is still required.
+      responses:
+        "201":
+          description: Draft candidate field stored and next rule-based question returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitIntakeAnswerResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/cases:
     get:
       tags: [Cases]
@@ -473,6 +520,14 @@ components:
       schema:
         type: string
         format: uuid
+    IntakeSessionId:
+      name: session_id
+      in: path
+      required: true
+      description: 问询会话 UUID。非创建者按未找到处理，避免确认会话存在。
+      schema:
+        type: string
+        format: uuid
 
   responses:
     ValidationError:
@@ -706,6 +761,57 @@ components:
         belongings: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
         transport_ability: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
         follow_up_clues: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+
+    SubmitIntakeAnswerRequest:
+      type: object
+      additionalProperties: false
+      required: [field, answer]
+      properties:
+        field:
+          type: string
+          minLength: 1
+          description: An enabled field from the session's immutable question-set version.
+        answer:
+          type: string
+          minLength: 1
+          description: Trimmed server-side and limited by both the question configuration and the independent hard cap.
+
+    IntakeCandidateField:
+      type: object
+      additionalProperties: false
+      required: [field, value, source, status, generated_at, model, template_version]
+      properties:
+        field: { type: string }
+        value: { type: string, description: Unconfirmed candidate value; it is not a formal case fact. }
+        source: { type: string, enum: [family_provided, ai_extracted] }
+        status: { type: string, const: draft }
+        generated_at: { type: string, format: date-time }
+        model: { type: [string, "null"], description: Null for the current rule-based path. }
+        template_version: { type: [string, "null"], description: Null for the current rule-based path. }
+
+    SubmitIntakeAnswerResponse:
+      type: object
+      additionalProperties: false
+      required: [session_id, status, raw_answer, candidate_fields, missing_fields, next_question, guidance_mode, privacy_notice, updated_at]
+      properties:
+        session_id: { type: string, format: uuid }
+        status: { type: string, enum: [collecting, ready_for_confirmation] }
+        raw_answer: { type: string, description: Original free-text response, separate from candidate fields. }
+        candidate_fields:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/IntakeCandidateField"
+        missing_fields:
+          type: array
+          items: { type: string }
+        next_question:
+          oneOf:
+            - $ref: "#/components/schemas/IntakeQuestion"
+            - type: "null"
+        guidance_mode: { type: string, const: rule_based }
+        privacy_notice: { type: string }
+        updated_at: { type: string, format: date-time }
 
     IntakeQuestion:
       type: object
