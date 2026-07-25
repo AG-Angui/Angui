@@ -1,4 +1,4 @@
-import { Button, Chip } from '@heroui/react'
+import { Button, Chip, Spinner } from '@heroui/react'
 import {
   HeartHandshake,
   LayoutDashboard,
@@ -43,7 +43,7 @@ function identityLabel(accountType: AccountType, capabilities: GlobalCapability[
 }
 
 export function AppShell() {
-  const { user, logout } = useAuth()
+  const { user, logout, isLoggingOut } = useAuth()
   const visibleNavigation = navigation.filter((item) => user && (item.to === '/' || user.account_type === 'member'))
 
   return (
@@ -95,9 +95,9 @@ export function AppShell() {
             </div>
           )}
           <ServiceStatus compact />
-          <Button className="mt-3" size="sm" variant="ghost" fullWidth onPress={() => void logout()}>
-            <LogOut size={16} aria-hidden="true" />
-            退出登录
+          <Button className="mt-3" size="sm" variant="ghost" fullWidth isDisabled={isLoggingOut} onPress={() => void logout()}>
+            {isLoggingOut ? <Spinner size="sm" aria-label="正在退出登录" /> : <LogOut size={16} aria-hidden="true" />}
+            {isLoggingOut ? '正在退出' : '退出登录'}
           </Button>
         </div>
       </aside>
@@ -108,8 +108,8 @@ export function AppShell() {
             <strong className="block truncate text-sm text-slate-950">{user?.display_name}</strong>
             <span className="block truncate text-xs text-slate-500">{user ? identityLabel(user.account_type, user.global_capabilities) : ''}</span>
           </div>
-          <Button size="sm" variant="ghost" isIconOnly aria-label="退出登录" onPress={() => void logout()}>
-            <LogOut size={17} />
+          <Button size="sm" variant="ghost" isIconOnly aria-label={isLoggingOut ? '正在退出登录' : '退出登录'} isDisabled={isLoggingOut} onPress={() => void logout()}>
+            {isLoggingOut ? <Spinner size="sm" /> : <LogOut size={17} aria-hidden="true" />}
           </Button>
         </div>
         <Outlet />

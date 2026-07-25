@@ -29,6 +29,8 @@ function setAuth(accountType: NonNullable<AuthContextValue['user']>['account_typ
       ? { id: `${accountType}-1`, email: `${accountType}@demo.invalid`, display_name: '模拟用户', account_type: accountType, global_capabilities: [] }
       : null,
     isLoading: false,
+    isLoggingOut: false,
+    sessionNotice: null,
     login: vi.fn(),
     logout: vi.fn(),
   }
