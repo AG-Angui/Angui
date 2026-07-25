@@ -554,4 +554,12 @@ mod tests {
             &["DROP TABLE IF EXISTS cases;"]
         ));
     }
+
+    #[test]
+    fn postgres_confirmation_foreign_key_defers_historical_validation() {
+        let script = include_str!("../sql/postgres/up/0014_confirm_intake_sessions.sql")
+            .to_ascii_lowercase();
+        assert!(script.contains("constraint fk_intake_sessions_confirmer"));
+        assert!(script.contains("not valid"));
+    }
 }
