@@ -16,15 +16,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY))
   const [user, setUser] = useState<AuthUser | null>(null)
   const [isLoading, setIsLoading] = useState(Boolean(token))
-  const clearSession = useCallback(() => {
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null)
+  const clearSession = useCallback((notice?: string) => {
     sessionStorage.removeItem(TOKEN_KEY)
     setToken(null)
     setUser(null)
+    if (notice) setSessionNotice(notice)
   }, [])
 
   useEffect(() => {
-    window.addEventListener(SESSION_EXPIRED_EVENT, clearSession)
-    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, clearSession)
+    const handleSessionExpired = () => {
+      clearSession('登录状态已失效，请重新登录。')
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
   }, [clearSession])
 
   useEffect(() => {
@@ -58,22 +64,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       token,
       isLoading,
+      isLoggingOut,
+      sessionNotice,
       login: async (email, password) => {
         const response = await requestLogin(email, password)
         sessionStorage.setItem(TOKEN_KEY, response.token)
+        setSessionNotice(null)
         setToken(response.token)
         setUser(response.user)
       },
       logout: async () => {
         if (!token) return
+        setIsLoggingOut(true)
         try {
           await requestLogout(token)
+        } catch {
+          // Remote revocation is best effort; always complete the local safety exit.
         } finally {
           clearSession()
+          setIsLoggingOut(false)
         }
       },
     }),
-    [clearSession, isLoading, token, user],
+    [clearSession, isLoading, isLoggingOut, sessionNotice, token, user],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
