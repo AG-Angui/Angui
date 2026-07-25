@@ -1,5 +1,5 @@
 import { Spinner } from '@heroui/react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router'
 import type { ReactNode } from 'react'
 import { useAuth } from './auth/useAuth'
 import { AppShell } from './components/AppShell'

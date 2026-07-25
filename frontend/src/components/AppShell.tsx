@@ -6,7 +6,7 @@ import {
   Navigation,
   RadioTower,
 } from 'lucide-react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router'
 import brandMark from '../../../assets/brand/angui-mark.svg'
 import { useAuth } from '../auth/useAuth'
 import type { AccountType, GlobalCapability } from '../api/auth'
