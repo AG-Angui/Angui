@@ -438,6 +438,45 @@ paths:
   /api/cases/{case_id}/clues:
     parameters:
       - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: listCaseClues
+      summary: 获取角色裁剪的线索时间轴
+      description: |
+        commander 可以查看全部线索；family 只能查看已确认线索和本人提交的线索；
+        volunteer 只能查看已确认线索。分页总数只计算当前角色可见的线索。无案件成员关系返回 404。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: case-restricted
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ClueStatus" }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [created_at, occurred_at], default: created_at }
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+      responses:
+        "200":
+          description: 角色裁剪后的稳定排序线索页
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClueTimelinePage"
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Cases]
       operationId: createClue
@@ -1482,6 +1521,21 @@ components:
         is_own_submission:
           type: boolean
           description: 当前认证用户是否为该线索的提交者。
+
+    ClueTimelinePage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Clue" }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        total:
+          type: integer
+          minimum: 0
+          description: Only clues visible to the authenticated user are counted.
 
     CreateCasePlaceRequest:
       type: object
