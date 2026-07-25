@@ -49,6 +49,8 @@ function detail(id: string, displayName: string): CaseDetail {
       last_seen_location: null,
     },
     clues: [],
+    places: [],
+    attachments: [],
     created_at: '2026-07-24T00:00:00Z',
     updated_at: '2026-07-24T00:00:00Z',
   }

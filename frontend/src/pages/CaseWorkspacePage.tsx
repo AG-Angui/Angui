@@ -12,12 +12,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addCaseMember,
+  createCasePlace,
   createCase,
   createClue,
   getCase,
   listCases,
   reviewClue,
   updateCaseStatus,
+  uploadCaseAttachment,
 } from '../api/cases'
 import type {
   CaseDetail,
@@ -26,10 +28,14 @@ import type {
   CaseStatus,
   ClueReviewStatus,
   CreateCasePayload,
+  CreateCasePlacePayload,
+  PlaceType,
+  PlaceVisibility,
 } from '../api/cases'
 import { ApiClientError } from '../api/client'
 import { useAuth } from '../auth/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/ContentState'
+import { FamilyIntakeForm } from './FamilyIntakeForm'
 
 type WorkspaceMode = 'family' | 'commander' | 'volunteer'
 
@@ -160,12 +166,12 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
       {notice && <Message tone="success">{notice}</Message>}
 
       {showCreate && canCreateCase && mode !== 'volunteer' && (
-        <CreateCaseForm
+        <FamilyIntakeForm
           onCancel={() => setShowCreate(false)}
-          onCreated={async (created) => {
+          onConfirmed={async (caseId, caseCode) => {
             setShowCreate(false)
-            setNotice(`案件 ${created.case_code} 已建立`)
-            await loadCases(created.id)
+            setNotice(`案件 ${caseCode} 已由家属人工确认创建`)
+            await loadCases(caseId)
           }}
         />
       )}
@@ -238,7 +244,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   )
 }
 
-function CreateCaseForm({
+export function CreateCaseForm({
   onCancel,
   onCreated,
 }: {
@@ -328,6 +334,8 @@ function CaseDetailView({
   const [clueContent, setClueContent] = useState('')
   const [clueLocation, setClueLocation] = useState('')
   const [clueOccurredAt, setClueOccurredAt] = useState('')
+  const [place, setPlace] = useState<CreateCasePlacePayload>({ name: '', place_type: 'frequent', address: '', longitude: null, latitude: null, source: 'family_report', visibility: 'confirmed' })
+  const [attachment, setAttachment] = useState<File | null>(null)
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status)
   const [memberEmail, setMemberEmail] = useState('')
   const [memberRole, setMemberRole] = useState<CaseRole>('volunteer')
@@ -496,6 +504,59 @@ function CaseDetailView({
           </form>
         )}
       </section>
+
+      {(detail.access_role === 'family' || isCommander) && (
+        <section className="grid gap-6 border-t border-slate-200 bg-slate-50 px-5 py-5 sm:px-6 lg:grid-cols-2" aria-label="补充地点和图片">
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="m-0 text-base font-bold text-slate-950">补充地点</h3>
+              <span className="text-xs text-slate-500">提交后待人工审核</span>
+            </div>
+            <div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
+              {detail.places.length === 0 ? <p className="m-0 px-3 py-3 text-xs text-slate-500">暂无可查看的补充地点</p> : detail.places.map((item) => (
+                <div key={item.id} className="px-3 py-3 text-sm">
+                  <strong className="text-slate-900">{item.name}</strong><span className="ml-2 text-xs text-slate-500">{item.review_status === 'pending_review' ? '待人工审核' : item.review_status}</span>
+                  <p className="m-0 mt-1 text-xs text-slate-600">{item.address}</p>
+                </div>
+              ))}
+            </div>
+            {detail.status !== 'closed' && <form className="mt-3 grid gap-3" onSubmit={(event) => {
+              event.preventDefault()
+              if (!token || !place.name.trim() || !place.address.trim()) { setError('请填写地点名称和文字地址后再提交。'); return }
+              void run('place', () => createCasePlace(token, detail.id, { ...place, name: place.name.trim(), address: place.address.trim(), source: detail.access_role }), '地点已提交，正在等待人工审核').then((ok) => {
+                if (ok) setPlace({ name: '', place_type: 'frequent', address: '', longitude: null, latitude: null, source: 'family_report', visibility: 'confirmed' })
+              })
+            }}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="地点名称" required><Input value={place.name} maxLength={120} onChange={(event) => setPlace({ ...place, name: event.target.value })} fullWidth required /></Field>
+                <Field label="类型"><select className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={place.place_type} onChange={(event) => setPlace({ ...place, place_type: event.target.value as PlaceType })}><option value="frequent">常去地点</option><option value="key_location">关键地点</option><option value="last_seen_context">最后出现相关</option><option value="medical">医疗</option><option value="shelter">临时安置</option><option value="other">其他</option></select></Field>
+              </div>
+              <Field label="文字地址" required><Input value={place.address} maxLength={500} onChange={(event) => setPlace({ ...place, address: event.target.value })} fullWidth required /></Field>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="经度（可选）"><Input type="number" min={-180} max={180} value={place.longitude ?? ''} onChange={(event) => setPlace({ ...place, longitude: event.target.value === '' ? null : Number(event.target.value) })} fullWidth /></Field>
+                <Field label="纬度（可选）"><Input type="number" min={-90} max={90} value={place.latitude ?? ''} onChange={(event) => setPlace({ ...place, latitude: event.target.value === '' ? null : Number(event.target.value) })} fullWidth /></Field>
+                <Field label="可见级别"><select className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={place.visibility} onChange={(event) => setPlace({ ...place, visibility: event.target.value as PlaceVisibility })}><option value="confirmed">已确认范围</option><option value="internal">仅内部</option><option value="public">公开范围</option></select></Field>
+              </div>
+              <Button type="submit" variant="secondary" isDisabled={busy === 'place'}>提交地点</Button>
+            </form>}
+          </div>
+          <div>
+            <div className="flex items-center justify-between gap-3"><h3 className="m-0 text-base font-bold text-slate-950">补充图片</h3><span className="text-xs text-slate-500">仅 JPEG/PNG，最大 5 MiB</span></div>
+            <div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
+              {detail.attachments.length === 0 ? <p className="m-0 px-3 py-3 text-xs text-slate-500">暂无可查看的图片</p> : detail.attachments.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 px-3 py-3 text-sm"><span className="truncate text-slate-800">{item.original_filename}</span><span className="shrink-0 text-xs text-slate-500">{item.review_status === 'pending_review' ? '待人工审核' : item.review_status}</span></div>)}
+            </div>
+            {detail.status !== 'closed' && <form className="mt-3 grid gap-3" onSubmit={(event) => {
+              event.preventDefault()
+              if (!token || !attachment) { setError('请选择一张图片后再提交。'); return }
+              void run('attachment', () => uploadCaseAttachment(token, detail.id, attachment), '图片已提交，正在等待人工审核').then((ok) => { if (ok) setAttachment(null) })
+            }}>
+              <input type="file" accept="image/jpeg,image/png" onChange={(event) => setAttachment(event.target.files?.[0] ?? null)} className="block w-full text-sm text-slate-700" />
+              <Button type="submit" variant="secondary" isDisabled={busy === 'attachment'}>上传图片</Button>
+              <p className="m-0 text-xs leading-5 text-slate-500">上传会由服务端重新编码并移除非必要的 EXIF/GPS 元数据；失败时不会显示为上传成功。</p>
+            </form>}
+          </div>
+        </section>
+      )}
     </div>
   )
 }

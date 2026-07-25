@@ -45,6 +45,17 @@ impl TestContext {
             db: self.database.clone(),
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
+            attachment_storage_directory: std::env::temp_dir().join("angui-api-test-attachments"),
+            attachment_max_image_bytes: 5 * 1024 * 1024,
+            attachment_max_per_case: 12,
+            case_place_types: vec![
+                "frequent".to_owned(),
+                "key_location".to_owned(),
+                "last_seen_context".to_owned(),
+                "medical".to_owned(),
+                "shelter".to_owned(),
+                "other".to_owned(),
+            ],
             amap_service: AmapService::disabled(),
             ai_gateway: AiGateway::from_configurations(Vec::new())
                 .expect("empty AI provider configuration should be valid"),

@@ -1,7 +1,9 @@
 pub mod ai_prompt_templates;
 pub mod audit_events;
 pub mod auth_sessions;
+pub mod case_attachments;
 pub mod case_memberships;
+pub mod case_places;
 pub mod cases;
 pub mod clue_attributions;
 pub mod clues;

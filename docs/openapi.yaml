@@ -475,6 +475,103 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/cases/{case_id}/places:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      tags: [Cases]
+      operationId: createCasePlace
+      summary: 提交常去或关键地点
+      description: 仅 family 和 commander 可提交。服务端验证坐标、地点类型和可见级别；新记录固定为 pending_review。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCasePlaceRequest"
+      responses:
+        "201":
+          description: 待审核地点已创建
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CasePlace" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/cases/{case_id}/attachments:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      tags: [Cases]
+      operationId: uploadCaseAttachment
+      summary: 上传待审核案件图片
+      description: 接受单个 multipart `file`（JPEG/PNG；默认最大 5 MiB，受 ANGUI_ATTACHMENT_MAX_IMAGE_BYTES 配置约束）。服务端会验证实际图片格式并重编码以移除 EXIF/GPS；客户端不得把失败显示为成功。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: 待审核图片已存储
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaseAttachment" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/cases/{case_id}/attachments/{attachment_id}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+      - name: attachment_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Cases]
+      operationId: downloadCaseAttachment
+      summary: 按案件授权下载图片
+      description: commander 可下载案件全部附件；family 和 volunteer 只能下载本人提交的附件。附件不经静态目录公开。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200":
+          description: 已授权的图片字节
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/members:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -1089,6 +1186,8 @@ components:
         - access_role
         - elder_profile
         - clues
+        - places
+        - attachments
         - created_at
         - updated_at
       properties:
@@ -1109,6 +1208,16 @@ components:
           description: 根据当前案件角色裁剪后的线索列表，按创建时间倒序。
           items:
             $ref: "#/components/schemas/Clue"
+        places:
+          type: array
+          description: 按案件角色和可见级别裁剪后的地点；所有新提交记录均待人工审核。
+          items:
+            $ref: "#/components/schemas/CasePlace"
+        attachments:
+          type: array
+          description: 指挥可查看案件附件；其他成员仅看到本人提交的附件元数据。
+          items:
+            $ref: "#/components/schemas/CaseAttachment"
         created_at:
           type: string
           format: date-time
@@ -1200,6 +1309,54 @@ components:
         is_own_submission:
           type: boolean
           description: 当前认证用户是否为该线索的提交者。
+
+    CreateCasePlaceRequest:
+      type: object
+      additionalProperties: false
+      required: [name, place_type, address, source, visibility]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        place_type: { type: string, enum: [frequent, key_location, last_seen_context, medical, shelter, other] }
+        address: { type: string, minLength: 1, maxLength: 500 }
+        longitude: { type: [number, "null"], minimum: -180, maximum: 180 }
+        latitude: { type: [number, "null"], minimum: -90, maximum: 90 }
+        source: { type: string, minLength: 1, maxLength: 64 }
+        visibility: { type: string, enum: [public, confirmed, internal] }
+
+    CasePlace:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, name, place_type, address, longitude, latitude, source, visibility, review_status, created_at, updated_at, is_own_submission]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        name: { type: string }
+        place_type: { type: string, enum: [frequent, key_location, last_seen_context, medical, shelter, other] }
+        address: { type: string }
+        longitude: { type: [number, "null"] }
+        latitude: { type: [number, "null"] }
+        source: { type: string }
+        visibility: { type: string, enum: [public, confirmed, internal] }
+        review_status: { type: string, const: pending_review }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        is_own_submission: { type: boolean }
+
+    CaseAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, original_filename, content_type, byte_size, source, review_status, created_at, updated_at, is_own_submission]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        original_filename: { type: string, maxLength: 104 }
+        content_type: { type: string, enum: [image/jpeg, image/png] }
+        byte_size: { type: integer, minimum: 1, description: 默认最大 5242880；实际值由 ANGUI_ATTACHMENT_MAX_IMAGE_BYTES 配置。 }
+        source: { type: string, enum: [family, commander, volunteer] }
+        review_status: { type: string, const: pending_review }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        is_own_submission: { type: boolean }
 
     ErrorResponse:
       type: object

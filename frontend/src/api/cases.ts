@@ -56,8 +56,52 @@ export interface CaseDetail {
   access_role: CaseRole
   elder_profile: ElderProfile
   clues: Clue[]
+  places: CasePlace[]
+  attachments: CaseAttachment[]
   created_at: string
   updated_at: string
+}
+
+export type PlaceType = 'frequent' | 'key_location' | 'last_seen_context' | 'medical' | 'shelter' | 'other'
+export type PlaceVisibility = 'public' | 'confirmed' | 'internal'
+
+export interface CasePlace {
+  id: string
+  case_id: string
+  name: string
+  place_type: PlaceType
+  address: string
+  longitude: number | null
+  latitude: number | null
+  source: string
+  visibility: PlaceVisibility
+  review_status: 'pending_review' | 'confirmed' | 'rejected'
+  created_at: string
+  updated_at: string
+  is_own_submission: boolean
+}
+
+export interface CaseAttachment {
+  id: string
+  case_id: string
+  original_filename: string
+  content_type: 'image/jpeg' | 'image/png'
+  byte_size: number
+  source: string
+  review_status: 'pending_review' | 'confirmed' | 'rejected'
+  created_at: string
+  updated_at: string
+  is_own_submission: boolean
+}
+
+export interface CreateCasePlacePayload {
+  name: string
+  place_type: PlaceType
+  address: string
+  longitude: number | null
+  latitude: number | null
+  source: string
+  visibility: PlaceVisibility
 }
 
 export interface CreateCasePayload {
@@ -113,6 +157,16 @@ export function createClue(
     { method: 'POST', body: JSON.stringify(payload) },
     token,
   )
+}
+
+export function createCasePlace(token: string, caseId: string, payload: CreateCasePlacePayload): Promise<CasePlace> {
+  return apiRequest<CasePlace>(`/cases/${caseId}/places`, { method: 'POST', body: JSON.stringify(payload) }, token)
+}
+
+export function uploadCaseAttachment(token: string, caseId: string, file: File): Promise<CaseAttachment> {
+  const body = new FormData()
+  body.append('file', file, file.name)
+  return apiRequest<CaseAttachment>(`/cases/${caseId}/attachments`, { method: 'POST', body }, token)
 }
 
 export function reviewClue(

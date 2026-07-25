@@ -376,6 +376,18 @@ pub struct CreateClueRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CreateCasePlaceRequest {
+    pub name: String,
+    pub place_type: String,
+    pub address: String,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub source: String,
+    pub visibility: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewClueRequest {
     pub status: String,
 }
@@ -418,6 +430,8 @@ pub struct CaseDetail {
     pub access_role: CaseRole,
     pub elder_profile: ElderProfileResponse,
     pub clues: Vec<ClueResponse>,
+    pub places: Vec<CasePlaceResponse>,
+    pub attachments: Vec<CaseAttachmentResponse>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -447,6 +461,37 @@ pub struct ClueResponse {
     pub created_at: String,
     pub updated_at: String,
     pub reviewed_at: Option<String>,
+    pub is_own_submission: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasePlaceResponse {
+    pub id: String,
+    pub case_id: String,
+    pub name: String,
+    pub place_type: String,
+    pub address: String,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub source: String,
+    pub visibility: String,
+    pub review_status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_own_submission: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CaseAttachmentResponse {
+    pub id: String,
+    pub case_id: String,
+    pub original_filename: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub source: String,
+    pub review_status: String,
+    pub created_at: String,
+    pub updated_at: String,
     pub is_own_submission: bool,
 }
 
@@ -497,6 +542,8 @@ impl CaseDetail {
         case_model: cases::Model,
         elder_profile: ElderProfileResponse,
         clues: Vec<ClueResponse>,
+        places: Vec<CasePlaceResponse>,
+        attachments: Vec<CaseAttachmentResponse>,
         access_role: CaseRole,
     ) -> Self {
         Self {
@@ -506,6 +553,8 @@ impl CaseDetail {
             access_role,
             elder_profile,
             clues,
+            places,
+            attachments,
             created_at: case_model.created_at,
             updated_at: case_model.updated_at,
         }
