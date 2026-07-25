@@ -158,6 +158,6 @@ describe('CaseWorkspacePage', () => {
     expect(screen.queryByRole('button', { name: '提交线索' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '提交地点' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '上传图片' })).not.toBeInTheDocument()
-    expect(screen.getAllByRole('combobox')[0]).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: '案件状态' })).toBeDisabled()
   })
 })
