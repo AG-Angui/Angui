@@ -73,6 +73,11 @@ async fn get_profile_draft_returns_only_unconfirmed_family_source_data() {
             .as_array()
             .is_some_and(|fields| { fields.iter().any(|field| field == "behavior_habits") })
     );
+    assert_eq!(body["direction_hypotheses"][0]["status"], "hypothesis");
+    assert_eq!(
+        body["direction_hypotheses"][0]["source_fields"][0],
+        "frequent_locations"
+    );
 }
 
 #[actix_web::test]

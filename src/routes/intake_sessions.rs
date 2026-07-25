@@ -61,12 +61,13 @@ async fn submit_intake_answer(
     session_id: web::Path<String>,
     request: web::Json<SubmitIntakeAnswerRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    let response = intake_session_service::submit_intake_answer(
+    let response = intake_session_service::submit_intake_answer_with_map(
         &state.db,
         &auth,
         &session_id,
         request.into_inner(),
         state.intake_answer_hard_max,
+        &state.amap_service,
     )
     .await?;
     Ok(HttpResponse::Created().json(response))

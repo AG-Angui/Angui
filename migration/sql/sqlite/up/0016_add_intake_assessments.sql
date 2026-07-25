@@ -1,0 +1,13 @@
+ALTER TABLE intake_sessions ADD COLUMN assessment_json TEXT NOT NULL DEFAULT '[]';
+-- statement-break
+ALTER TABLE intake_sessions ADD COLUMN structured_answers_json TEXT NOT NULL DEFAULT '{}';
+-- statement-break
+CREATE TABLE intake_answer_revisions (
+    id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL, field_code TEXT NOT NULL, raw_answer TEXT NOT NULL,
+    structured_json TEXT, revision_kind TEXT NOT NULL CHECK (revision_kind IN ('submitted', 'corrected')),
+    created_by_user_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES intake_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE RESTRICT
+);
+-- statement-break
+CREATE INDEX idx_intake_answer_revisions_session ON intake_answer_revisions(session_id, created_at);

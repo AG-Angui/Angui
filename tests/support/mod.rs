@@ -1,6 +1,7 @@
 use actix_web::{body::MessageBody, dev::ServiceResponse, http::StatusCode, test};
 use angui::{
     ai_gateway::AiGateway,
+    amap_service::AmapService,
     app_state::AppState,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CreateCaseRequest, CreateClueRequest,
@@ -44,6 +45,7 @@ impl TestContext {
             db: self.database.clone(),
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
+            amap_service: AmapService::disabled(),
             ai_gateway: AiGateway::from_configurations(Vec::new())
                 .expect("empty AI provider configuration should be valid"),
             login_limiter: LoginRateLimiter::default(),

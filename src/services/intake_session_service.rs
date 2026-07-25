@@ -8,14 +8,15 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, cases, intake_question_definitions, intake_session_answers, intake_sessions,
+        audit_events, cases, intake_answer_revisions, intake_question_definitions,
+        intake_session_answers, intake_sessions,
     },
     error::ApiError,
     models::{
         AuthenticatedUser, ConfirmIntakeSessionRequest, ConfirmIntakeSessionResponse,
-        CreateCaseRequest, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakeProfileDraft,
-        IntakeProfileDraftFields, IntakeQuestion, IntakeSessionResponse, SubmitIntakeAnswerRequest,
-        SubmitIntakeAnswerResponse,
+        CreateCaseRequest, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakePhaseProgress,
+        IntakeProfileDraft, IntakeProfileDraftFields, IntakeQuestion, IntakeSessionResponse,
+        IntakeStructuredFacts, SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
 };
@@ -39,17 +40,30 @@ pub async fn create_intake_session(
         .map(|question| question.version)
         .ok_or(ApiError::Internal)?;
     let answers = normalize_answers(request.initial_answers, &questions, answer_hard_max)?;
+    let phase = IntakePhaseProgress::for_answers(&answers);
+    if phase_two_answers_present(&answers) && !phase.phase_transition_ready {
+        return Err(ApiError::Validation(
+            "complete required phase-one fields before submitting phase-two answers".to_owned(),
+        ));
+    }
     let answers_json = serde_json::to_string(&answers).map_err(|_| ApiError::Internal)?;
     let timestamp = now();
     let session_id = Uuid::new_v4().to_string();
+    let status = if required_fields_are_complete(&answers, &questions) {
+        "ready_for_confirmation"
+    } else {
+        "collecting"
+    };
 
     let session = intake_sessions::ActiveModel {
         id: Set(session_id.clone()),
         created_by_user_id: Set(auth.id.clone()),
         case_id: Set(None),
         question_set_version: Set(question_set_version),
-        status: Set("collecting".to_owned()),
+        status: Set(status.to_owned()),
         answers_json: Set(answers_json),
+        assessment_json: Set("[]".to_owned()),
+        structured_answers_json: Set("{}".to_owned()),
         confirmed_by_user_id: Set(None),
         confirmed_at: Set(None),
         created_at: Set(timestamp.clone()),
@@ -65,7 +79,7 @@ pub async fn create_intake_session(
         auth,
         "intake_session.created",
         session_id,
-        Some(json!({ "status": "collecting", "guidance_mode": "rule_based" })),
+        Some(json!({ "status": status, "guidance_mode": "rule_based" })),
     )
     .await?;
 
@@ -79,6 +93,26 @@ pub async fn submit_intake_answer(
     session_id: &str,
     request: SubmitIntakeAnswerRequest,
     answer_hard_max: usize,
+) -> Result<SubmitIntakeAnswerResponse, ApiError> {
+    let amap_service = crate::amap_service::AmapService::disabled();
+    submit_intake_answer_with_map(
+        db,
+        auth,
+        session_id,
+        request,
+        answer_hard_max,
+        &amap_service,
+    )
+    .await
+}
+
+pub async fn submit_intake_answer_with_map(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: SubmitIntakeAnswerRequest,
+    answer_hard_max: usize,
+    amap_service: &crate::amap_service::AmapService,
 ) -> Result<SubmitIntakeAnswerResponse, ApiError> {
     if auth.account_type != AccountType::Member {
         return Err(ApiError::Forbidden(
@@ -122,45 +156,83 @@ pub async fn submit_intake_answer(
         normalize_single_answer(request.answer, question.max_answer_chars, answer_hard_max)?;
     let mut answers: IntakeInitialAnswers =
         serde_json::from_str(&session.answers_json).map_err(|_| ApiError::Internal)?;
-    if answer_for(&answers, &field).is_some()
-        || intake_session_answers::Entity::find()
-            .filter(intake_session_answers::Column::SessionId.eq(session_id))
-            .filter(intake_session_answers::Column::FieldCode.eq(field.as_str()))
-            .one(&transaction)
-            .await?
-            .is_some()
-    {
+    let existing_answer = intake_session_answers::Entity::find()
+        .filter(intake_session_answers::Column::SessionId.eq(session_id))
+        .filter(intake_session_answers::Column::FieldCode.eq(field.as_str()))
+        .one(&transaction)
+        .await?;
+    if (answer_for(&answers, &field).is_some() || existing_answer.is_some()) && !request.replace {
         return Err(duplicate_answer_conflict());
+    }
+    let phase_before = IntakePhaseProgress::for_answers(&answers);
+    if question_phase(&field) == "phase_two" && !phase_before.phase_transition_ready {
+        return Err(ApiError::Conflict(
+            "complete required phase-one fields before submitting phase-two answers".to_owned(),
+        ));
     }
     set_answer(&mut answers, &field, raw_answer.clone())?;
 
     let timestamp = now();
-    let answer = intake_session_answers::ActiveModel {
+    let structured = request.structured.unwrap_or_default();
+    let mut structured_answers = parse_structured_answers(&session)?;
+    merge_structured_facts(&mut structured_answers, structured.clone());
+    let assessments = crate::intake_assessment::evaluate(&structured_answers, amap_service).await;
+    let structured_json = serde_json::to_string(&structured).map_err(|_| ApiError::Internal)?;
+    intake_answer_revisions::ActiveModel {
         id: Set(Uuid::new_v4().to_string()),
         session_id: Set(session.id.clone()),
         field_code: Set(field.clone()),
         raw_answer: Set(raw_answer.clone()),
-        candidate_value: Set(raw_answer),
-        source: Set("family_provided".to_owned()),
-        status: Set("draft".to_owned()),
-        generated_at: Set(timestamp.clone()),
-        model: Set(None),
-        template_version: Set(None),
+        structured_json: Set(
+            (structured != IntakeStructuredFacts::default()).then_some(structured_json)
+        ),
+        revision_kind: Set(if existing_answer.is_some() {
+            "corrected"
+        } else {
+            "submitted"
+        }
+        .to_owned()),
+        created_by_user_id: Set(auth.id.clone()),
         created_at: Set(timestamp.clone()),
-        updated_at: Set(timestamp.clone()),
     }
     .insert(&transaction)
-    .await
-    .map_err(|error| {
-        if is_unique_constraint_error(&error) {
-            duplicate_answer_conflict()
-        } else {
-            ApiError::Database(error)
+    .await?;
+    let answer = if let Some(existing_answer) = existing_answer {
+        let mut active = existing_answer.into_active_model();
+        active.raw_answer = Set(raw_answer.clone());
+        active.candidate_value = Set(raw_answer);
+        active.generated_at = Set(timestamp.clone());
+        active.updated_at = Set(timestamp.clone());
+        active.update(&transaction).await?
+    } else {
+        intake_session_answers::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            session_id: Set(session.id.clone()),
+            field_code: Set(field.clone()),
+            raw_answer: Set(raw_answer.clone()),
+            candidate_value: Set(raw_answer),
+            source: Set("family_provided".to_owned()),
+            status: Set("draft".to_owned()),
+            generated_at: Set(timestamp.clone()),
+            model: Set(None),
+            template_version: Set(None),
+            created_at: Set(timestamp.clone()),
+            updated_at: Set(timestamp.clone()),
         }
-    })?;
+        .insert(&transaction)
+        .await
+        .map_err(|error| {
+            if is_unique_constraint_error(&error) {
+                duplicate_answer_conflict()
+            } else {
+                ApiError::Database(error)
+            }
+        })?
+    };
 
     let missing_fields = missing_fields(&answers, &questions);
-    let next_question = next_question(&questions, &missing_fields);
+    let phase = IntakePhaseProgress::for_answers(&answers);
+    let next_question = next_question_for_phase(&questions, &missing_fields, &phase);
     let next_status = if required_fields_are_complete(&answers, &questions) {
         "ready_for_confirmation"
     } else {
@@ -170,6 +242,10 @@ pub async fn submit_intake_answer(
     updated_session.answers_json =
         Set(serde_json::to_string(&answers).map_err(|_| ApiError::Internal)?);
     updated_session.status = Set(next_status.to_owned());
+    updated_session.structured_answers_json =
+        Set(serde_json::to_string(&structured_answers).map_err(|_| ApiError::Internal)?);
+    updated_session.assessment_json =
+        Set(serde_json::to_string(&assessments).map_err(|_| ApiError::Internal)?);
     updated_session.updated_at = Set(timestamp);
     let updated_session = updated_session.update(&transaction).await?;
 
@@ -193,6 +269,8 @@ pub async fn submit_intake_answer(
         answer,
         missing_fields,
         next_question,
+        phase,
+        assessments,
     ))
 }
 
@@ -209,6 +287,12 @@ pub async fn get_intake_profile_draft(
     require_session_creator(&session, auth)?;
     let questions = questions_for_version(db, session.question_set_version).await?;
     let answers = parse_answers(&session)?;
+    let assessments = parse_assessments(&session)?;
+    let confirmation_blocked_reasons = assessments
+        .iter()
+        .filter(|assessment| assessment.severity == "blocking")
+        .map(|assessment| assessment.suggested_action.clone())
+        .collect();
 
     Ok(IntakeProfileDraft {
         status: "draft".to_owned(),
@@ -224,8 +308,12 @@ pub async fn get_intake_profile_draft(
             frequent_locations: answers.frequent_locations.clone(),
             last_seen_information: answers.last_seen.clone(),
             behavior_habits: answers.behavior_habits.clone(),
+            suspicious_motive: answers.suspicious_motive.clone(),
         },
         missing_fields: missing_fields(&answers, &questions),
+        assessments,
+        confirmation_blocked_reasons,
+        direction_hypotheses: direction_hypotheses(&answers, &session.updated_at),
     })
 }
 
@@ -261,6 +349,18 @@ pub async fn confirm_intake_session(
         return Err(ApiError::Conflict(
             "intake session is not ready for confirmation".to_owned(),
         ));
+    }
+    let assessments = parse_assessments(&session)?;
+    let blocking_reasons = assessments
+        .iter()
+        .filter(|assessment| assessment.severity == "blocking")
+        .map(|assessment| assessment.suggested_action.clone())
+        .collect::<Vec<_>>();
+    if !blocking_reasons.is_empty() {
+        return Err(ApiError::Conflict(format!(
+            "intake session has blocking consistency checks: {}",
+            blocking_reasons.join(" | ")
+        )));
     }
 
     let timestamp = now();
@@ -342,6 +442,60 @@ fn require_session_creator(
 
 fn parse_answers(session: &intake_sessions::Model) -> Result<IntakeInitialAnswers, ApiError> {
     serde_json::from_str(&session.answers_json).map_err(|_| ApiError::Internal)
+}
+
+fn parse_structured_answers(
+    session: &intake_sessions::Model,
+) -> Result<IntakeStructuredFacts, ApiError> {
+    serde_json::from_str(&session.structured_answers_json).map_err(|_| ApiError::Internal)
+}
+
+fn parse_assessments(
+    session: &intake_sessions::Model,
+) -> Result<Vec<crate::models::IntakeAssessment>, ApiError> {
+    serde_json::from_str(&session.assessment_json).map_err(|_| ApiError::Internal)
+}
+
+fn merge_structured_facts(target: &mut IntakeStructuredFacts, source: IntakeStructuredFacts) {
+    if source.last_seen_at.is_some() {
+        target.last_seen_at = source.last_seen_at;
+    }
+    if source.last_seen_location.is_some() {
+        target.last_seen_location = source.last_seen_location;
+    }
+    if source.follow_up_at.is_some() {
+        target.follow_up_at = source.follow_up_at;
+    }
+    if source.follow_up_location.is_some() {
+        target.follow_up_location = source.follow_up_location;
+    }
+    if source.mobility.is_some() {
+        target.mobility = source.mobility;
+    }
+    if !source.transport_modes.is_empty() {
+        target.transport_modes = source.transport_modes;
+    }
+    if source.companion_status.is_some() {
+        target.companion_status = source.companion_status;
+    }
+    if !source.belongings.is_empty() {
+        target.belongings = source.belongings;
+    }
+}
+
+fn question_phase(field: &str) -> &'static str {
+    match field {
+        "basic_information" | "health_status" | "behavior_habits" | "last_seen" => "phase_one",
+        _ => "phase_two",
+    }
+}
+
+fn phase_two_answers_present(answers: &IntakeInitialAnswers) -> bool {
+    answers.frequent_locations.is_some()
+        || answers.suspicious_motive.is_some()
+        || answers.belongings.is_some()
+        || answers.transport_ability.is_some()
+        || answers.follow_up_clues.is_some()
 }
 
 fn case_request_from_confirmed_profile(request: ConfirmIntakeSessionRequest) -> CreateCaseRequest {
@@ -457,6 +611,7 @@ fn normalize_answers(
         ("behavior_habits", &mut answers.behavior_habits),
         ("last_seen", &mut answers.last_seen),
         ("frequent_locations", &mut answers.frequent_locations),
+        ("suspicious_motive", &mut answers.suspicious_motive),
         ("belongings", &mut answers.belongings),
         ("transport_ability", &mut answers.transport_ability),
         ("follow_up_clues", &mut answers.follow_up_clues),
@@ -494,17 +649,32 @@ fn response_for(
     questions: &[intake_question_definitions::Model],
 ) -> IntakeSessionResponse {
     let missing_fields = missing_fields(&answers, questions);
-    let next_question = next_question(questions, &missing_fields);
+    let phase = IntakePhaseProgress::for_answers(&answers);
+    let next_question = next_question_for_phase(questions, &missing_fields, &phase);
     IntakeSessionResponse::new(model, answers, missing_fields, next_question)
 }
 
-fn next_question(
+fn next_question_for_phase(
     questions: &[intake_question_definitions::Model],
     missing_fields: &[String],
+    phase: &IntakePhaseProgress,
 ) -> Option<IntakeQuestion> {
+    let wanted_phase = if phase.phase_transition_ready {
+        "phase_two"
+    } else {
+        "phase_one"
+    };
     questions
         .iter()
-        .find(|question| missing_fields.contains(&question.field_code))
+        .find(|question| {
+            missing_fields.contains(&question.field_code)
+                && question_phase(&question.field_code) == wanted_phase
+        })
+        .or_else(|| {
+            questions
+                .iter()
+                .find(|question| missing_fields.contains(&question.field_code))
+        })
         .map(|question| IntakeQuestion {
             field: question.field_code.clone(),
             prompt: question.prompt.clone(),
@@ -530,6 +700,7 @@ fn answer_for<'a>(answers: &'a IntakeInitialAnswers, field_code: &str) -> Option
         "behavior_habits" => answers.behavior_habits.as_ref(),
         "last_seen" => answers.last_seen.as_ref(),
         "frequent_locations" => answers.frequent_locations.as_ref(),
+        "suspicious_motive" => answers.suspicious_motive.as_ref(),
         "belongings" => answers.belongings.as_ref(),
         "transport_ability" => answers.transport_ability.as_ref(),
         "follow_up_clues" => answers.follow_up_clues.as_ref(),
@@ -548,6 +719,7 @@ fn set_answer(
         "behavior_habits" => answers.behavior_habits = Some(answer),
         "last_seen" => answers.last_seen = Some(answer),
         "frequent_locations" => answers.frequent_locations = Some(answer),
+        "suspicious_motive" => answers.suspicious_motive = Some(answer),
         "belongings" => answers.belongings = Some(answer),
         "transport_ability" => answers.transport_ability = Some(answer),
         "follow_up_clues" => answers.follow_up_clues = Some(answer),
@@ -600,6 +772,7 @@ fn validate_question_configuration(
                         | "behavior_habits"
                         | "last_seen"
                         | "frequent_locations"
+                        | "suspicious_motive"
                         | "belongings"
                         | "transport_ability"
                         | "follow_up_clues"
@@ -609,6 +782,22 @@ fn validate_question_configuration(
         return Err(ApiError::Internal);
     }
     Ok(())
+}
+
+fn direction_hypotheses(
+    answers: &IntakeInitialAnswers,
+    generated_at: &str,
+) -> Vec<crate::models::IntakeDirectionHypothesis> {
+    let Some(frequent_locations) = answers.frequent_locations.as_ref() else {
+        return Vec::new();
+    };
+    vec![crate::models::IntakeDirectionHypothesis {
+        status: "hypothesis".to_owned(),
+        source_fields: vec!["frequent_locations".to_owned(), "last_seen".to_owned()],
+        generated_at: generated_at.to_owned(),
+        uncertainty_notice: "This is an unverified direction candidate derived from family-provided draft answers. It is not a fact, task, or publication decision.".to_owned(),
+        description: format!("Consider verifying reported frequent locations: {frequent_locations}"),
+    }]
 }
 
 fn now() -> String {

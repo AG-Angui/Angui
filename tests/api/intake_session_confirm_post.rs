@@ -36,12 +36,105 @@ async fn ready_session(context: &TestContext) -> String {
         angui::models::SubmitIntakeAnswerRequest {
             field: "health_status".to_owned(),
             answer: "Draft health note that the family will correct.".to_owned(),
+            replace: false,
+            structured: None,
         },
         2_000,
     )
     .await
     .expect("required answers should make the session ready");
     session.id
+}
+
+#[actix_web::test]
+async fn post_confirm_rejects_blocking_intake_assessments_without_creating_a_case() {
+    let context = TestContext::new().await;
+    let family = context.authenticated(FAMILY).await;
+    let session = intake_session_service::create_intake_session(
+        &context.database,
+        &family,
+        CreateIntakeSessionRequest {
+            initial_answers: IntakeInitialAnswers {
+                basic_information: Some("Fictional basic information.".to_owned()),
+                last_seen: Some("Fictional last seen location.".to_owned()),
+                ..Default::default()
+            },
+        },
+        2_000,
+    )
+    .await
+    .expect("fixture session should be created");
+    intake_session_service::submit_intake_answer(
+        &context.database,
+        &family,
+        &session.id,
+        angui::models::SubmitIntakeAnswerRequest {
+            field: "health_status".to_owned(),
+            answer: "Family-provided draft health note.".to_owned(),
+            replace: false,
+            structured: Some(angui::models::IntakeStructuredFacts {
+                last_seen_at: Some("2026-07-25T15:00:00+08:00".to_owned()),
+                follow_up_at: Some("2026-07-25T14:30:00+08:00".to_owned()),
+                last_seen_location: Some(angui::models::IntakeLocation {
+                    name: "Fictional origin".to_owned(),
+                    longitude: 114.48,
+                    latitude: 36.61,
+                    coordinate_system: "gcj02".to_owned(),
+                }),
+                follow_up_location: Some(angui::models::IntakeLocation {
+                    name: "Fictional destination".to_owned(),
+                    longitude: 114.58,
+                    latitude: 36.61,
+                    coordinate_system: "gcj02".to_owned(),
+                }),
+                transport_modes: vec!["walking".to_owned()],
+                ..Default::default()
+            }),
+        },
+        2_000,
+    )
+    .await
+    .expect("structured draft answer should be recorded");
+
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+    let blocked = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/intake-sessions/{}/confirm", session.id))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(confirmation_json())
+            .to_request(),
+    )
+    .await;
+    assert_error(blocked, StatusCode::CONFLICT, "conflict").await;
+    assert_eq!(
+        cases::Entity::find()
+            .count(&context.database)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let draft = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/intake-sessions/{}/profile-draft",
+                session.id
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(draft.status(), StatusCode::OK);
+    let draft_body: Value = test::read_body_json(draft).await;
+    assert_eq!(draft_body["assessments"][0]["severity"], "blocking");
+    assert!(
+        draft_body["confirmation_blocked_reasons"]
+            .as_array()
+            .is_some_and(|reasons| !reasons.is_empty())
+    );
 }
 
 fn confirmation_json() -> Value {
