@@ -8,6 +8,9 @@ fallback behavior instead.
 is an opt-in upstream integration test. It uses two public, nearby Beijing
 landmarks expressed in GCJ-02 and verifies that AMap accepts the credential and
 returns positive distance and duration values for walking and driving routes.
+With `--nocapture`, successful runs print only the provider, route mode,
+distance, and duration as proof of the upstream response mapping. They never
+print credentials, URLs, coordinates, or raw response bodies.
 
 Run it locally only with a restricted non-production AMap Web Service key. The
 test and server load the local ignored `.env` file automatically; an exported

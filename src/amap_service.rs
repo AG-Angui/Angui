@@ -230,17 +230,29 @@ mod tests {
                 RouteEstimate::Available {
                     distance_meters,
                     duration_seconds,
+                    provider,
                     mode: actual_mode,
                     ..
                 } => {
                     assert_eq!(actual_mode, mode);
                     assert!(distance_meters > 0, "AMap returned a zero-distance route");
                     assert!(duration_seconds > 0, "AMap returned a zero-duration route");
+                    eprintln!(
+                        "AMap upstream route verified: provider={provider}, mode={}, distance_meters={distance_meters}, duration_seconds={duration_seconds}",
+                        route_mode_name(actual_mode),
+                    );
                 }
                 RouteEstimate::Unavailable { reason } => panic!(
                     "AMap live route integration failed for {mode:?}; check the non-production key's Web Service route entitlement and quota: {reason:?}"
                 ),
             }
+        }
+    }
+
+    fn route_mode_name(mode: RouteMode) -> &'static str {
+        match mode {
+            RouteMode::Walking => "walking",
+            RouteMode::Driving => "driving",
         }
     }
 }

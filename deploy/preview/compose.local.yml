@@ -42,6 +42,9 @@ services:
       ANGUI_FRONTEND_ORIGIN: ${PREVIEW_ORIGIN:?PREVIEW_ORIGIN is required}
       DATABASE_URL: ${PREVIEW_DATABASE_URL:-sqlite:///app/data/angui.db?mode=rwc}
       RUST_LOG: ${RUST_LOG:-info}
+      # Optional server-only Web Service credential. It is intentionally not
+      # present in the frontend, migration, or bootstrap containers.
+      AMAP_WEBSERVICE_KEY: ${AMAP_WEBSERVICE_KEY:-}
     volumes:
       - ./runtime/angui:/usr/local/bin/angui:ro
       - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro

@@ -1,3 +1,4 @@
+-- Destructive rollback: m0014 refuses this script when confirmation audit data exists.
 PRAGMA foreign_keys = OFF;
 -- statement-break
 CREATE TABLE intake_sessions_before_confirmation (

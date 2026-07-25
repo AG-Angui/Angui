@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::{execute_script, sql_for_backend};
+use crate::{ensure_rollback_is_safe, execute_script, sql_for_backend};
 
 pub struct Migration;
 
@@ -26,6 +26,15 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Destructive rollback: confirmation attribution and timestamps are audit data.
+        ensure_rollback_is_safe(
+            manager,
+            &[(
+                "intake sessions contain confirmation attribution or timestamps",
+                "SELECT 1 FROM intake_sessions WHERE confirmed_by_user_id IS NOT NULL OR confirmed_at IS NOT NULL LIMIT 1",
+            )],
+        )
+        .await?;
         execute_script(
             manager,
             sql_for_backend(

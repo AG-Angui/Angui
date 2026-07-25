@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::{execute_script, sql_for_backend};
+use crate::{ensure_rollback_is_safe, execute_script, sql_for_backend};
 
 pub struct Migration;
 
@@ -26,6 +26,21 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Destructive rollback: assessments and immutable answer revisions must be archived first.
+        ensure_rollback_is_safe(
+            manager,
+            &[
+                (
+                    "intake answer revisions exist",
+                    "SELECT 1 FROM intake_answer_revisions LIMIT 1",
+                ),
+                (
+                    "intake sessions contain assessment or structured answer data",
+                    "SELECT 1 FROM intake_sessions WHERE assessment_json <> '[]' OR structured_answers_json <> '{}' LIMIT 1",
+                ),
+            ],
+        )
+        .await?;
         execute_script(
             manager,
             sql_for_backend(

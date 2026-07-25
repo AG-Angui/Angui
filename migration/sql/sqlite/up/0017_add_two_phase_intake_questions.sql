@@ -1,4 +1,15 @@
-UPDATE intake_question_definitions SET status = 'disabled' WHERE status = 'active';
+CREATE TABLE intake_question_definition_status_backup (
+    question_id TEXT PRIMARY KEY NOT NULL,
+    previous_status TEXT NOT NULL CHECK (previous_status IN ('active', 'disabled'))
+);
+-- statement-break
+INSERT INTO intake_question_definition_status_backup (question_id, previous_status)
+SELECT id, status FROM intake_question_definitions
+WHERE id IN ('intake-q-0001', 'intake-q-0002', 'intake-q-0003', 'intake-q-0004', 'intake-q-0005', 'intake-q-0006', 'intake-q-0007', 'intake-q-0008');
+-- statement-break
+UPDATE intake_question_definitions SET status = 'disabled'
+WHERE id IN ('intake-q-0001', 'intake-q-0002', 'intake-q-0003', 'intake-q-0004', 'intake-q-0005', 'intake-q-0006', 'intake-q-0007', 'intake-q-0008')
+  AND status = 'active';
 -- statement-break
 INSERT INTO intake_question_definitions (id, version, field_code, prompt, display_order, is_required, max_answer_chars, status, created_at, updated_at) VALUES
     ('intake-q-0201', 2, 'basic_information', 'Please describe the person using information your family can verify.', 1, 1, 500, 'active', '2026-07-25T00:00:00.000Z', '2026-07-25T00:00:00.000Z'),

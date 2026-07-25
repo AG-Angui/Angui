@@ -1,3 +1,4 @@
+-- Destructive rollback: m0016 refuses this script when assessments or revisions exist.
 DROP TABLE IF EXISTS intake_answer_revisions;
 -- statement-break
 PRAGMA foreign_keys = OFF;

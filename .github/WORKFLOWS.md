@@ -213,6 +213,17 @@ Recommended variables:
 - `PREVIEW_RUNTIME_IMAGE=angui-preview-runtime:bookworm`
 - `PREVIEW_ENVIRONMENT=preview`
 
+Optional preview secret:
+
+- `AMAP_WEBSERVICE_KEY`: a restricted, non-production AMap Web Service key.
+  Preview deployment passes it only to the API container at runtime. It is not
+  exposed to frontend builds, preview artifacts, migrations, bootstrap jobs, or
+  workflow logs. When omitted, the API deliberately uses its documented map
+  degradation path. Prefer the `preview` GitHub Environment Secret of this
+  name, with deployment branch restrictions or required reviewers. A repository
+  secret of the same name also works, but grants the credential to every
+  eligible preview deployment and is therefore less restrictive.
+
 The VM needs Docker Engine, Compose v2, `curl`, port 80 reachable from the
 parent Nginx, and permission for the runner service account to run Docker. No
 SSH deployment secrets, GHCR read token, preview port range, DNS credentials, or
