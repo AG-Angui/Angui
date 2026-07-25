@@ -1,12 +1,15 @@
-use actix_web::{HttpResponse, web};
+use actix_multipart::Multipart;
+use actix_web::{HttpResponse, http::header, web};
+use futures_util::StreamExt;
 
 use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AddCaseMemberRequest, AuthenticatedUser, CreateCaseRequest, CreateClueRequest,
-        UpdateCaseStatusRequest,
+        AddCaseMemberRequest, AuthenticatedUser, CaseResourceConfigurationResponse,
+        CreateCasePlaceRequest, CreateCaseRequest, CreateClueRequest, UpdateCaseStatusRequest,
     },
+    roles::CaseRole,
     services::case_service,
 };
 
@@ -18,8 +21,138 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}", web::get().to(get_case))
             .route("/{case_id}/status", web::patch().to(update_case_status))
             .route("/{case_id}/clues", web::post().to(create_clue))
+            .route("/{case_id}/places", web::post().to(create_place))
+            .route(
+                "/{case_id}/resource-configuration",
+                web::get().to(get_resource_configuration),
+            )
+            .route("/{case_id}/attachments", web::post().to(create_attachment))
+            .route(
+                "/{case_id}/attachments/{attachment_id}",
+                web::get().to(download_attachment),
+            )
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn get_resource_configuration(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    case_service::require_case_role(
+        &state.db,
+        &auth.id,
+        &case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(CaseResourceConfigurationResponse {
+        attachment_max_image_bytes: state.attachment_max_image_bytes,
+        attachment_max_per_case: state.attachment_max_per_case,
+        case_place_types: state.case_place_types.clone(),
+    }))
+}
+
+async fn create_place(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    request: web::Json<CreateCasePlaceRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let place = crate::services::case_resource_service::create_place(
+        &state.db,
+        &auth,
+        &case_id,
+        request.into_inner(),
+        &state.case_place_types,
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(place))
+}
+
+async fn create_attachment(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    mut multipart: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    let mut file: Option<(String, String, Vec<u8>)> = None;
+    while let Some(item) = multipart.next().await {
+        let mut field =
+            item.map_err(|_| ApiError::Validation("multipart upload is malformed".to_owned()))?;
+        if field.name() != Some("file") || file.is_some() {
+            return Err(ApiError::Validation(
+                "submit exactly one file field".to_owned(),
+            ));
+        }
+        let filename = field
+            .content_disposition()
+            .and_then(|value| value.get_filename())
+            .ok_or_else(|| ApiError::Validation("file name is required".to_owned()))?
+            .to_owned();
+        let content_type = field
+            .content_type()
+            .map(|value| value.essence_str().to_owned())
+            .ok_or_else(|| ApiError::Validation("file content type is required".to_owned()))?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.next().await {
+            let chunk = chunk
+                .map_err(|_| ApiError::Validation("file upload could not be read".to_owned()))?;
+            if bytes.len().saturating_add(chunk.len()) > state.attachment_max_image_bytes {
+                return Err(ApiError::Validation(format!(
+                    "image must not exceed {} bytes",
+                    state.attachment_max_image_bytes
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        file = Some((filename, content_type, bytes));
+    }
+    let (filename, content_type, bytes) =
+        file.ok_or_else(|| ApiError::Validation("file field is required".to_owned()))?;
+    let attachment = crate::services::case_resource_service::store_image_attachment(
+        &state.db,
+        &auth,
+        &case_id,
+        crate::services::case_resource_service::AttachmentUpload {
+            filename: &filename,
+            declared_content_type: &content_type,
+            bytes: &bytes,
+        },
+        crate::services::case_resource_service::AttachmentStorage {
+            directory: &state.attachment_storage_directory,
+            max_image_bytes: state.attachment_max_image_bytes,
+            max_attachments_per_case: state.attachment_max_per_case,
+        },
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(attachment))
+}
+
+async fn download_attachment(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, attachment_id) = path.into_inner();
+    let attachment = crate::services::case_resource_service::load_attachment_for_download(
+        &state.db,
+        &auth,
+        &case_id,
+        &attachment_id,
+        &state.attachment_storage_directory,
+    )
+    .await?;
+    Ok(HttpResponse::Ok()
+        .insert_header((header::CONTENT_TYPE, attachment.content_type))
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .insert_header((header::CACHE_CONTROL, "no-store, private"))
+        .insert_header((
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", attachment.filename),
+        ))
+        .body(attachment.bytes))
 }
 
 async fn list_cases(

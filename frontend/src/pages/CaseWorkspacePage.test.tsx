@@ -5,6 +5,7 @@ import { CaseWorkspacePage } from './CaseWorkspacePage'
 
 const mocked = vi.hoisted(() => ({
   getCase: vi.fn(),
+  getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
 }))
 
@@ -13,11 +14,14 @@ vi.mock('../auth/useAuth', () => ({
 }))
 vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
+  getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
   addCaseMember: vi.fn(),
   createCase: vi.fn(),
   createClue: vi.fn(),
   reviewClue: vi.fn(),
+  createCasePlace: vi.fn(),
+  uploadCaseAttachment: vi.fn(),
   updateCaseStatus: vi.fn(),
 }))
 
@@ -49,6 +53,8 @@ function detail(id: string, displayName: string): CaseDetail {
       last_seen_location: null,
     },
     clues: [],
+    places: [],
+    attachments: [],
     created_at: '2026-07-24T00:00:00Z',
     updated_at: '2026-07-24T00:00:00Z',
   }
@@ -71,6 +77,11 @@ describe('CaseWorkspacePage', () => {
     mocked.getCase.mockImplementation((_token: string, caseId: string) => (
       caseId === 'case-1' ? firstRequest.promise : secondRequest.promise
     ))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ['frequent'],
+    })
 
     render(<CaseWorkspacePage mode="family" />)
     await waitFor(() => expect(mocked.getCase).toHaveBeenCalledWith('test-session', 'case-1'))

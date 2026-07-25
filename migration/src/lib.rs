@@ -17,6 +17,7 @@ mod m0014_confirm_intake_sessions;
 mod m0015_create_intake_prompt_templates;
 mod m0016_add_intake_assessments;
 mod m0017_add_two_phase_intake_questions;
+mod m0018_create_case_places_and_attachments;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0015_create_intake_prompt_templates::Migration),
             Box::new(m0016_add_intake_assessments::Migration),
             Box::new(m0017_add_two_phase_intake_questions::Migration),
+            Box::new(m0018_create_case_places_and_attachments::Migration),
         ]
     }
 }
@@ -355,9 +357,12 @@ mod tests {
         let v2_database = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory sqlite connection should succeed");
-        Migrator::up(&v2_database, None)
+        // This assertion is specifically about m0017. Keep m0018 out of the
+        // migration history so `down(Some(1))` targets the two-phase-question
+        // migration rather than merely rolling back the later empty table.
+        Migrator::up(&v2_database, Some(17))
             .await
-            .expect("all migrations should succeed");
+            .expect("migrations through two-phase questions should succeed");
         v2_database
             .execute_unprepared(
                 "UPDATE intake_question_definitions SET prompt = 'Operator-edited prompt' WHERE id = 'intake-q-0201'",
@@ -377,9 +382,9 @@ mod tests {
         let v1_database = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory sqlite connection should succeed");
-        Migrator::up(&v1_database, None)
+        Migrator::up(&v1_database, Some(17))
             .await
-            .expect("all migrations should succeed");
+            .expect("migrations through two-phase questions should succeed");
         v1_database
             .execute_unprepared(
                 "UPDATE intake_question_definitions SET status = 'active' WHERE id = 'intake-q-0001'",

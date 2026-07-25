@@ -471,10 +471,27 @@ async fn load_case_detail(
         profile_response.health_notes = None;
     }
 
+    let (places, attachments) = futures_util::try_join!(
+        crate::services::case_resource_service::visible_places(
+            db,
+            &membership.case_id,
+            &auth.id,
+            case_role,
+        ),
+        crate::services::case_resource_service::visible_attachments(
+            db,
+            &membership.case_id,
+            &auth.id,
+            case_role,
+        ),
+    )?;
+
     Ok(CaseDetail::new(
         case_model,
         profile_response,
         visible_clues,
+        places,
+        attachments,
         case_role,
     ))
 }
@@ -492,7 +509,7 @@ async fn membership_for_case<C: ConnectionTrait>(
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))
 }
 
-async fn require_case_role<C: ConnectionTrait>(
+pub(crate) async fn require_case_role<C: ConnectionTrait>(
     db: &C,
     user_id: &str,
     case_id: &str,
