@@ -305,7 +305,7 @@ pub async fn update_task_status(
         }
         if !volunteer_transition_allowed(&task.status, &next_status) {
             return Err(ApiError::Conflict(format!(
-                "task status cannot change from {:?} to {:?}",
+                "task status cannot change from {} to {}",
                 task.status, next_status
             )));
         }

@@ -337,7 +337,13 @@ async fn task_status_state_machine_is_limited_to_the_assignee_or_commander_cance
     );
 
     let illegal = update_status!(&app, &task_id, &volunteer_token, "completed");
-    assert_error(illegal, StatusCode::CONFLICT, "conflict").await;
+    assert_eq!(illegal.status(), StatusCode::CONFLICT);
+    let illegal: Value = test::read_body_json(illegal).await;
+    assert_eq!(illegal["error"]["code"], "conflict");
+    assert_eq!(
+        illegal["error"]["message"],
+        "task status cannot change from assigned to completed"
+    );
     for status in ["accepted", "active", "blocked", "active", "completed"] {
         let response = update_status!(&app, &task_id, &volunteer_token, status);
         assert_eq!(response.status(), StatusCode::OK);
