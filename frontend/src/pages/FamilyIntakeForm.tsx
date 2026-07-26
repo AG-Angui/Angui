@@ -716,7 +716,9 @@ function basicInformationDescription(value: BasicInformationDraft): string | nul
 }
 
 function validInteger(value: string, minimum: number, maximum: number): number | null {
-  const number = Number(value)
+  const normalized = value.trim()
+  if (!normalized) return null
+  const number = Number(normalized)
   return Number.isInteger(number) && number >= minimum && number <= maximum ? number : null
 }
 

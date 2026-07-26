@@ -175,7 +175,7 @@ describe('FamilyIntakeForm', () => {
     await screen.findByRole('heading', { name: '基本信息' })
     fireEvent.change(screen.getByRole('textbox', { name: '姓名或称呼' }), { target: { value: '王女士' } })
     fireEvent.change(screen.getByRole('combobox', { name: '性别' }), { target: { value: '女' } })
-    fireEvent.change(screen.getByRole('spinbutton', { name: '年龄' }), { target: { value: '72' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '年龄' }), { target: { value: '0' } })
     fireEvent.change(screen.getByRole('spinbutton', { name: '身高（厘米）' }), { target: { value: '158' } })
     fireEvent.change(screen.getByRole('textbox', { name: '便于识别的外观特征' }), { target: { value: '短发，戴眼镜' } })
     fireEvent.click(screen.getByRole('button', { name: '保存并继续' }))
@@ -185,7 +185,30 @@ describe('FamilyIntakeForm', () => {
       'intake-1',
       {
         field: 'basic_information',
-        answer: '姓名或称呼：王女士\n性别：女\n年龄：72 岁\n身高：158 厘米\n外观特征：短发，戴眼镜',
+        answer: '姓名或称呼：王女士\n性别：女\n年龄：0 岁\n身高：158 厘米\n外观特征：短发，戴眼镜',
+        replace: false,
+      },
+    ))
+  })
+
+  it('omits a blank age from the structured basic-information answer', async () => {
+    mocked.createIntakeSession.mockResolvedValue(basicInformationSession)
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(afterBasicInformationSession))
+
+    render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '开始问询' }))
+    await screen.findByRole('heading', { name: '基本信息' })
+    fireEvent.change(screen.getByRole('textbox', { name: '姓名或称呼' }), { target: { value: '王女士' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '年龄' }), { target: { value: '   ' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存并继续' }))
+
+    await waitFor(() => expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+      'family-session',
+      'intake-1',
+      {
+        field: 'basic_information',
+        answer: '姓名或称呼：王女士',
         replace: false,
       },
     ))
@@ -238,6 +261,11 @@ describe('FamilyIntakeForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '确认并创建案件' }))
     await waitFor(() => expect(mocked.confirmIntakeSession).toHaveBeenCalledTimes(1))
+    expect(mocked.confirmIntakeSession).toHaveBeenCalledWith(
+      'family-session',
+      'intake-1',
+      expect.objectContaining({ age: null }),
+    )
     expect(onConfirmed).toHaveBeenCalledWith('case-1', 'AG-0001')
   })
 })
