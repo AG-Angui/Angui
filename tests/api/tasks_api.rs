@@ -2,9 +2,12 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
-use angui::entities::audit_events;
+use angui::{
+    entities::{audit_events, task_location_reports},
+    services::task_service,
+};
 use chrono::{Duration, Utc};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
 use serde_json::{Value, json};
 
 use crate::support::{ADMIN, COMMANDER, FAMILY, TestContext, VOLUNTEER, assert_error};
@@ -550,6 +553,29 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
     assert!(metadata.get("latitude").is_none());
     assert!(metadata.get("longitude").is_none());
     assert!(metadata.get("accuracy_meters").is_none());
+
+    task_location_reports::Entity::update_many()
+        .col_expr(
+            task_location_reports::Column::RetentionExpiresAt,
+            Expr::value((Utc::now() - Duration::seconds(1)).to_rfc3339()),
+        )
+        .filter(task_location_reports::Column::Id.eq(report_id))
+        .exec(&context.database)
+        .await
+        .expect("location report expiration should be configurable for the retention test");
+    assert_eq!(
+        task_service::purge_expired_location_reports(&context.database)
+            .await
+            .expect("expired location reports should be purged"),
+        1
+    );
+    assert!(
+        task_location_reports::Entity::find_by_id(report_id)
+            .one(&context.database)
+            .await
+            .expect("location report lookup should succeed")
+            .is_none()
+    );
 
     let completed = update_status!(&app, &task_id, &volunteer_token, "completed");
     assert_eq!(completed.status(), StatusCode::OK);

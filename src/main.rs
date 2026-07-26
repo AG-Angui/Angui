@@ -4,7 +4,7 @@ use actix_cors::Cors;
 use actix_web::{App, HttpServer, http, middleware::Logger, web};
 use angui::{
     ai_gateway::AiGateway, amap_service::AmapService, app_state::AppState, config::Settings,
-    rate_limit::LoginRateLimiter, routes,
+    rate_limit::LoginRateLimiter, routes, services::task_service,
 };
 use sea_orm::Database;
 
@@ -37,6 +37,7 @@ async fn main() -> io::Result<()> {
         ai_gateway,
         login_limiter: LoginRateLimiter::default(),
     });
+    task_service::start_location_report_retention_purger(state.db.clone());
 
     HttpServer::new(move || {
         let cors = Cors::default()
