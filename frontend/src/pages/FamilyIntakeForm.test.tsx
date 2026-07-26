@@ -44,6 +44,28 @@ const readySession: IntakeSession = {
   next_question: null,
 }
 
+const basicInformationSession: IntakeSession = {
+  ...collectingSession,
+  completed_phase_one_fields: [],
+  missing_phase_one_fields: ['basic_information', 'last_seen'],
+  next_question: {
+    field: 'basic_information',
+    prompt: '请填写可供家属核对的基础信息。',
+    required: true,
+  },
+}
+
+const afterBasicInformationSession: IntakeSession = {
+  ...basicInformationSession,
+  completed_phase_one_fields: ['basic_information'],
+  missing_phase_one_fields: ['last_seen'],
+  next_question: {
+    field: 'health_status',
+    prompt: '请填写健康情况。',
+    required: false,
+  },
+}
+
 const profileDraft: IntakeDraft = {
   status: 'draft',
   source_scope: 'family_provided intake answers from this session only',
@@ -72,8 +94,10 @@ const profileDraft: IntakeDraft = {
 }
 
 function answerResponse(session: IntakeSession): SubmitIntakeAnswerResponse {
+  const { id: session_id, ...sessionUpdate } = session
   return {
-    ...session,
+    ...sessionUpdate,
+    session_id,
     raw_answer: '模拟社区北门',
     candidate_fields: [{
       field: 'last_seen',
@@ -141,6 +165,55 @@ describe('FamilyIntakeForm', () => {
     expect(screen.getByText(message)).toBeInTheDocument()
   })
 
+  it('submits basic information from labelled fields instead of a single free-text box', async () => {
+    mocked.createIntakeSession.mockResolvedValue(basicInformationSession)
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(afterBasicInformationSession))
+
+    render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '开始问询' }))
+    await screen.findByRole('heading', { name: '基本信息' })
+    fireEvent.change(screen.getByRole('textbox', { name: '姓名或称呼' }), { target: { value: '王女士' } })
+    fireEvent.change(screen.getByRole('combobox', { name: '性别' }), { target: { value: '女' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '年龄' }), { target: { value: '0' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '身高（厘米）' }), { target: { value: '158' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '便于识别的外观特征' }), { target: { value: '短发，戴眼镜' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存并继续' }))
+
+    await waitFor(() => expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+      'family-session',
+      'intake-1',
+      {
+        field: 'basic_information',
+        answer: '姓名或称呼：王女士\n性别：女\n年龄：0 岁\n身高：158 厘米\n外观特征：短发，戴眼镜',
+        replace: false,
+      },
+    ))
+  })
+
+  it('omits a blank age from the structured basic-information answer', async () => {
+    mocked.createIntakeSession.mockResolvedValue(basicInformationSession)
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(afterBasicInformationSession))
+
+    render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={vi.fn().mockResolvedValue(undefined)} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '开始问询' }))
+    await screen.findByRole('heading', { name: '基本信息' })
+    fireEvent.change(screen.getByRole('textbox', { name: '姓名或称呼' }), { target: { value: '王女士' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '年龄' }), { target: { value: '   ' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存并继续' }))
+
+    await waitFor(() => expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+      'family-session',
+      'intake-1',
+      {
+        field: 'basic_information',
+        answer: '姓名或称呼：王女士',
+        replace: false,
+      },
+    ))
+  })
+
   it('shows field-level provenance and sends a replacement when the family corrects a draft answer', async () => {
     mocked.createIntakeSession.mockResolvedValue(collectingSession)
     mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(readySession))
@@ -154,6 +227,7 @@ describe('FamilyIntakeForm', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存并继续' }))
 
     expect(await screen.findByText('问询整理出的画像草稿')).toBeInTheDocument()
+    expect(mocked.getIntakeDraft).toHaveBeenCalledWith('family-session', 'intake-1')
     expect(screen.getByText('来源：家属提供 · 健康情况')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '修改健康情况' }))
@@ -187,6 +261,11 @@ describe('FamilyIntakeForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '确认并创建案件' }))
     await waitFor(() => expect(mocked.confirmIntakeSession).toHaveBeenCalledTimes(1))
+    expect(mocked.confirmIntakeSession).toHaveBeenCalledWith(
+      'family-session',
+      'intake-1',
+      expect.objectContaining({ age: null }),
+    )
     expect(onConfirmed).toHaveBeenCalledWith('case-1', 'AG-0001')
   })
 })
