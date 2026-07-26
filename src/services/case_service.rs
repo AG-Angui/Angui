@@ -237,6 +237,8 @@ pub async fn create_clue(
         .unwrap_or("manual_report")
         .trim()
         .to_lowercase();
+    let location_precision =
+        trim_optional(request.location_precision).map(|value| value.to_lowercase());
     let clue_model = clues::ActiveModel {
         id: Set(clue_id.clone()),
         case_id: Set(case_id.to_owned()),
@@ -249,7 +251,7 @@ pub async fn create_clue(
         reported_at: Set(timestamp.clone()),
         confirmed_at: Set(None),
         location_text: Set(trim_optional(request.location_text)),
-        location_precision: Set(trim_optional(request.location_precision)),
+        location_precision: Set(location_precision),
         next_action: Set(trim_optional(request.next_action)),
         linked_task_reference: Set(trim_optional(request.linked_task_reference)),
         related_clue_id: Set(None),
@@ -431,13 +433,19 @@ pub async fn review_clue(
     active.status = Set(next_status.clone());
     if next_status == "confirmed" {
         active.confirmed_at = Set(Some(now()));
+    } else {
+        active.confirmed_at = Set(None);
     }
     active.related_clue_id = Set(related_clue_id.clone());
     let relationship_type = trim_optional(request.relationship_type);
     active.relationship_type = Set(relationship_type.clone());
     active.review_reason = Set(Some(request.reason.trim().to_owned()));
-    active.next_action = Set(trim_optional(request.next_action));
-    active.linked_task_reference = Set(trim_optional(request.linked_task_reference));
+    if let Some(next_action) = request.next_action {
+        active.next_action = Set(trim_optional(Some(next_action)));
+    }
+    if let Some(linked_task_reference) = request.linked_task_reference {
+        active.linked_task_reference = Set(trim_optional(Some(linked_task_reference)));
+    }
     active.updated_at = Set(now());
     let updated = active.update(&transaction).await?;
 

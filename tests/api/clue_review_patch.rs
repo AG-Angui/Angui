@@ -109,7 +109,7 @@ async fn patch_clue_review_rejects_volunteers_and_records_each_review_transition
     .await;
     assert_error(forbidden, StatusCode::FORBIDDEN, "forbidden").await;
 
-    for status in ["needs_verification", "rejected"] {
+    for status in ["confirmed", "needs_verification", "rejected"] {
         let response = test::call_service(
             &app,
             test::TestRequest::patch()
@@ -125,6 +125,8 @@ async fn patch_clue_review_rejects_volunteers_and_records_each_review_transition
         assert!(body["reported_at"].is_string());
         if status == "confirmed" {
             assert!(body["confirmed_at"].is_string());
+        } else {
+            assert_eq!(body["confirmed_at"], Value::Null);
         }
     }
 
@@ -134,7 +136,7 @@ async fn patch_clue_review_rejects_volunteers_and_records_each_review_transition
         .all(&context.database)
         .await
         .expect("audit lookup should succeed");
-    assert_eq!(audits.len(), 2);
+    assert_eq!(audits.len(), 3);
     assert!(audits.iter().any(|audit| {
         audit
             .metadata_json
@@ -241,31 +243,72 @@ async fn patch_clue_review_records_a_confirm_then_retraction_without_silent_over
     context
         .add_member(&case_id, FAMILY, COMMANDER, "commander")
         .await;
-    let clue_id = context.create_clue(&case_id, FAMILY).await;
+    let family_token = context.token(FAMILY).await;
     let commander_token = context.token(COMMANDER).await;
     let app = crate::init_api_app!(&context);
 
-    for (status, reason) in [
-        ("confirmed", "first review corroborated the original source"),
-        (
-            "needs_verification",
-            "later feedback invalidated the corroboration",
-        ),
-    ] {
-        let response = test::call_service(
-            &app,
-            test::TestRequest::patch()
-                .uri(&format!("/api/clues/{clue_id}/review"))
-                .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
-                .set_json(serde_json::json!({ "status": status, "reason": reason }))
-                .to_request(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-    }
+    let created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(serde_json::json!({
+                "source": "family",
+                "content": "Original clue requiring a follow-up.",
+                "next_action": "contact the original reporter",
+                "linked_task_reference": "task://follow-up/reporter"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: Value = test::read_body_json(created).await;
+    let clue_id = created["id"].as_str().expect("clue id");
+
+    let confirmed = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/clues/{clue_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(serde_json::json!({
+                "status": "confirmed",
+                "reason": "first review corroborated the original source"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    let confirmed: Value = test::read_body_json(confirmed).await;
+    assert!(confirmed["confirmed_at"].is_string());
+    assert_eq!(confirmed["next_action"], "contact the original reporter");
+    assert_eq!(
+        confirmed["linked_task_reference"],
+        "task://follow-up/reporter"
+    );
+
+    let retracted = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/clues/{clue_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(serde_json::json!({
+                "status": "needs_verification",
+                "reason": "later feedback invalidated the corroboration"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(retracted.status(), StatusCode::OK);
+    let retracted: Value = test::read_body_json(retracted).await;
+    assert_eq!(retracted["confirmed_at"], Value::Null);
+    assert_eq!(retracted["next_action"], "contact the original reporter");
+    assert_eq!(
+        retracted["linked_task_reference"],
+        "task://follow-up/reporter"
+    );
 
     let audits = angui::entities::audit_events::Entity::find()
-        .filter(angui::entities::audit_events::Column::EntityId.eq(&clue_id))
+        .filter(angui::entities::audit_events::Column::EntityId.eq(clue_id))
         .filter(angui::entities::audit_events::Column::Action.eq("clue.reviewed"))
         .all(&context.database)
         .await

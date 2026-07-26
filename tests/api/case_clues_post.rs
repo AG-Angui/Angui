@@ -136,7 +136,7 @@ async fn post_case_clues_keeps_source_provenance_and_leaves_missing_draft_fields
                 "raw_record_reference": "controlled://chat/record-16",
                 "occurred_at": null,
                 "location_text": "near the fictional park",
-                "location_precision": "approximate",
+                "location_precision": " Approximate ",
                 "next_action": "ask the reporter for a time window"
             }))
             .to_request(),

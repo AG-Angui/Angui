@@ -210,6 +210,7 @@ async fn get_case_clues_redacts_controlled_raw_references_for_non_submitters() {
             .to_request(),
     )
     .await;
+    assert_eq!(volunteer.status(), StatusCode::OK);
     let volunteer: Value = test::read_body_json(volunteer).await;
     assert_eq!(volunteer["items"][0]["raw_record_reference"], Value::Null);
 }
