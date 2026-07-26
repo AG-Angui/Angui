@@ -19,6 +19,8 @@ export interface IntakeSession {
   privacy_notice: string
 }
 
+export type IntakeSessionUpdate = Omit<IntakeSession, 'id'>
+
 export interface IntakeCandidateField {
   field: string
   value: string
@@ -48,7 +50,8 @@ export interface IntakeAssessment {
   route_estimate: IntakeRouteEstimate | null
 }
 
-export interface SubmitIntakeAnswerResponse extends IntakeSession {
+export interface SubmitIntakeAnswerResponse extends IntakeSessionUpdate {
+  session_id: string
   raw_answer: string
   candidate_fields: IntakeCandidateField[]
   assessments: IntakeAssessment[]

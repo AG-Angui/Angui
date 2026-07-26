@@ -15,6 +15,7 @@ import type {
   IntakeDraftProfile,
   IntakeProfileDraftFieldMetadata,
   IntakeSession,
+  SubmitIntakeAnswerResponse,
 } from '../api/intake'
 import { useAuth } from '../auth/useAuth'
 
@@ -70,6 +71,23 @@ type StoredIntakeSession = Pick<
 interface StoredIntakeState {
   session: StoredIntakeSession
   answer: string
+  basicInformation: BasicInformationDraft
+}
+
+interface BasicInformationDraft {
+  name: string
+  gender: string
+  age: string
+  height: string
+  appearance: string
+}
+
+const blankBasicInformation: BasicInformationDraft = {
+  name: '',
+  gender: '',
+  age: '',
+  height: '',
+  appearance: '',
 }
 
 export function FamilyIntakeForm({
@@ -84,6 +102,7 @@ export function FamilyIntakeForm({
   const [session, setSession] = useState<IntakeSession | null>(null)
   const [draft, setDraft] = useState<IntakeDraft | null>(null)
   const [answer, setAnswer] = useState('')
+  const [basicInformation, setBasicInformation] = useState<BasicInformationDraft>(blankBasicInformation)
   const [profile, setProfile] = useState<ConfirmedIntakeProfile>(blankProfile)
   const [assessments, setAssessments] = useState<IntakeAssessment[]>([])
   const [editSource, setEditSource] = useState<IntakeProfileDraftFieldMetadata | null>(null)
@@ -102,13 +121,17 @@ export function FamilyIntakeForm({
     if (confirmReviewOpen) confirmDialogRef.current?.focus()
   }, [confirmReviewOpen])
 
-  const loadDraft = useCallback(async (sessionId: string, initializeProfile: boolean) => {
+  const loadDraft = useCallback(async (
+    sessionId: string,
+    initializeProfile: boolean,
+    basicInformationForProfile: BasicInformationDraft = blankBasicInformation,
+  ) => {
     if (!token) return null
     try {
       const nextDraft = await getIntakeDraft(token, sessionId)
       setDraft(nextDraft)
       setAssessments(nextDraft.assessments)
-      if (initializeProfile) setProfile(profileFromDraft(nextDraft))
+      if (initializeProfile) setProfile(profileFromDraft(nextDraft, basicInformationForProfile))
       return nextDraft
     } catch (cause) {
       setError(messageFrom(cause))
@@ -118,6 +141,7 @@ export function FamilyIntakeForm({
         setDraft(null)
         setAssessments([])
         setAnswer('')
+        setBasicInformation(blankBasicInformation)
         setProfile(blankProfile)
         setEditSource(null)
         setEditAnswer('')
@@ -138,8 +162,9 @@ export function FamilyIntakeForm({
     if (stored) {
       setSession(stored.session)
       setAnswer(stored.answer)
+      setBasicInformation(stored.basicInformation)
       if (stored.session.status === 'ready_for_confirmation') {
-        void loadDraft(stored.session.id, true)
+        void loadDraft(stored.session.id, true, stored.basicInformation)
       }
     }
     setHasHydrated(true)
@@ -154,9 +179,10 @@ export function FamilyIntakeForm({
     const stored: StoredIntakeState = {
       session: toStoredSession(session),
       answer,
+      basicInformation,
     }
     window.sessionStorage.setItem(storageKey, JSON.stringify(stored))
-  }, [answer, hasHydrated, session, storageKey])
+  }, [answer, basicInformation, hasHydrated, session, storageKey])
 
   useEffect(() => {
     if (!answer.trim() || typeof window === 'undefined') return
@@ -178,6 +204,7 @@ export function FamilyIntakeForm({
       setDraft(null)
       setAssessments([])
       setAnswer('')
+      setBasicInformation(blankBasicInformation)
     } catch (cause) {
       setError(messageFrom(cause))
     } finally {
@@ -193,13 +220,14 @@ export function FamilyIntakeForm({
     setBusyAction(replace ? 'replace' : 'answer')
     setError('')
     try {
-      const next = await submitIntakeAnswer(token, session.id, {
+      const response = await submitIntakeAnswer(token, session.id, {
         field,
         answer: value.trim(),
         replace,
       })
+      const next = sessionFromAnswerResponse(response)
       setSession(next)
-      setAssessments(next.assessments)
+      setAssessments(response.assessments)
       if (replace) {
         const replacedFields = draft?.field_metadata
           .filter((item) => item.source_field === field)
@@ -211,7 +239,7 @@ export function FamilyIntakeForm({
       } else {
         setAnswer('')
         if (next.status === 'ready_for_confirmation') {
-          await loadDraft(next.id, true)
+          await loadDraft(next.id, true, basicInformation)
         }
       }
     } catch (cause) {
@@ -224,12 +252,21 @@ export function FamilyIntakeForm({
     }
   }
 
-  async function submitCurrentAnswer(value = answer) {
+  async function submitCurrentAnswer(value?: string) {
     if (!session?.next_question) {
       setError('当前问询状态已变化，请刷新后继续。')
       return
     }
-    await sendAnswer(session.next_question.field, value)
+    const answerToSubmit = value ?? (
+      session.next_question.field === 'basic_information'
+        ? basicInformationAnswer(basicInformation)
+        : answer
+    )
+    if (!answerToSubmit) {
+      setError('请填写姓名或称呼，或选择“标记为未知”。')
+      return
+    }
+    await sendAnswer(session.next_question.field, answerToSubmit)
   }
 
   async function confirmCase() {
@@ -458,9 +495,18 @@ export function FamilyIntakeForm({
             void submitCurrentAnswer()
           }}
         >
-          <Field label={question.prompt} required={question.required} hint={questionReasons[question.field]}>
-            <TextArea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={5} maxLength={2000} fullWidth />
-          </Field>
+          {question.field === 'basic_information' ? (
+            <BasicInformationForm
+              value={basicInformation}
+              onChange={setBasicInformation}
+              required={question.required}
+              hint={questionReasons[question.field]}
+            />
+          ) : (
+            <Field label={question.prompt} required={question.required} hint={questionReasons[question.field]}>
+              <TextArea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={5} maxLength={2000} fullWidth />
+            </Field>
+          )}
           <p className="mt-2 text-xs leading-5 text-slate-500">仅在当前浏览器标签页暂存尚未提交的答案；不会写入 URL、日志或跨设备存储。</p>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button type="submit" variant="primary" isDisabled={isBusy}>
@@ -542,6 +588,49 @@ function ProfileForm({ profile, onChange }: { profile: ConfirmedIntakeProfile; o
   )
 }
 
+function BasicInformationForm({
+  value,
+  onChange,
+  required,
+  hint,
+}: {
+  value: BasicInformationDraft
+  onChange: (next: BasicInformationDraft) => void
+  required: boolean
+  hint?: string
+}) {
+  return (
+    <fieldset className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+      <legend className="px-1 text-sm font-semibold text-slate-800">基本信息{required ? <span aria-hidden="true"> *</span> : null}</legend>
+      {hint && <p className="mb-4 mt-1 flex items-start gap-1 text-xs leading-5 text-slate-500"><CircleHelp className="mt-0.5 shrink-0" size={14} aria-hidden="true" />{hint}</p>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="姓名或称呼" required>
+          <Input value={value.name} maxLength={120} autoComplete="name" onChange={(event) => onChange({ ...value, name: event.target.value })} fullWidth />
+        </Field>
+        <Field label="性别">
+          <select aria-label="性别" value={value.gender} onChange={(event) => onChange({ ...value, gender: event.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100">
+            <option value="">暂不确定</option>
+            <option value="男">男</option>
+            <option value="女">女</option>
+            <option value="其他">其他</option>
+          </select>
+        </Field>
+        <Field label="年龄">
+          <Input type="number" inputMode="numeric" min={0} max={130} value={value.age} onChange={(event) => onChange({ ...value, age: event.target.value })} fullWidth />
+        </Field>
+        <Field label="身高（厘米）">
+          <Input type="number" inputMode="numeric" min={30} max={250} value={value.height} onChange={(event) => onChange({ ...value, height: event.target.value })} fullWidth />
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="便于识别的外观特征">
+            <TextArea value={value.appearance} onChange={(event) => onChange({ ...value, appearance: event.target.value })} rows={3} maxLength={300} fullWidth />
+          </Field>
+        </div>
+      </div>
+    </fieldset>
+  )
+}
+
 function AssessmentList({ items }: { items: IntakeAssessment[] }) {
   if (items.length === 0) return null
   return (
@@ -579,14 +668,56 @@ function uniqueSourceOptions(draft: IntakeDraft | null) {
   })
 }
 
-function profileFromDraft(draft: IntakeDraft): ConfirmedIntakeProfile {
+function profileFromDraft(draft: IntakeDraft, basicInformation: BasicInformationDraft): ConfirmedIntakeProfile {
   return {
     ...blankProfile,
-    physical_description: draft.profile.physical_description,
+    display_name: basicInformation.name.trim(),
+    age: validInteger(basicInformation.age, 0, 130),
+    gender: nullable(basicInformation.gender),
+    physical_description: basicInformationDescription(basicInformation) ?? draft.profile.physical_description,
     clothing_description: draft.profile.clothing_description,
     health_notes: draft.profile.health_notes,
     last_seen_location: draft.profile.last_seen_information ?? '',
   }
+}
+
+function sessionFromAnswerResponse(response: SubmitIntakeAnswerResponse): IntakeSession {
+  return {
+    id: response.session_id,
+    status: response.status,
+    missing_fields: response.missing_fields,
+    phase: response.phase,
+    completed_phase_one_fields: response.completed_phase_one_fields,
+    missing_phase_one_fields: response.missing_phase_one_fields,
+    phase_transition_ready: response.phase_transition_ready,
+    next_question: response.next_question,
+    guidance_mode: response.guidance_mode,
+    privacy_notice: response.privacy_notice,
+  }
+}
+
+function basicInformationAnswer(value: BasicInformationDraft): string | null {
+  const name = value.name.trim()
+  if (!name) return null
+  const age = validInteger(value.age, 0, 130)
+  const height = validInteger(value.height, 30, 250)
+  const lines = [`姓名或称呼：${name}`]
+  if (value.gender) lines.push(`性别：${value.gender}`)
+  if (age !== null) lines.push(`年龄：${age} 岁`)
+  if (height !== null) lines.push(`身高：${height} 厘米`)
+  if (value.appearance.trim()) lines.push(`外观特征：${value.appearance.trim()}`)
+  return lines.join('\n')
+}
+
+function basicInformationDescription(value: BasicInformationDraft): string | null {
+  const height = validInteger(value.height, 30, 250)
+  const lines = [height === null ? null : `身高约 ${height} 厘米`, value.appearance.trim() || null].filter((item): item is string => item !== null)
+  return lines.length > 0 ? lines.join('；') : null
+}
+
+function validInteger(value: string, minimum: number, maximum: number): number | null {
+  const number = Number(value)
+  return Number.isInteger(number) && number >= minimum && number <= maximum ? number : null
 }
 
 function syncProfileFields(current: ConfirmedIntakeProfile, draft: IntakeDraft, replacedFields: string[]) {
@@ -660,9 +791,22 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
     return {
       session: session as StoredIntakeSession,
       answer: typeof parsed.answer === 'string' ? parsed.answer : '',
+      basicInformation: readBasicInformation(parsed.basicInformation),
     }
   } catch {
     return discardStoredState(storageKey)
+  }
+}
+
+function readBasicInformation(value: unknown): BasicInformationDraft {
+  if (!value || typeof value !== 'object') return blankBasicInformation
+  const draft = value as Partial<BasicInformationDraft>
+  return {
+    name: typeof draft.name === 'string' ? draft.name : '',
+    gender: typeof draft.gender === 'string' ? draft.gender : '',
+    age: typeof draft.age === 'string' ? draft.age : '',
+    height: typeof draft.height === 'string' ? draft.height : '',
+    appearance: typeof draft.appearance === 'string' ? draft.appearance : '',
   }
 }
 
