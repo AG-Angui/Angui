@@ -2,7 +2,7 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
-use angui::entities::{ audit_events };
+use angui::entities::audit_events;
 use chrono::{Duration, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
