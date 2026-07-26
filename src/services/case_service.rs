@@ -1125,7 +1125,7 @@ fn trim_optional(value: Option<String>) -> Option<String> {
     })
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
 

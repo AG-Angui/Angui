@@ -3,6 +3,7 @@ mod cases;
 mod clues;
 mod health;
 mod intake_sessions;
+mod tasks;
 
 use actix_web::{HttpResponse, web};
 
@@ -44,6 +45,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .configure(auth::configure)
             .configure(cases::configure)
             .configure(intake_sessions::configure)
-            .configure(clues::configure),
+            .configure(clues::configure)
+            .configure(tasks::configure),
     );
 }

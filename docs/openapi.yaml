@@ -42,6 +42,8 @@ tags:
     description: 案件、老人资料、案件成员和案件内线索；必须先通过案件成员关系授权
   - name: Clues
     description: 线索人工审核
+  - name: Tasks
+    description: Case-internal rescue task creation, assignment, and execution status.
   - name: Intake sessions
     description: 家属创建的未确认走失信息问询会话
 security:
@@ -521,6 +523,136 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/cases/{case_id}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Tasks]
+      operationId: listCaseTasks
+      summary: List tasks visible to the current case member
+      description: |
+        Commanders receive all case tasks. Volunteers receive only tasks assigned to themselves;
+        assignment identity is redacted. Family members receive an empty page. The server applies
+        role filtering before stable `due_at`, then `id` ordering and pagination. Non-members
+        receive 404.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: case-restricted
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        "200":
+          description: Role-filtered, stably ordered task page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskListPage" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Tasks]
+      operationId: createCaseTask
+      summary: Manually create and assign a rescue task
+      description: |
+        Only a commander of an open case can create this endpoint's initially `assigned` task.
+        The source clue must be confirmed and belong to the same case; the recipient must be an
+        active case member with the volunteer role. Creation, assignment, and `task.created` /
+        `task.assigned` audit events commit in one transaction. No automatic assignment or
+        high-risk-action authorization is performed.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: case-restricted
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTaskRequest" }
+      responses:
+        "201":
+          description: Assigned task created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/tasks/mine:
+    get:
+      tags: [Tasks]
+      operationId: listMyTasks
+      summary: List the current volunteer's assigned task queue
+      description: |
+        This endpoint accepts only accounts with the volunteer capability and returns `200 []`
+        when none of their active volunteer case memberships has an assignment. It never accepts
+        a case ID and returns no health details, family contact details, full clues, or any other
+        volunteer's identity or location history.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-global-capabilities: [volunteer]
+      x-data-classification: case-restricted
+      responses:
+        "200":
+          description: The caller's tasks, ordered by due time then task ID
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Task" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/tasks/{task_id}/status:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    patch:
+      tags: [Tasks]
+      operationId: updateTaskStatus
+      summary: Advance an assigned task or cancel an unfinished task
+      description: |
+        The assigned volunteer may advance only `assigned -> accepted -> active -> completed`,
+        with `active <-> blocked` available for safety escalation. A case commander may only set
+        an unfinished task to `cancelled`. Completed and cancelled tasks are terminal. Every
+        successful state change writes a `task.status_changed` audit event containing the prior
+        and next status, actor, and timestamp.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: case-restricted
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateTaskStatusRequest" }
+      responses:
+        "200":
+          description: Updated task after an allowed transition
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/places:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -752,6 +884,14 @@ components:
       schema:
         type: string
         format: uuid
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      description: Case task UUID. Non-members and non-assigned volunteers receive not found.
+      schema:
+        type: string
+        format: uuid
     IntakeSessionId:
       name: session_id
       in: path
@@ -927,6 +1067,19 @@ components:
     CaseStatus:
       type: string
       enum: [active, resolved, closed]
+
+    TaskStatus:
+      type: string
+      enum: [pending_claim, assigned, accepted, active, blocked, completed, cancelled]
+
+    TaskStatusTransitionTarget:
+      type: string
+      description: `pending_claim` and `assigned` are stored task states, not valid PATCH targets.
+      enum: [accepted, active, blocked, completed, cancelled]
+
+    TaskRiskLevel:
+      type: string
+      enum: [low, medium, high, critical]
 
     ClueStatus:
       type: string
@@ -1635,6 +1788,100 @@ components:
           type: integer
           minimum: 0
           description: Only clues visible to the authenticated user are counted.
+
+    CreateTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [source_clue_id, volunteer_user_id, title, objective, area_text, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback]
+      properties:
+        source_clue_id:
+          type: string
+          format: uuid
+          description: A confirmed clue in the same case; required as the task's reviewed source evidence.
+        volunteer_user_id:
+          type: string
+          format: uuid
+          description: An active volunteer member of the same case; the server does not auto-select one.
+        title: { type: string, minLength: 1, maxLength: 200 }
+        objective: { type: string, minLength: 1, maxLength: 4000 }
+        area_text: { type: string, minLength: 1, maxLength: 500 }
+        latitude:
+          type: [number, "null"]
+          minimum: -90
+          maximum: 90
+          description: Must be provided with longitude, or both coordinates must be omitted or null.
+        longitude:
+          type: [number, "null"]
+          minimum: -180
+          maximum: 180
+          description: Must be provided with latitude, or both coordinates must be omitted or null.
+        due_at:
+          type: string
+          format: date-time
+          description: Required future RFC 3339 timestamp; the server normalizes it to UTC.
+        background: { type: string, minLength: 1, maxLength: 10000 }
+        risk_level: { $ref: "#/components/schemas/TaskRiskLevel" }
+        risk_notes: { type: string, minLength: 1, maxLength: 4000 }
+        safety_briefing: { type: string, minLength: 1, maxLength: 4000 }
+        expected_feedback: { type: string, minLength: 1, maxLength: 4000 }
+
+    UpdateTaskStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/TaskStatusTransitionTarget"
+          description: The current task state and caller role determine whether this otherwise valid target transition is allowed.
+
+    Task:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, source_clue_id, title, objective, area_text, latitude, longitude, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback, status, result_summary, assigned_volunteer_user_id, assigned_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        source_clue_id:
+          type: [string, "null"]
+          format: uuid
+          description: Returned to commanders only; it is null in volunteer responses.
+        title: { type: string, maxLength: 200 }
+        objective: { type: string, maxLength: 4000 }
+        area_text: { type: string, maxLength: 500 }
+        latitude: { type: [number, "null"] }
+        longitude: { type: [number, "null"] }
+        due_at: { type: string, format: date-time }
+        background:
+          type: [string, "null"]
+          description: Internal task context returned to commanders only; it is null in volunteer responses.
+        risk_level: { $ref: "#/components/schemas/TaskRiskLevel" }
+        risk_notes: { type: string }
+        safety_briefing: { type: string }
+        expected_feedback: { type: string }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        result_summary: { type: [string, "null"] }
+        assigned_volunteer_user_id:
+          type: [string, "null"]
+          format: uuid
+          description: Returned to commanders only; it is null in volunteer responses.
+        assigned_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TaskListPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        total:
+          type: integer
+          minimum: 0
+          description: Only tasks visible to the authenticated case role are counted.
 
     CreateCasePlaceRequest:
       type: object
