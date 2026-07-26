@@ -25,6 +25,11 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
         &confirmed_clue,
         angui::models::ReviewClueRequest {
             status: "confirmed".to_owned(),
+            reason: "fixture review".to_owned(),
+            related_clue_id: None,
+            relationship_type: None,
+            next_action: None,
+            linked_task_reference: None,
         },
     )
     .await
@@ -67,6 +72,11 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     let volunteer_body: Value = test::read_body_json(volunteer).await;
     assert_eq!(volunteer_body["total"], 1);
     assert_eq!(volunteer_body["items"][0]["status"], "confirmed");
+    assert_eq!(volunteer_body["items"][0]["review_reason"], Value::Null);
+    assert_eq!(
+        volunteer_body["items"][0]["attachment_ids"],
+        serde_json::json!([])
+    );
 
     let paged = test::call_service(
         &app,

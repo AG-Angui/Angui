@@ -162,8 +162,14 @@ pub fn create_clue_request() -> CreateClueRequest {
     CreateClueRequest {
         source: "family".to_owned(),
         content: "测试线索：曾向测试市场方向步行".to_owned(),
+        source_type: None,
+        raw_record_reference: None,
         occurred_at: Some("2026-07-13T09:10:00Z".to_owned()),
         location_text: Some("测试公园北门".to_owned()),
+        location_precision: None,
+        next_action: None,
+        linked_task_reference: None,
+        attachment_ids: Vec::new(),
     }
 }
 

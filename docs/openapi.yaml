@@ -444,7 +444,7 @@ paths:
       summary: 获取角色裁剪的线索时间轴
       description: |
         commander 可以查看全部线索；family 只能查看已确认线索和本人提交的线索；
-        volunteer 只能查看已确认线索。分页总数只计算当前角色可见的线索。无案件成员关系返回 404。
+        volunteer 只能查看已确认线索。附件关联仅返回给指挥或线索提交者；分页总数只计算当前角色可见的线索。无案件成员关系返回 404。
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -500,6 +500,9 @@ paths:
               content: 模拟线索：曾向市场方向步行
               occurred_at: "2026-07-13T09:10:00Z"
               location_text: 模拟公园北门
+              location_precision: approximate
+              raw_record_reference: controlled://intake/record-001
+              next_action: 联系现场志愿者核实
       responses:
         "201":
           description: 待审核线索已创建
@@ -934,10 +937,20 @@ components:
         - rejected
         - expired
         - duplicate
+        - conflicting
+        - insufficient_information
 
     ReviewClueStatus:
       type: string
-      enum: [needs_verification, confirmed, rejected, expired, duplicate]
+      enum: [needs_verification, confirmed, rejected, expired, duplicate, conflicting, insufficient_information]
+
+    ClueSourceType:
+      type: string
+      enum: [manual_report, field_report, chat_draft, ai_draft]
+
+    ClueLocationPrecision:
+      type: string
+      enum: [exact, approximate, unknown]
 
     CreateCaseRequest:
       type: object
@@ -1302,19 +1315,59 @@ components:
           minLength: 1
           maxLength: 4000
           description: 服务端去除首尾空白后必须为 1 到 4000 个字符。
+        source_type:
+          $ref: "#/components/schemas/ClueSourceType"
+          default: manual_report
+        raw_record_reference:
+          type: [string, "null"]
+          maxLength: 500
+          description: 受控原始记录的引用；不在普通审计元数据中复制原文。
         occurred_at:
           type: [string, "null"]
           description: 建议使用 RFC 3339；当前服务端只去除首尾空白，不解析时间格式。
         location_text:
           type: [string, "null"]
+        location_precision:
+          anyOf:
+            - $ref: "#/components/schemas/ClueLocationPrecision"
+            - type: "null"
+        next_action:
+          type: [string, "null"]
+          maxLength: 500
+        linked_task_reference:
+          type: [string, "null"]
+          maxLength: 120
+        attachment_ids:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items: { type: string, format: uuid }
 
     ReviewClueRequest:
       type: object
       additionalProperties: false
-      required: [status]
+      required: [status, reason]
       properties:
         status:
           $ref: "#/components/schemas/ReviewClueStatus"
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: 人工审核理由，会与操作者及前后状态一起进入审计记录。
+        related_clue_id:
+          type: [string, "null"]
+          format: uuid
+          description: duplicate 或 conflicting 状态必须引用同案另一条线索。
+        relationship_type:
+          type: [string, "null"]
+          enum: [duplicate_of, conflicts_with, null]
+        next_action:
+          type: [string, "null"]
+          maxLength: 500
+        linked_task_reference:
+          type: [string, "null"]
+          maxLength: 120
 
     AddCaseMemberRequest:
       type: object
@@ -1482,9 +1535,20 @@ components:
         - case_id
         - status
         - source
+        - source_type
         - content
+        - raw_record_reference
         - occurred_at
+        - reported_at
+        - confirmed_at
         - location_text
+        - location_precision
+        - next_action
+        - linked_task_reference
+        - related_clue_id
+        - relationship_type
+        - review_reason
+        - attachment_ids
         - created_at
         - updated_at
         - reviewed_at
@@ -1501,13 +1565,43 @@ components:
         source:
           type: string
           maxLength: 64
+        source_type:
+          $ref: "#/components/schemas/ClueSourceType"
         content:
           type: string
           maxLength: 4000
+        raw_record_reference:
+          type: [string, "null"]
         occurred_at:
           type: [string, "null"]
+        reported_at:
+          type: string
+          format: date-time
+        confirmed_at:
+          type: [string, "null"]
+          format: date-time
         location_text:
           type: [string, "null"]
+        location_precision:
+          anyOf:
+            - $ref: "#/components/schemas/ClueLocationPrecision"
+            - type: "null"
+        next_action:
+          type: [string, "null"]
+        linked_task_reference:
+          type: [string, "null"]
+        related_clue_id:
+          type: [string, "null"]
+          format: uuid
+        relationship_type:
+          type: [string, "null"]
+          enum: [duplicate_of, conflicts_with, null]
+        review_reason:
+          type: [string, "null"]
+        attachment_ids:
+          type: array
+          description: 仅在当前用户是指挥或线索提交者时返回；文件下载仍独立进行服务端权限校验。
+          items: { type: string, format: uuid }
         created_at:
           type: string
           format: date-time

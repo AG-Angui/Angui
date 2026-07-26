@@ -18,6 +18,7 @@ mod m0015_create_intake_prompt_templates;
 mod m0016_add_intake_assessments;
 mod m0017_add_two_phase_intake_questions;
 mod m0018_create_case_places_and_attachments;
+mod m0019_expand_clue_lifecycle;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -45,6 +46,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0016_add_intake_assessments::Migration),
             Box::new(m0017_add_two_phase_intake_questions::Migration),
             Box::new(m0018_create_case_places_and_attachments::Migration),
+            Box::new(m0019_expand_clue_lifecycle::Migration),
         ]
     }
 }

@@ -5,6 +5,7 @@ pub mod case_attachments;
 pub mod case_memberships;
 pub mod case_places;
 pub mod cases;
+pub mod clue_attachment_links;
 pub mod clue_attributions;
 pub mod clues;
 pub mod elder_profiles;
