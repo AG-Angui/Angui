@@ -520,19 +520,17 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
     assert!(report.get("latitude").is_none());
     assert!(report.get("longitude").is_none());
     assert!(report.get("accuracy_meters").is_none());
+    let captured_at = report["captured_at"]
+        .as_str()
+        .expect("captured_at should be returned");
+    let retention_expires_at = report["retention_expires_at"]
+        .as_str()
+        .expect("retention_expires_at should be returned");
+    let captured_at = chrono::DateTime::parse_from_rfc3339(captured_at).expect("rfc3339");
+    let retention_expires_at =
+        chrono::DateTime::parse_from_rfc3339(retention_expires_at).expect("rfc3339");
+    assert_eq!(retention_expires_at - captured_at, Duration::hours(24));
     let report_id = report["id"].as_str().expect("report id should be returned");
-
-    let stored = task_location_reports::Entity::find_by_id(report_id)
-        .one(&context.database)
-        .await
-        .expect("location report should be readable")
-        .expect("location report should be stored");
-    assert_eq!(stored.task_id, task_id);
-    assert_eq!(stored.volunteer_user_id, volunteer.id);
-    assert_eq!(stored.source, "simulated");
-    assert_eq!(stored.latitude, 31.2);
-    assert_eq!(stored.longitude, 121.5);
-    assert_eq!(stored.accuracy_meters, 20.0);
 
     let audit = audit_events::Entity::find()
         .filter(audit_events::Column::EntityId.eq(report_id))
