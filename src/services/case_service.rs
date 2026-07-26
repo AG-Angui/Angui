@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, case_memberships, cases, clue_attributions, clues, elder_profiles,
-        user_global_capabilities, users,
+        audit_events, case_attachments, case_memberships, cases, clue_attachment_links,
+        clue_attributions, clues, elder_profiles, user_global_capabilities, users,
     },
     error::ApiError,
     models::{
@@ -29,6 +29,8 @@ const CLUE_REVIEW_STATUSES: &[&str] = &[
     "rejected",
     "expired",
     "duplicate",
+    "conflicting",
+    "insufficient_information",
 ];
 const CLUE_STATUSES: &[&str] = &[
     "pending_review",
@@ -37,7 +39,11 @@ const CLUE_STATUSES: &[&str] = &[
     "rejected",
     "expired",
     "duplicate",
+    "conflicting",
+    "insufficient_information",
 ];
+const PUBLIC_CLUE_SOURCE_TYPES: &[&str] = &["manual_report", "field_report"];
+const CLUE_LOCATION_PRECISIONS: &[&str] = &["exact", "approximate", "unknown"];
 const MAX_CLUE_TIMELINE_PAGE_SIZE: u64 = 100;
 
 pub async fn list_cases(
@@ -225,19 +231,61 @@ pub async fn create_clue(
 
     let clue_id = new_id();
     let timestamp = now();
+    let source_type = request
+        .source_type
+        .as_deref()
+        .unwrap_or("manual_report")
+        .trim()
+        .to_lowercase();
+    let location_precision =
+        trim_optional(request.location_precision).map(|value| value.to_lowercase());
     let clue_model = clues::ActiveModel {
         id: Set(clue_id.clone()),
         case_id: Set(case_id.to_owned()),
         status: Set("pending_review".to_owned()),
         source: Set(request.source.trim().to_owned()),
+        source_type: Set(source_type),
         content: Set(request.content.trim().to_owned()),
+        raw_record_reference: Set(trim_optional(request.raw_record_reference)),
         occurred_at: Set(trim_optional(request.occurred_at)),
+        reported_at: Set(timestamp.clone()),
+        confirmed_at: Set(None),
         location_text: Set(trim_optional(request.location_text)),
+        location_precision: Set(location_precision),
+        next_action: Set(trim_optional(request.next_action)),
+        linked_task_reference: Set(trim_optional(request.linked_task_reference)),
+        related_clue_id: Set(None),
+        relationship_type: Set(None),
+        review_reason: Set(None),
         created_at: Set(timestamp.clone()),
-        updated_at: Set(timestamp),
+        updated_at: Set(timestamp.clone()),
     }
     .insert(&transaction)
     .await?;
+
+    for attachment_id in &request.attachment_ids {
+        let attachment = case_attachments::Entity::find_by_id(attachment_id)
+            .one(&transaction)
+            .await?
+            .filter(|attachment| attachment.case_id == case_id)
+            .ok_or_else(|| {
+                ApiError::Validation(
+                    "attachment_ids must reference attachments in this case".to_owned(),
+                )
+            })?;
+        if attachment.created_by_user_id != auth.id {
+            return Err(ApiError::Forbidden(
+                "an attachment can only be linked by its uploader".to_owned(),
+            ));
+        }
+        clue_attachment_links::ActiveModel {
+            clue_id: Set(clue_id.clone()),
+            attachment_id: Set(attachment_id.clone()),
+            created_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+    }
 
     let attribution = clue_attributions::ActiveModel {
         clue_id: Set(clue_id.clone()),
@@ -260,7 +308,12 @@ pub async fn create_clue(
     .await?;
 
     transaction.commit().await?;
-    Ok(ClueResponse::new(clue_model, Some(attribution), &auth.id))
+    Ok(ClueResponse::new(
+        clue_model,
+        Some(attribution),
+        &auth.id,
+        request.attachment_ids,
+    ))
 }
 
 pub async fn list_clues(
@@ -290,11 +343,20 @@ pub async fn list_clues(
     let clue_models = clue_query.all(db).await?;
     let clue_ids: Vec<_> = clue_models.iter().map(|clue| clue.id.clone()).collect();
     let attributions = clue_attributions_for_clues(db, clue_ids).await?;
+    let attachment_links =
+        clue_attachment_ids_for_clues(db, clue_models.iter().map(|clue| clue.id.clone()).collect())
+            .await?;
     let visible_clues: Vec<_> = clue_models
         .into_iter()
         .filter_map(|clue| {
             let clue_id = clue.id.clone();
-            visible_clue_response(clue, attributions.get(&clue_id).cloned(), auth, case_role)
+            visible_clue_response(
+                clue,
+                attributions.get(&clue_id).cloned(),
+                attachment_links.get(&clue_id).cloned().unwrap_or_default(),
+                auth,
+                case_role,
+            )
         })
         .collect();
     let total = u64::try_from(visible_clues.len()).map_err(|_| ApiError::Internal)?;
@@ -328,7 +390,6 @@ pub async fn review_clue(
             "unsupported reviewed clue status {next_status:?}"
         )));
     }
-
     let transaction = db.begin().await?;
     let clue_model = clues::Entity::find_by_id(clue_id)
         .one(&transaction)
@@ -341,10 +402,50 @@ pub async fn review_clue(
         &[CaseRole::Commander],
     )
     .await?;
+    validate_review_request(&request, &next_status)?;
     let previous_status = clue_model.status.clone();
     let case_id = clue_model.case_id.clone();
+    let related_clue_id = trim_optional(request.related_clue_id);
+    if let Some(related_clue_id) = &related_clue_id {
+        clues::Entity::find_by_id(related_clue_id)
+            .one(&transaction)
+            .await?
+            .filter(|related| related.case_id == case_id && related.id != clue_id)
+            .ok_or_else(|| {
+                ApiError::Validation(
+                    "related_clue_id must reference another clue in the same case".to_owned(),
+                )
+            })?;
+    }
+    if matches!(next_status.as_str(), "duplicate" | "conflicting") && related_clue_id.is_none() {
+        return Err(ApiError::Validation(
+            "duplicate and conflicting reviews require related_clue_id".to_owned(),
+        ));
+    }
+    if matches!(next_status.as_str(), "duplicate" | "conflicting")
+        && trim_optional(request.relationship_type.clone()).is_none()
+    {
+        return Err(ApiError::Validation(
+            "duplicate and conflicting reviews require relationship_type".to_owned(),
+        ));
+    }
     let mut active = clue_model.into_active_model();
     active.status = Set(next_status.clone());
+    if next_status == "confirmed" {
+        active.confirmed_at = Set(Some(now()));
+    } else {
+        active.confirmed_at = Set(None);
+    }
+    active.related_clue_id = Set(related_clue_id.clone());
+    let relationship_type = trim_optional(request.relationship_type);
+    active.relationship_type = Set(relationship_type.clone());
+    active.review_reason = Set(Some(request.reason.trim().to_owned()));
+    if let Some(next_action) = request.next_action {
+        active.next_action = Set(trim_optional(Some(next_action)));
+    }
+    if let Some(linked_task_reference) = request.linked_task_reference {
+        active.linked_task_reference = Set(trim_optional(Some(linked_task_reference)));
+    }
     active.updated_at = Set(now());
     let updated = active.update(&transaction).await?;
 
@@ -375,12 +476,25 @@ pub async fn review_clue(
         "clue.reviewed",
         "clue",
         clue_id.to_owned(),
-        Some(json!({ "from": previous_status, "to": next_status })),
+        Some(json!({
+            "from": previous_status,
+            "to": next_status,
+            "reason": request.reason.trim(),
+            "related_clue_id": related_clue_id,
+            "relationship_type": relationship_type,
+        })),
     )
     .await?;
 
     transaction.commit().await?;
-    Ok(ClueResponse::new(updated, Some(attribution), &auth.id))
+    let mut attachment_links = clue_attachment_ids_for_clues(db, vec![clue_id.to_owned()]).await?;
+    let attachment_ids = attachment_links.remove(clue_id).unwrap_or_default();
+    Ok(ClueResponse::new(
+        updated,
+        Some(attribution),
+        &auth.id,
+        attachment_ids,
+    ))
 }
 
 struct ValidatedClueTimelineQuery {
@@ -574,12 +688,20 @@ async fn load_case_detail(
         .await?;
     let clue_ids: Vec<_> = clue_models.iter().map(|clue| clue.id.clone()).collect();
     let attributions = clue_attributions_for_clues(db, clue_ids).await?;
-
+    let attachment_links =
+        clue_attachment_ids_for_clues(db, clue_models.iter().map(|clue| clue.id.clone()).collect())
+            .await?;
     let visible_clues = clue_models
         .into_iter()
         .filter_map(|clue| {
             let clue_id = clue.id.clone();
-            visible_clue_response(clue, attributions.get(&clue_id).cloned(), auth, case_role)
+            visible_clue_response(
+                clue,
+                attributions.get(&clue_id).cloned(),
+                attachment_links.get(&clue_id).cloned().unwrap_or_default(),
+                auth,
+                case_role,
+            )
         })
         .collect();
 
@@ -629,9 +751,30 @@ async fn clue_attributions_for_clues<C: ConnectionTrait>(
         .collect())
 }
 
+async fn clue_attachment_ids_for_clues<C: ConnectionTrait>(
+    db: &C,
+    clue_ids: Vec<String>,
+) -> Result<HashMap<String, Vec<String>>, ApiError> {
+    if clue_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let links = clue_attachment_links::Entity::find()
+        .filter(clue_attachment_links::Column::ClueId.is_in(clue_ids))
+        .all(db)
+        .await?;
+    Ok(links.into_iter().fold(HashMap::new(), |mut links, link| {
+        links
+            .entry(link.clue_id)
+            .or_insert_with(Vec::new)
+            .push(link.attachment_id);
+        links
+    }))
+}
+
 fn visible_clue_response(
     clue: clues::Model,
     attribution: Option<clue_attributions::Model>,
+    attachment_ids: Vec<String>,
     auth: &AuthenticatedUser,
     case_role: CaseRole,
 ) -> Option<ClueResponse> {
@@ -644,7 +787,31 @@ fn visible_clue_response(
         CaseRole::Family => clue.status == "confirmed" || own,
         CaseRole::Volunteer => clue.status == "confirmed",
     };
-    visible.then(|| ClueResponse::new(clue, attribution, &auth.id))
+    let can_see_attachment_references = case_role == CaseRole::Commander || own;
+    visible.then(|| {
+        let mut response = ClueResponse::new(
+            clue,
+            attribution,
+            &auth.id,
+            if can_see_attachment_references {
+                attachment_ids
+            } else {
+                Vec::new()
+            },
+        );
+        if case_role != CaseRole::Commander && !own {
+            // Confirmed facts can be shared for coordination, while controlled
+            // source references, audit rationale, and internal task routing
+            // remain available only to commanders and the submitter.
+            response.raw_record_reference = None;
+            response.review_reason = None;
+            response.next_action = None;
+            response.linked_task_reference = None;
+            response.related_clue_id = None;
+            response.relationship_type = None;
+        }
+        response
+    })
 }
 
 async fn membership_for_case<C: ConnectionTrait>(
@@ -838,6 +1005,105 @@ fn validate_clue_request(request: &CreateClueRequest) -> Result<(), ApiError> {
             "content must contain between 1 and 4000 characters".to_owned(),
         ));
     }
+    let source_type = request
+        .source_type
+        .as_deref()
+        .unwrap_or("manual_report")
+        .trim()
+        .to_lowercase();
+    if !PUBLIC_CLUE_SOURCE_TYPES.contains(&source_type.as_str()) {
+        return Err(ApiError::Validation(
+            "source_type is unsupported".to_owned(),
+        ));
+    }
+    validate_optional_length("raw_record_reference", &request.raw_record_reference, 500)?;
+    validate_optional_length("next_action", &request.next_action, 500)?;
+    validate_optional_length("linked_task_reference", &request.linked_task_reference, 120)?;
+    if let Some(precision) = request.location_precision.as_deref()
+        && !CLUE_LOCATION_PRECISIONS.contains(&precision.trim().to_lowercase().as_str())
+    {
+        return Err(ApiError::Validation(
+            "location_precision is unsupported".to_owned(),
+        ));
+    }
+    if request
+        .location_precision
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        && trim_optional(request.location_text.clone()).is_none()
+    {
+        return Err(ApiError::Validation(
+            "location_precision requires location_text".to_owned(),
+        ));
+    }
+    if request.attachment_ids.len() > 10 {
+        return Err(ApiError::Validation(
+            "attachment_ids cannot contain more than 10 items".to_owned(),
+        ));
+    }
+    let mut unique_ids = std::collections::HashSet::new();
+    if request
+        .attachment_ids
+        .iter()
+        .any(|attachment_id| attachment_id.trim().is_empty() || !unique_ids.insert(attachment_id))
+    {
+        return Err(ApiError::Validation(
+            "attachment_ids must contain unique non-empty IDs".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_review_request(request: &ReviewClueRequest, next_status: &str) -> Result<(), ApiError> {
+    if request.reason.trim().is_empty() || request.reason.chars().count() > 1000 {
+        return Err(ApiError::Validation(
+            "reason must contain between 1 and 1000 characters".to_owned(),
+        ));
+    }
+    validate_optional_length("relationship_type", &request.relationship_type, 32)?;
+    validate_optional_length("next_action", &request.next_action, 500)?;
+    validate_optional_length("linked_task_reference", &request.linked_task_reference, 120)?;
+    if let Some(relationship_type) = request.relationship_type.as_deref() {
+        let relationship_type = relationship_type.trim().to_lowercase();
+        if !matches!(
+            relationship_type.as_str(),
+            "duplicate_of" | "conflicts_with"
+        ) {
+            return Err(ApiError::Validation(
+                "relationship_type is unsupported".to_owned(),
+            ));
+        }
+        let expected = match next_status {
+            "duplicate" => "duplicate_of",
+            "conflicting" => "conflicts_with",
+            _ => {
+                return Err(ApiError::Validation(
+                    "relationship_type requires duplicate or conflicting status".to_owned(),
+                ));
+            }
+        };
+        if relationship_type != expected {
+            return Err(ApiError::Validation(format!(
+                "relationship_type must be {expected} for {next_status}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_length(
+    label: &str,
+    value: &Option<String>,
+    maximum: usize,
+) -> Result<(), ApiError> {
+    if value
+        .as_deref()
+        .is_some_and(|value| value.trim().chars().count() > maximum)
+    {
+        return Err(ApiError::Validation(format!(
+            "{label} cannot exceed {maximum} characters"
+        )));
+    }
     Ok(())
 }
 
@@ -977,8 +1243,14 @@ mod tests {
             CreateClueRequest {
                 source: "family".to_owned(),
                 content: "模拟线索：曾向市场方向步行".to_owned(),
+                source_type: None,
+                raw_record_reference: None,
                 occurred_at: Some("2026-07-13T09:10:00Z".to_owned()),
                 location_text: Some("模拟公园北门".to_owned()),
+                location_precision: None,
+                next_action: None,
+                linked_task_reference: None,
+                attachment_ids: Vec::new(),
             },
         )
         .await
@@ -997,6 +1269,11 @@ mod tests {
             &clue.id,
             ReviewClueRequest {
                 status: "confirmed".to_owned(),
+                reason: "family user cannot review".to_owned(),
+                related_clue_id: None,
+                relationship_type: None,
+                next_action: None,
+                linked_task_reference: None,
             },
         )
         .await;
@@ -1008,6 +1285,11 @@ mod tests {
             &clue.id,
             ReviewClueRequest {
                 status: "confirmed".to_owned(),
+                reason: "commander reviewed source record".to_owned(),
+                related_clue_id: None,
+                relationship_type: None,
+                next_action: None,
+                linked_task_reference: None,
             },
         )
         .await

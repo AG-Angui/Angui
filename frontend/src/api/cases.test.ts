@@ -72,7 +72,7 @@ describe('case API contract', () => {
       occurred_at: null,
       location_text: null,
     })
-    await reviewClue('test-session', 'clue-1', 'confirmed')
+    await reviewClue('test-session', 'clue-1', { status: 'confirmed', reason: 'Reviewed source record' })
     await updateCaseStatus('test-session', 'case-1', 'resolved')
 
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
@@ -92,7 +92,7 @@ describe('case API contract', () => {
     ).toEqual([
       { email: 'volunteer@demo.invalid', case_role: 'volunteer' },
       { source: 'volunteer', content: '模拟线索', occurred_at: null, location_text: null },
-      { status: 'confirmed' },
+      { status: 'confirmed', reason: 'Reviewed source record' },
       { status: 'resolved' },
     ])
   })

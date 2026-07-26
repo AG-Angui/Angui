@@ -29,6 +29,8 @@ import type {
   CaseStatus,
   ClueReviewStatus,
   CreateCasePlacePayload,
+  LocationPrecision,
+  PublicClueSourceType,
   PlaceType,
   PlaceVisibility,
 } from '../api/cases'
@@ -38,6 +40,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/ContentState
 import { FamilyIntakeForm } from './FamilyIntakeForm'
 
 type WorkspaceMode = 'family' | 'commander' | 'volunteer'
+type ReviewDraft = { reason: string; relatedClueId: string }
 
 const workspaceCopy: Record<WorkspaceMode, { context: string; title: string }> = {
   family: { context: '家属端', title: '走失求助' },
@@ -55,6 +58,8 @@ const statusLabels: Record<string, string> = {
   rejected: '已排除',
   expired: '已失效',
   duplicate: '重复',
+  conflicting: '冲突',
+  insufficient_information: '信息不足',
 }
 
 const placeTypeLabels: Record<string, string> = {
@@ -265,6 +270,12 @@ function CaseDetailView({
   const [clueContent, setClueContent] = useState('')
   const [clueLocation, setClueLocation] = useState('')
   const [clueOccurredAt, setClueOccurredAt] = useState('')
+  const [clueSourceType, setClueSourceType] = useState<PublicClueSourceType>('manual_report')
+  const [clueRawReference, setClueRawReference] = useState('')
+  const [clueLocationPrecision, setClueLocationPrecision] = useState<LocationPrecision | ''>('')
+  const [clueNextAction, setClueNextAction] = useState('')
+  const [linkedAttachmentIds, setLinkedAttachmentIds] = useState<string[]>([])
+  const [reviewDrafts, setReviewDrafts] = useState<Record<string, ReviewDraft>>({})
   const [place, setPlace] = useState<CreateCasePlacePayload>({ name: '', place_type: '', address: '', longitude: null, latitude: null, visibility: 'confirmed' })
   const [attachment, setAttachment] = useState<File | null>(null)
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status)
@@ -394,17 +405,36 @@ function CaseDetailView({
               <div className="flex flex-wrap items-center gap-2">
                 <Chip size="sm" variant="soft"><Chip.Label>{statusLabels[clue.status] ?? clue.status}</Chip.Label></Chip>
                 <span className="text-xs text-slate-500">{clue.source}</span>
+                {clue.source_type !== 'manual_report' && <span className="text-xs font-medium text-amber-700">{clue.source_type === 'ai_draft' ? 'AI 字段草稿' : clue.source_type === 'chat_draft' ? '聊天整理草稿' : '现场反馈'}</span>}
                 {clue.is_own_submission && <span className="text-xs font-medium text-brand-700">本人提交</span>}
-                <span className="ml-auto text-xs text-slate-500">{formatDate(clue.occurred_at ?? clue.created_at)}</span>
+                <span className="ml-auto text-xs text-slate-500">事件：{formatDate(clue.occurred_at) ?? '未提供'} · 上报：{formatDate(clue.reported_at)}</span>
               </div>
               <p className="m-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{clue.content}</p>
-              {clue.location_text && <p className="m-0 mt-1 text-xs text-slate-500">{clue.location_text}</p>}
+              {clue.raw_record_reference && <p className="m-0 mt-1 text-xs text-slate-500">受控原始记录：{clue.raw_record_reference}</p>}
+              {clue.location_text && <p className="m-0 mt-1 text-xs text-slate-500">地点：{clue.location_text}{clue.location_precision ? `（${clue.location_precision === 'exact' ? '精确' : clue.location_precision === 'approximate' ? '约略' : '精度未知'}）` : ''}</p>}
+              {(clue.next_action || clue.linked_task_reference || clue.review_reason || clue.confirmed_at) && <div className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-5 text-slate-600">
+                {clue.review_reason && <div>审核理由：{clue.review_reason}</div>}
+                {clue.confirmed_at && <div>确认时间：{formatDate(clue.confirmed_at)}</div>}
+                {clue.next_action && <div>下一步：{clue.next_action}</div>}
+                {clue.linked_task_reference && <div>关联任务：{clue.linked_task_reference}</div>}
+              </div>}
               {isCommander && clue.status === 'pending_review' && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <ReviewButton label="确认" status="confirmed" clueId={clue.id} busy={busy} run={run} />
-                  <ReviewButton label="待核实" status="needs_verification" clueId={clue.id} busy={busy} run={run} />
-                  <ReviewButton label="排除" status="rejected" clueId={clue.id} busy={busy} run={run} />
-                  <ReviewButton label="重复" status="duplicate" clueId={clue.id} busy={busy} run={run} />
+                <div className="mt-3 grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                  <Field label="审核理由（每次确认、排除、降级或合并必填）" required>
+                    <TextArea value={reviewDrafts[clue.id]?.reason ?? ''} maxLength={1000} rows={2} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: event.target.value, relatedClueId: current[clue.id]?.relatedClueId ?? '' } }))} fullWidth required />
+                  </Field>
+                  <Field label="关联线索 ID（重复或冲突时必填）">
+                    <Input value={reviewDrafts[clue.id]?.relatedClueId ?? ''} maxLength={36} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: current[clue.id]?.reason ?? '', relatedClueId: event.target.value } }))} placeholder="选择重复/冲突关系时填写" fullWidth />
+                  </Field>
+                  <p className="m-0 text-xs leading-5 text-amber-900">审核只会由指挥端提交。每条线索各自保存审核草稿，成功审核后会清空该条草稿。</p>
+                  <div className="flex flex-wrap gap-2">
+                    <ReviewButton label="确认" status="confirmed" clueId={clue.id} reason={reviewDrafts[clue.id]?.reason ?? ''} relatedClueId={reviewDrafts[clue.id]?.relatedClueId ?? ''} busy={busy} run={run} onReviewed={() => setReviewDrafts((current) => { const next = { ...current }; delete next[clue.id]; return next })} />
+                    <ReviewButton label="待核实" status="needs_verification" clueId={clue.id} reason={reviewDrafts[clue.id]?.reason ?? ''} relatedClueId={reviewDrafts[clue.id]?.relatedClueId ?? ''} busy={busy} run={run} onReviewed={() => setReviewDrafts((current) => { const next = { ...current }; delete next[clue.id]; return next })} />
+                    <ReviewButton label="信息不足" status="insufficient_information" clueId={clue.id} reason={reviewDrafts[clue.id]?.reason ?? ''} relatedClueId={reviewDrafts[clue.id]?.relatedClueId ?? ''} busy={busy} run={run} onReviewed={() => setReviewDrafts((current) => { const next = { ...current }; delete next[clue.id]; return next })} />
+                    <ReviewButton label="排除" status="rejected" clueId={clue.id} reason={reviewDrafts[clue.id]?.reason ?? ''} relatedClueId={reviewDrafts[clue.id]?.relatedClueId ?? ''} busy={busy} run={run} onReviewed={() => setReviewDrafts((current) => { const next = { ...current }; delete next[clue.id]; return next })} />
+                    <ReviewButton label="重复" status="duplicate" clueId={clue.id} reason={reviewDrafts[clue.id]?.reason ?? ''} relatedClueId={reviewDrafts[clue.id]?.relatedClueId ?? ''} busy={busy} run={run} onReviewed={() => setReviewDrafts((current) => { const next = { ...current }; delete next[clue.id]; return next })} />
+                    <ReviewButton label="冲突" status="conflicting" clueId={clue.id} reason={reviewDrafts[clue.id]?.reason ?? ''} relatedClueId={reviewDrafts[clue.id]?.relatedClueId ?? ''} busy={busy} run={run} onReviewed={() => setReviewDrafts((current) => { const next = { ...current }; delete next[clue.id]; return next })} />
+                  </div>
                 </div>
               )}
             </article>
@@ -422,23 +452,48 @@ function CaseDetailView({
                 setError('请填写线索内容后再提交。')
                 return
               }
+              const location = nullable(clueLocation)
+              if (clueLocationPrecision && !location) {
+                setError('选择地点精度时，请同时填写地点。')
+                return
+              }
               void run(
                 'clue',
-                () => createClue(token, detail.id, { source: detail.access_role, content, occurred_at: toIsoOrNull(clueOccurredAt), location_text: nullable(clueLocation) }),
+                () => createClue(token, detail.id, {
+                  source: detail.access_role,
+                  content,
+                  source_type: clueSourceType,
+                  raw_record_reference: nullable(clueRawReference),
+                  occurred_at: toIsoOrNull(clueOccurredAt),
+                  location_text: location,
+                  location_precision: clueLocationPrecision || null,
+                  next_action: nullable(clueNextAction),
+                  attachment_ids: linkedAttachmentIds,
+                }),
                 '线索已提交并进入人工审核',
               ).then((succeeded) => {
                 if (succeeded) {
                   setClueContent('')
                   setClueLocation('')
                   setClueOccurredAt('')
+                  setClueSourceType('manual_report')
+                  setClueRawReference('')
+                  setClueLocationPrecision('')
+                  setClueNextAction('')
+                  setLinkedAttachmentIds([])
                 }
               })
             }}
           >
             <Field label="线索内容" required><TextArea value={clueContent} maxLength={4000} onChange={(event) => setClueContent(event.target.value)} rows={3} fullWidth required /></Field>
             <div className="space-y-3">
+              <Field label="来源类型"><select className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={clueSourceType} onChange={(event) => setClueSourceType(event.target.value as PublicClueSourceType)}><option value="manual_report">人工上报</option><option value="field_report">现场反馈</option></select></Field>
               <Field label="发生时间"><Input type="datetime-local" value={clueOccurredAt} onChange={(event) => setClueOccurredAt(event.target.value)} fullWidth /></Field>
               <Field label="地点"><Input value={clueLocation} onChange={(event) => setClueLocation(event.target.value)} fullWidth /></Field>
+              <Field label="地点精度"><select className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={clueLocationPrecision} onChange={(event) => setClueLocationPrecision(event.target.value as LocationPrecision | '')}><option value="">未提供</option><option value="exact">精确</option><option value="approximate">约略</option><option value="unknown">未知</option></select></Field>
+              <Field label="受控原始记录引用"><Input value={clueRawReference} maxLength={500} onChange={(event) => setClueRawReference(event.target.value)} fullWidth /></Field>
+              <Field label="下一步动作"><Input value={clueNextAction} maxLength={500} onChange={(event) => setClueNextAction(event.target.value)} fullWidth /></Field>
+              {detail.attachments.some((attachment) => attachment.is_own_submission) && <Field label="关联本人附件"><select multiple className="min-h-20 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={linkedAttachmentIds} onChange={(event) => setLinkedAttachmentIds(Array.from(event.target.selectedOptions, (option) => option.value))}>{detail.attachments.filter((attachment) => attachment.is_own_submission).map((attachment) => <option key={attachment.id} value={attachment.id}>{attachment.original_filename}</option>)}</select></Field>}
               <Button type="submit" variant="primary" fullWidth isDisabled={busy === 'clue'}><Send size={16} />提交线索</Button>
             </div>
           </form>
@@ -504,23 +559,42 @@ function ReviewButton({
   label,
   status,
   clueId,
+  reason,
+  relatedClueId,
   busy,
   run,
+  onReviewed,
 }: {
   label: string
   status: ClueReviewStatus
   clueId: string
+  reason: string
+  relatedClueId: string
   busy: string
   run: (key: string, action: () => Promise<unknown>, message: string) => Promise<boolean>
+  onReviewed: () => void
 }) {
   const { token } = useAuth()
   const key = `review:${clueId}:${status}`
+  const requiresRelationship = status === 'duplicate' || status === 'conflicting'
+  const isReady = Boolean(reason.trim()) && (!requiresRelationship || Boolean(relatedClueId.trim()))
   return (
     <Button
       size="sm"
       variant={status === 'confirmed' ? 'secondary' : 'ghost'}
-      isDisabled={busy === key}
-      onPress={() => token && void run(key, () => reviewClue(token, clueId, status), `线索已更新为${statusLabels[status]}`)}
+      isDisabled={busy === key || !isReady}
+      onPress={() => {
+        const normalizedReason = reason.trim()
+        if (!token || !normalizedReason || (requiresRelationship && !relatedClueId.trim())) return
+        void run(key, () => reviewClue(token, clueId, {
+          status,
+          reason: normalizedReason,
+          related_clue_id: requiresRelationship ? relatedClueId.trim() : null,
+          relationship_type: status === 'duplicate' ? 'duplicate_of' : status === 'conflicting' ? 'conflicts_with' : null,
+        }), `线索已更新为${statusLabels[status]}`).then((succeeded) => {
+          if (succeeded) onReviewed()
+        })
+      }}
     >
       {status === 'confirmed' && <CheckCircle2 size={15} />}
       {label}

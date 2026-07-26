@@ -166,6 +166,80 @@ async fn post_case_attachments_normalizes_images_and_protects_downloads() {
             .and_then(|value| value.to_str().ok()),
         Some("no-store, private")
     );
+
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let attachment_id = attachment_id.to_owned();
+    let linked_clue = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(json!({
+                "source": "family",
+                "content": "Fictional photo submitted for review",
+                "attachment_ids": [attachment_id.clone()]
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(linked_clue.status(), StatusCode::CREATED);
+    let linked_clue: serde_json::Value = test::read_body_json(linked_clue).await;
+    let clue_id = linked_clue["id"].as_str().expect("clue id");
+
+    let commander_token = context.token(COMMANDER).await;
+    let confirmed = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/clues/{clue_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(
+                json!({ "status": "confirmed", "reason": "image matched the submitted report" }),
+            )
+            .to_request(),
+    )
+    .await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+
+    let commander_timeline = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    let commander_timeline: serde_json::Value = test::read_body_json(commander_timeline).await;
+    assert_eq!(
+        commander_timeline["items"][0]["attachment_ids"],
+        json!([attachment_id.clone()])
+    );
+
+    let volunteer_token = context.token(VOLUNTEER).await;
+    let volunteer_timeline = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .to_request(),
+    )
+    .await;
+    let volunteer_timeline: serde_json::Value = test::read_body_json(volunteer_timeline).await;
+    assert_eq!(volunteer_timeline["items"][0]["attachment_ids"], json!([]));
+
+    let volunteer_download = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/attachments/{attachment_id}"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_error(volunteer_download, StatusCode::FORBIDDEN, "forbidden").await;
 }
 
 #[actix_web::test]

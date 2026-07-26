@@ -18,6 +18,7 @@ mod m0015_create_intake_prompt_templates;
 mod m0016_add_intake_assessments;
 mod m0017_add_two_phase_intake_questions;
 mod m0018_create_case_places_and_attachments;
+mod m0019_expand_clue_lifecycle;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -45,6 +46,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0016_add_intake_assessments::Migration),
             Box::new(m0017_add_two_phase_intake_questions::Migration),
             Box::new(m0018_create_case_places_and_attachments::Migration),
+            Box::new(m0019_expand_clue_lifecycle::Migration),
         ]
     }
 }
@@ -299,6 +301,32 @@ mod tests {
             .await
             .expect("assessment data should be stored");
         assert!(Migrator::down(&assessment_database, Some(1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_lifecycle_rollback_refuses_to_discard_reported_at() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, None)
+            .await
+            .expect("all migrations should succeed");
+        database
+            .execute_unprepared(
+                "INSERT INTO cases (id, case_code, status, created_at, updated_at) VALUES ('reported-at-case', 'AG-00000019', 'active', '2026-07-25T00:00:00.000Z', '2026-07-25T00:00:00.000Z'); INSERT INTO clues (id, case_id, status, source, content, reported_at, created_at, updated_at) VALUES ('reported-at-clue', 'reported-at-case', 'pending_review', 'family', 'Reported after the original event.', '2026-07-26T12:30:00.000Z', '2026-07-25T00:00:00.000Z', '2026-07-25T00:00:00.000Z')",
+            )
+            .await
+            .expect("clue with a distinct report time should be stored");
+
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        assert!(database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT 1 FROM clues WHERE id = 'reported-at-clue' AND reported_at = '2026-07-26T12:30:00.000Z'",
+            ))
+            .await
+            .expect("report-time query should succeed")
+            .is_some());
     }
 
     #[tokio::test]

@@ -99,6 +99,11 @@ async fn post_case_clues_rejects_client_controlled_status_and_unknown_fields() {
             "content": "unknown field",
             "reviewed_by_user_id": "forged"
         }),
+        serde_json::json!({
+            "source": "family",
+            "content": "forged lifecycle time",
+            "reported_at": "2026-07-13T09:10:00Z"
+        }),
     ] {
         let response = test::call_service(
             &app,
@@ -111,4 +116,86 @@ async fn post_case_clues_rejects_client_controlled_status_and_unknown_fields() {
         .await;
         assert_error(response, StatusCode::BAD_REQUEST, "validation_error").await;
     }
+}
+
+#[actix_web::test]
+async fn post_case_clues_keeps_source_provenance_and_leaves_missing_draft_fields_empty() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "source": "family chat",
+                "source_type": "field_report",
+                "content": "Original quoted message retained for review.",
+                "raw_record_reference": "controlled://chat/record-16",
+                "occurred_at": null,
+                "location_text": "near the fictional park",
+                "location_precision": " Approximate ",
+                "next_action": "ask the reporter for a time window"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["status"], "pending_review");
+    assert_eq!(body["source_type"], "field_report");
+    assert_eq!(body["raw_record_reference"], "controlled://chat/record-16");
+    assert_eq!(body["occurred_at"], Value::Null);
+    assert_eq!(body["confirmed_at"], Value::Null);
+    assert!(body["reported_at"].is_string());
+    assert_eq!(body["location_precision"], "approximate");
+}
+
+#[actix_web::test]
+async fn post_case_clues_rejects_client_claimed_ai_and_chat_draft_sources() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+
+    for source_type in ["ai_draft", "chat_draft"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/cases/{case_id}/clues"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({
+                    "source": "untrusted client",
+                    "source_type": source_type,
+                    "content": "client must not claim an automated source"
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_error(response, StatusCode::BAD_REQUEST, "validation_error").await;
+    }
+}
+
+#[actix_web::test]
+async fn post_case_clues_rejects_ambiguous_location_precision() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(serde_json::json!({
+                "source": "family",
+                "content": "precision without a location is ambiguous",
+                "location_precision": "exact"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_error(response, StatusCode::BAD_REQUEST, "validation_error").await;
 }

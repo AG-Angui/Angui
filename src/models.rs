@@ -383,8 +383,20 @@ pub struct UpdateCaseStatusRequest {
 pub struct CreateClueRequest {
     pub source: String,
     pub content: String,
+    #[serde(default)]
+    pub source_type: Option<String>,
+    #[serde(default)]
+    pub raw_record_reference: Option<String>,
     pub occurred_at: Option<String>,
     pub location_text: Option<String>,
+    #[serde(default)]
+    pub location_precision: Option<String>,
+    #[serde(default)]
+    pub next_action: Option<String>,
+    #[serde(default)]
+    pub linked_task_reference: Option<String>,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -430,6 +442,15 @@ impl PlaceVisibility {
 #[serde(deny_unknown_fields)]
 pub struct ReviewClueRequest {
     pub status: String,
+    pub reason: String,
+    #[serde(default)]
+    pub related_clue_id: Option<String>,
+    #[serde(default)]
+    pub relationship_type: Option<String>,
+    #[serde(default)]
+    pub next_action: Option<String>,
+    #[serde(default)]
+    pub linked_task_reference: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -495,9 +516,20 @@ pub struct ClueResponse {
     pub case_id: String,
     pub status: String,
     pub source: String,
+    pub source_type: String,
     pub content: String,
+    pub raw_record_reference: Option<String>,
     pub occurred_at: Option<String>,
+    pub reported_at: String,
+    pub confirmed_at: Option<String>,
     pub location_text: Option<String>,
+    pub location_precision: Option<String>,
+    pub next_action: Option<String>,
+    pub linked_task_reference: Option<String>,
+    pub related_clue_id: Option<String>,
+    pub relationship_type: Option<String>,
+    pub review_reason: Option<String>,
+    pub attachment_ids: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
     pub reviewed_at: Option<String>,
@@ -571,15 +603,27 @@ impl ClueResponse {
         model: clues::Model,
         attribution: Option<clue_attributions::Model>,
         viewer_user_id: &str,
+        attachment_ids: Vec<String>,
     ) -> Self {
         Self {
             id: model.id,
             case_id: model.case_id,
             status: model.status,
             source: model.source,
+            source_type: model.source_type,
             content: model.content,
+            raw_record_reference: model.raw_record_reference,
             occurred_at: model.occurred_at,
+            reported_at: model.reported_at,
+            confirmed_at: model.confirmed_at,
             location_text: model.location_text,
+            location_precision: model.location_precision,
+            next_action: model.next_action,
+            linked_task_reference: model.linked_task_reference,
+            related_clue_id: model.related_clue_id,
+            relationship_type: model.relationship_type,
+            review_reason: model.review_reason,
+            attachment_ids,
             created_at: model.created_at,
             updated_at: model.updated_at,
             reviewed_at: attribution

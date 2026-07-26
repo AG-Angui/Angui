@@ -9,7 +9,12 @@ export type ClueReviewStatus =
   | 'rejected'
   | 'expired'
   | 'duplicate'
+  | 'conflicting'
+  | 'insufficient_information'
 export type ClueStatus = 'pending_review' | ClueReviewStatus
+export type ClueSourceType = 'manual_report' | 'field_report' | 'chat_draft' | 'ai_draft'
+export type PublicClueSourceType = 'manual_report' | 'field_report'
+export type LocationPrecision = 'exact' | 'approximate' | 'unknown'
 
 export interface CaseListItem {
   id: string
@@ -40,9 +45,20 @@ export interface Clue {
   case_id: string
   status: ClueStatus
   source: string
+  source_type: ClueSourceType
   content: string
+  raw_record_reference: string | null
   occurred_at: string | null
+  reported_at: string
+  confirmed_at: string | null
   location_text: string | null
+  location_precision: LocationPrecision | null
+  next_action: string | null
+  linked_task_reference: string | null
+  related_clue_id: string | null
+  relationship_type: 'duplicate_of' | 'conflicts_with' | null
+  review_reason: string | null
+  attachment_ids: string[]
   created_at: string
   updated_at: string
   reviewed_at: string | null
@@ -134,6 +150,21 @@ export interface CreateCluePayload {
   content: string
   occurred_at: string | null
   location_text: string | null
+  source_type?: PublicClueSourceType
+  raw_record_reference?: string | null
+  location_precision?: LocationPrecision | null
+  next_action?: string | null
+  linked_task_reference?: string | null
+  attachment_ids?: string[]
+}
+
+export interface ReviewCluePayload {
+  status: ClueReviewStatus
+  reason: string
+  related_clue_id?: string | null
+  relationship_type?: 'duplicate_of' | 'conflicts_with' | null
+  next_action?: string | null
+  linked_task_reference?: string | null
 }
 
 export function listCases(token: string): Promise<CaseListItem[]> {
@@ -195,11 +226,11 @@ export function uploadCaseAttachment(
 export function reviewClue(
   token: string,
   clueId: string,
-  status: ClueReviewStatus,
+  payload: ReviewCluePayload,
 ): Promise<Clue> {
   return apiRequest<Clue>(
     `/clues/${clueId}/review`,
-    { method: 'PATCH', body: JSON.stringify({ status }) },
+    { method: 'PATCH', body: JSON.stringify(payload) },
     token,
   )
 }
