@@ -19,6 +19,7 @@ mod m0016_add_intake_assessments;
 mod m0017_add_two_phase_intake_questions;
 mod m0018_create_case_places_and_attachments;
 mod m0019_expand_clue_lifecycle;
+mod m0020_create_tasks_and_location_reports;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -47,6 +48,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0017_add_two_phase_intake_questions::Migration),
             Box::new(m0018_create_case_places_and_attachments::Migration),
             Box::new(m0019_expand_clue_lifecycle::Migration),
+            Box::new(m0020_create_tasks_and_location_reports::Migration),
         ]
     }
 }
@@ -318,7 +320,7 @@ mod tests {
             .await
             .expect("clue with a distinct report time should be stored");
 
-        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        assert!(Migrator::down(&database, Some(2)).await.is_err());
         assert!(database
             .query_one(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
@@ -327,6 +329,85 @@ mod tests {
             .await
             .expect("report-time query should succeed")
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn sqlite_task_migration_enforces_assignment_location_and_rollback_integrity() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, None)
+            .await
+            .expect("all migrations should succeed");
+        database
+            .execute_unprepared(
+                "INSERT INTO users (id, email, display_name, account_type, password_hash, status, created_at, updated_at) VALUES ('task-commander', 'task-commander@demo.invalid', 'Task commander', 'member', 'hash', 'active', '2026-07-26T00:00:00.000Z', '2026-07-26T00:00:00.000Z'), ('task-volunteer', 'task-volunteer@demo.invalid', 'Task volunteer', 'member', 'hash', 'active', '2026-07-26T00:00:00.000Z', '2026-07-26T00:00:00.000Z'); INSERT INTO cases (id, case_code, status, created_at, updated_at) VALUES ('task-case', 'AG-00000020', 'active', '2026-07-26T00:00:00.000Z', '2026-07-26T00:00:00.000Z')",
+            )
+            .await
+            .expect("task fixtures should be stored");
+
+        assert!(
+            database
+                .execute_unprepared(&task_insert_sql("invalid-task", "missing-case"))
+                .await
+                .is_err()
+        );
+        assert!(database
+            .execute_unprepared(
+                "INSERT INTO tasks (id, case_id, source_clue_id, title, objective, area_text, latitude, longitude, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback, status, result_summary, created_by_user_id, created_at, updated_at) VALUES ('incomplete-coordinate-task', 'task-case', NULL, 'Verify north gate', 'Check the reported route', 'North gate to market', 31.2, NULL, '2026-07-27T12:00:00.000Z', 'A reviewed report needs field verification.', 'medium', 'Stay in public areas.', 'Keep contact and stop if conditions change.', 'Submit a text report for commander review.', 'assigned', NULL, 'task-commander', '2026-07-26T00:00:00.000Z', '2026-07-26T00:00:00.000Z')",
+            )
+            .await
+            .is_err());
+
+        database
+            .execute_unprepared(&task_insert_sql("task-1", "task-case"))
+            .await
+            .expect("task should reference its case");
+        assert!(database
+            .execute_unprepared(
+                "INSERT INTO task_assignments (task_id, volunteer_user_id, assigned_by_user_id, assigned_at, updated_at) VALUES ('task-1', 'missing-volunteer', 'task-commander', '2026-07-26T00:00:00.000Z', '2026-07-26T00:00:00.000Z')",
+            )
+            .await
+            .is_err());
+        database
+            .execute_unprepared(
+                "INSERT INTO task_assignments (task_id, volunteer_user_id, assigned_by_user_id, assigned_at, updated_at) VALUES ('task-1', 'task-volunteer', 'task-commander', '2026-07-26T00:00:00.000Z', '2026-07-26T00:00:00.000Z')",
+            )
+            .await
+            .expect("task should have one assigned volunteer");
+
+        assert!(database
+            .execute_unprepared(
+                "INSERT INTO task_location_reports (id, task_id, volunteer_user_id, source, latitude, longitude, accuracy_meters, captured_at, retention_expires_at, created_at) VALUES ('invalid-source', 'task-1', 'task-volunteer', 'device', 31.2, 121.5, 20, '2026-07-26T00:10:00.000Z', '2026-07-27T00:10:00.000Z', '2026-07-26T00:10:00.000Z')",
+            )
+            .await
+            .is_err());
+        assert!(database
+            .execute_unprepared(
+                "INSERT INTO task_location_reports (id, task_id, volunteer_user_id, source, latitude, longitude, accuracy_meters, captured_at, retention_expires_at, created_at) VALUES ('invalid-coordinate', 'task-1', 'task-volunteer', 'simulated', 91, 121.5, 20, '2026-07-26T00:10:00.000Z', '2026-07-27T00:10:00.000Z', '2026-07-26T00:10:00.000Z')",
+            )
+            .await
+            .is_err());
+        database
+            .execute_unprepared(
+                "INSERT INTO task_location_reports (id, task_id, volunteer_user_id, source, latitude, longitude, accuracy_meters, captured_at, retention_expires_at, created_at) VALUES ('task-location-1', 'task-1', 'task-volunteer', 'simulated', 31.2, 121.5, 20, '2026-07-26T00:10:00.000Z', '2026-07-27T00:10:00.000Z', '2026-07-26T00:10:00.000Z')",
+            )
+            .await
+            .expect("simulated task location should reference the assignment");
+
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        database
+            .execute_unprepared("DELETE FROM tasks WHERE id = 'task-1'")
+            .await
+            .expect("task cleanup should succeed");
+        assert!(database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT 1 FROM task_assignments WHERE task_id = 'task-1' UNION ALL SELECT 1 FROM task_location_reports WHERE task_id = 'task-1'",
+            ))
+            .await
+            .expect("cascade query should succeed")
+            .is_none());
     }
 
     #[tokio::test]
@@ -439,6 +520,12 @@ mod tests {
             ))
             .await
             .expect("test member and intake session should be stored");
+    }
+
+    fn task_insert_sql(id: &str, case_id: &str) -> String {
+        format!(
+            "INSERT INTO tasks (id, case_id, source_clue_id, title, objective, area_text, latitude, longitude, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback, status, result_summary, created_by_user_id, created_at, updated_at) VALUES ('{id}', '{case_id}', NULL, 'Verify north gate', 'Check the reported route', 'North gate to market', 31.2, 121.5, '2026-07-27T12:00:00.000Z', 'A reviewed report needs field verification.', 'medium', 'Stay in public areas.', 'Keep contact and stop if conditions change.', 'Submit a text report for commander review.', 'assigned', NULL, 'task-commander', '2026-07-26T00:00:00.000Z', '2026-07-26T00:00:00.000Z')"
+        )
     }
 
     #[tokio::test]
