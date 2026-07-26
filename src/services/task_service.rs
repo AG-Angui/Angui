@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    TransactionTrait,
 };
 use serde_json::json;
 
@@ -311,10 +312,22 @@ pub async fn update_task_status(
     }
 
     let previous_status = task.status.clone();
-    let mut active = task.into_active_model();
-    active.status = Set(next_status.clone());
-    active.updated_at = Set(now());
-    let updated = active.update(&transaction).await?;
+    let update_result = tasks::Entity::update_many()
+        .col_expr(tasks::Column::Status, Expr::value(next_status.clone()))
+        .col_expr(tasks::Column::UpdatedAt, Expr::value(now()))
+        .filter(tasks::Column::Id.eq(task_id))
+        .filter(tasks::Column::Status.eq(&previous_status))
+        .exec(&transaction)
+        .await?;
+    if update_result.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "task status changed before this transition could be applied".to_owned(),
+        ));
+    }
+    let updated = tasks::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::Internal)?;
     write_audit(
         &transaction,
         Some(updated.case_id.clone()),
