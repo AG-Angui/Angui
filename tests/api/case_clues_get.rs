@@ -143,3 +143,73 @@ async fn get_case_clues_rejects_invalid_whitelisted_query_values() {
         assert_error(response, StatusCode::BAD_REQUEST, "validation_error").await;
     }
 }
+
+#[actix_web::test]
+async fn get_case_clues_redacts_controlled_raw_references_for_non_submitters() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let family_token = context.token(FAMILY).await;
+    let commander_token = context.token(COMMANDER).await;
+    let volunteer_token = context.token(VOLUNTEER).await;
+    let app = crate::init_api_app!(&context);
+
+    let created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(serde_json::json!({
+                "source": "family",
+                "source_type": "manual_report",
+                "content": "A fictional confirmed observation",
+                "raw_record_reference": "controlled://source/record-16"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: Value = test::read_body_json(created).await;
+    let clue_id = created["id"].as_str().expect("clue id");
+
+    let reviewed = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/clues/{clue_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(serde_json::json!({ "status": "confirmed", "reason": "commander reviewed the controlled record" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(reviewed.status(), StatusCode::OK);
+
+    let commander = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    let commander: Value = test::read_body_json(commander).await;
+    assert_eq!(
+        commander["items"][0]["raw_record_reference"],
+        "controlled://source/record-16"
+    );
+
+    let volunteer = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .to_request(),
+    )
+    .await;
+    let volunteer: Value = test::read_body_json(volunteer).await;
+    assert_eq!(volunteer["items"][0]["raw_record_reference"], Value::Null);
+}

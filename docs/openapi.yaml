@@ -948,6 +948,11 @@ components:
       type: string
       enum: [manual_report, field_report, chat_draft, ai_draft]
 
+    PublicClueSourceType:
+      type: string
+      description: 公开成员提交仅允许人工上报或现场反馈。AI/聊天草稿只能由受信任的内部生成流程写入，不能通过此接口声明。
+      enum: [manual_report, field_report]
+
     ClueLocationPrecision:
       type: string
       enum: [exact, approximate, unknown]
@@ -1316,12 +1321,12 @@ components:
           maxLength: 4000
           description: 服务端去除首尾空白后必须为 1 到 4000 个字符。
         source_type:
-          $ref: "#/components/schemas/ClueSourceType"
+          $ref: "#/components/schemas/PublicClueSourceType"
           default: manual_report
         raw_record_reference:
           type: [string, "null"]
           maxLength: 500
-          description: 受控原始记录的引用；不在普通审计元数据中复制原文。
+          description: 仅指挥和线索提交者可见的受控原始记录引用；其他已授权协作角色会收到 null，且普通审计元数据不复制原文。
         occurred_at:
           type: [string, "null"]
           description: 建议使用 RFC 3339；当前服务端只去除首尾空白，不解析时间格式。

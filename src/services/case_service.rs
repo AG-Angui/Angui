@@ -42,7 +42,7 @@ const CLUE_STATUSES: &[&str] = &[
     "conflicting",
     "insufficient_information",
 ];
-const CLUE_SOURCE_TYPES: &[&str] = &["manual_report", "field_report", "chat_draft", "ai_draft"];
+const PUBLIC_CLUE_SOURCE_TYPES: &[&str] = &["manual_report", "field_report"];
 const CLUE_LOCATION_PRECISIONS: &[&str] = &["exact", "approximate", "unknown"];
 const MAX_CLUE_TIMELINE_PAGE_SIZE: u64 = 100;
 
@@ -1001,7 +1001,7 @@ fn validate_clue_request(request: &CreateClueRequest) -> Result<(), ApiError> {
         .unwrap_or("manual_report")
         .trim()
         .to_lowercase();
-    if !CLUE_SOURCE_TYPES.contains(&source_type.as_str()) {
+    if !PUBLIC_CLUE_SOURCE_TYPES.contains(&source_type.as_str()) {
         return Err(ApiError::Validation(
             "source_type is unsupported".to_owned(),
         ));

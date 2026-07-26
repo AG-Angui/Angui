@@ -13,6 +13,7 @@ export type ClueReviewStatus =
   | 'insufficient_information'
 export type ClueStatus = 'pending_review' | ClueReviewStatus
 export type ClueSourceType = 'manual_report' | 'field_report' | 'chat_draft' | 'ai_draft'
+export type PublicClueSourceType = 'manual_report' | 'field_report'
 export type LocationPrecision = 'exact' | 'approximate' | 'unknown'
 
 export interface CaseListItem {
@@ -149,7 +150,7 @@ export interface CreateCluePayload {
   content: string
   occurred_at: string | null
   location_text: string | null
-  source_type?: ClueSourceType
+  source_type?: PublicClueSourceType
   raw_record_reference?: string | null
   location_precision?: LocationPrecision | null
   next_action?: string | null
