@@ -1072,6 +1072,11 @@ components:
       type: string
       enum: [pending_claim, assigned, accepted, active, blocked, completed, cancelled]
 
+    TaskStatusTransitionTarget:
+      type: string
+      description: `pending_claim` and `assigned` are stored task states, not valid PATCH targets.
+      enum: [accepted, active, blocked, completed, cancelled]
+
     TaskRiskLevel:
       type: string
       enum: [low, medium, high, critical]
@@ -1800,8 +1805,16 @@ components:
         title: { type: string, minLength: 1, maxLength: 200 }
         objective: { type: string, minLength: 1, maxLength: 4000 }
         area_text: { type: string, minLength: 1, maxLength: 500 }
-        latitude: { type: [number, "null"], minimum: -90, maximum: 90 }
-        longitude: { type: [number, "null"], minimum: -180, maximum: 180 }
+        latitude:
+          type: [number, "null"]
+          minimum: -90
+          maximum: 90
+          description: Must be provided with longitude, or both coordinates must be omitted or null.
+        longitude:
+          type: [number, "null"]
+          minimum: -180
+          maximum: 180
+          description: Must be provided with latitude, or both coordinates must be omitted or null.
         due_at:
           type: string
           format: date-time
@@ -1817,7 +1830,9 @@ components:
       additionalProperties: false
       required: [status]
       properties:
-        status: { $ref: "#/components/schemas/TaskStatus" }
+        status:
+          $ref: "#/components/schemas/TaskStatusTransitionTarget"
+          description: The current task state and caller role determine whether this otherwise valid target transition is allowed.
 
     Task:
       type: object
