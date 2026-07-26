@@ -144,7 +144,7 @@ fn rollback_safety_checks() -> [(&'static str, &'static str); 2] {
         ),
         (
             "clue lifecycle provenance exists",
-            "SELECT 1 FROM clues WHERE source_type <> 'manual_report' OR raw_record_reference IS NOT NULL OR confirmed_at IS NOT NULL OR location_precision IS NOT NULL OR next_action IS NOT NULL OR linked_task_reference IS NOT NULL OR related_clue_id IS NOT NULL OR relationship_type IS NOT NULL OR review_reason IS NOT NULL LIMIT 1",
+            "SELECT 1 FROM clues WHERE source_type <> 'manual_report' OR raw_record_reference IS NOT NULL OR reported_at <> created_at OR confirmed_at IS NOT NULL OR location_precision IS NOT NULL OR next_action IS NOT NULL OR linked_task_reference IS NOT NULL OR related_clue_id IS NOT NULL OR relationship_type IS NOT NULL OR review_reason IS NOT NULL LIMIT 1",
         ),
     ]
 }
