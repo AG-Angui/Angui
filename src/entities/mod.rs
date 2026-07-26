@@ -13,5 +13,7 @@ pub mod intake_answer_revisions;
 pub mod intake_question_definitions;
 pub mod intake_session_answers;
 pub mod intake_sessions;
+pub mod task_assignments;
+pub mod tasks;
 pub mod user_global_capabilities;
 pub mod users;

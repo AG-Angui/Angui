@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     entities::{
         cases, clue_attributions, clues, elder_profiles, intake_session_answers, intake_sessions,
+        task_assignments, tasks,
     },
     roles::{AccountType, CaseRole, GlobalCapability},
 };
@@ -455,6 +456,37 @@ pub struct ReviewClueRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CreateTaskRequest {
+    pub source_clue_id: String,
+    pub volunteer_user_id: String,
+    pub title: String,
+    pub objective: String,
+    pub area_text: String,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub due_at: String,
+    pub background: String,
+    pub risk_level: String,
+    pub risk_notes: String,
+    pub safety_briefing: String,
+    pub expected_feedback: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskListQuery {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateTaskStatusRequest {
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AddCaseMemberRequest {
     pub email: String,
     pub case_role: CaseRole,
@@ -539,6 +571,38 @@ pub struct ClueResponse {
 #[derive(Debug, Serialize)]
 pub struct ClueTimelineResponse {
     pub items: Vec<ClueResponse>,
+    pub page: u64,
+    pub page_size: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskResponse {
+    pub id: String,
+    pub case_id: String,
+    pub source_clue_id: Option<String>,
+    pub title: String,
+    pub objective: String,
+    pub area_text: String,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub due_at: String,
+    pub background: Option<String>,
+    pub risk_level: String,
+    pub risk_notes: String,
+    pub safety_briefing: String,
+    pub expected_feedback: String,
+    pub status: String,
+    pub result_summary: Option<String>,
+    pub assigned_volunteer_user_id: Option<String>,
+    pub assigned_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskListResponse {
+    pub items: Vec<TaskResponse>,
     pub page: u64,
     pub page_size: u64,
     pub total: u64,
@@ -632,6 +696,43 @@ impl ClueResponse {
             is_own_submission: attribution
                 .and_then(|attribution| attribution.submitted_by_user_id)
                 .is_some_and(|user_id| user_id == viewer_user_id),
+        }
+    }
+}
+
+impl TaskResponse {
+    pub fn new(
+        model: tasks::Model,
+        assignment: Option<task_assignments::Model>,
+        include_assignee: bool,
+    ) -> Self {
+        Self {
+            id: model.id,
+            case_id: model.case_id,
+            source_clue_id: include_assignee.then_some(model.source_clue_id).flatten(),
+            title: model.title,
+            objective: model.objective,
+            area_text: model.area_text,
+            latitude: model.latitude,
+            longitude: model.longitude,
+            due_at: model.due_at,
+            background: include_assignee.then_some(model.background),
+            risk_level: model.risk_level,
+            risk_notes: model.risk_notes,
+            safety_briefing: model.safety_briefing,
+            expected_feedback: model.expected_feedback,
+            status: model.status,
+            result_summary: model.result_summary,
+            assigned_volunteer_user_id: include_assignee
+                .then(|| {
+                    assignment
+                        .as_ref()
+                        .map(|value| value.volunteer_user_id.clone())
+                })
+                .flatten(),
+            assigned_at: assignment.map(|value| value.assigned_at),
+            created_at: model.created_at,
+            updated_at: model.updated_at,
         }
     }
 }

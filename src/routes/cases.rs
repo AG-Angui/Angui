@@ -7,7 +7,8 @@ use crate::{
     error::ApiError,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseResourceConfigurationResponse,
-        CreateCasePlaceRequest, CreateCaseRequest, CreateClueRequest, UpdateCaseStatusRequest,
+        CreateCasePlaceRequest, CreateCaseRequest, CreateClueRequest, CreateTaskRequest,
+        TaskListQuery, UpdateCaseStatusRequest,
     },
     roles::CaseRole,
     services::case_service,
@@ -22,6 +23,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/status", web::patch().to(update_case_status))
             .route("/{case_id}/clues", web::get().to(list_clues))
             .route("/{case_id}/clues", web::post().to(create_clue))
+            .route("/{case_id}/tasks", web::get().to(list_tasks))
+            .route("/{case_id}/tasks", web::post().to(create_task))
             .route("/{case_id}/places", web::post().to(create_place))
             .route(
                 "/{case_id}/resource-configuration",
@@ -211,6 +214,34 @@ async fn list_clues(
 ) -> Result<HttpResponse, ApiError> {
     let clues = case_service::list_clues(&state.db, &auth, &case_id, query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(clues))
+}
+
+async fn create_task(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    request: web::Json<CreateTaskRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let task = crate::services::task_service::create_task(
+        &state.db,
+        &auth,
+        &case_id,
+        request.into_inner(),
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(task))
+}
+
+async fn list_tasks(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    query: web::Query<TaskListQuery>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::task_service::list_tasks(&state.db, &auth, &case_id, query.into_inner())
+            .await?,
+    ))
 }
 
 async fn add_case_member(

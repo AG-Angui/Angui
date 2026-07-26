@@ -1,0 +1,502 @@
+use std::collections::{HashMap, HashSet};
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder, Set, TransactionTrait,
+};
+use serde_json::json;
+
+use crate::{
+    entities::{
+        case_memberships, cases, clues, task_assignments, tasks, user_global_capabilities, users,
+    },
+    error::ApiError,
+    models::{
+        AuthenticatedUser, CreateTaskRequest, TaskListQuery, TaskListResponse, TaskResponse,
+        UpdateTaskStatusRequest,
+    },
+    roles::{CaseRole, GlobalCapability},
+    services::case_service::{require_case_role, write_audit},
+};
+
+const TASK_STATUSES: &[&str] = &[
+    "pending_claim",
+    "assigned",
+    "accepted",
+    "active",
+    "blocked",
+    "completed",
+    "cancelled",
+];
+const TASK_RISK_LEVELS: &[&str] = &["low", "medium", "high", "critical"];
+const MAX_TASK_PAGE_SIZE: u64 = 100;
+
+pub async fn create_task(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    request: CreateTaskRequest,
+) -> Result<TaskResponse, ApiError> {
+    let request = ValidatedCreateTaskRequest::try_from(request)?;
+    let transaction = db.begin().await?;
+    require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander]).await?;
+
+    let case = cases::Entity::find_by_id(case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status == "closed" {
+        return Err(ApiError::Conflict(
+            "tasks cannot be created for a closed case".to_owned(),
+        ));
+    }
+
+    let source_clue = clues::Entity::find_by_id(&request.source_clue_id)
+        .one(&transaction)
+        .await?
+        .filter(|clue| clue.case_id == case_id && clue.status == "confirmed")
+        .ok_or_else(|| {
+            ApiError::Validation(
+                "source_clue_id must reference a confirmed clue in this case".to_owned(),
+            )
+        })?;
+
+    let volunteer_membership = case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(case_id))
+        .filter(case_memberships::Column::UserId.eq(&request.volunteer_user_id))
+        .filter(case_memberships::Column::Role.eq(CaseRole::Volunteer.to_string()))
+        .one(&transaction)
+        .await?;
+    let volunteer_is_active = users::Entity::find_by_id(&request.volunteer_user_id)
+        .filter(users::Column::Status.eq("active"))
+        .one(&transaction)
+        .await?
+        .is_some();
+    let volunteer_is_authorized = user_global_capabilities::Entity::find()
+        .filter(user_global_capabilities::Column::UserId.eq(&request.volunteer_user_id))
+        .filter(user_global_capabilities::Column::Capability.eq("volunteer"))
+        .one(&transaction)
+        .await?
+        .is_some();
+    if volunteer_membership.is_none() || !volunteer_is_active || !volunteer_is_authorized {
+        return Err(ApiError::Validation(
+            "volunteer_user_id must reference an active volunteer in this case".to_owned(),
+        ));
+    }
+
+    let timestamp = now();
+    let task_id = crate::services::case_service::new_id();
+    let task = tasks::ActiveModel {
+        id: Set(task_id.clone()),
+        case_id: Set(case_id.to_owned()),
+        source_clue_id: Set(Some(source_clue.id)),
+        title: Set(request.title),
+        objective: Set(request.objective),
+        area_text: Set(request.area_text),
+        latitude: Set(request.latitude),
+        longitude: Set(request.longitude),
+        due_at: Set(request.due_at),
+        background: Set(request.background),
+        risk_level: Set(request.risk_level),
+        risk_notes: Set(request.risk_notes),
+        safety_briefing: Set(request.safety_briefing),
+        expected_feedback: Set(request.expected_feedback),
+        status: Set("assigned".to_owned()),
+        result_summary: Set(None),
+        created_by_user_id: Set(auth.id.clone()),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await?;
+    let assignment = task_assignments::ActiveModel {
+        task_id: Set(task_id.clone()),
+        volunteer_user_id: Set(request.volunteer_user_id.clone()),
+        assigned_by_user_id: Set(auth.id.clone()),
+        assigned_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+
+    write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "task.created",
+        "task",
+        task_id.clone(),
+        Some(json!({
+            "status": "assigned",
+            "source_clue_id": task.source_clue_id,
+            "risk_level": task.risk_level,
+        })),
+    )
+    .await?;
+    write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "task.assigned",
+        "task",
+        task_id,
+        Some(json!({ "volunteer_user_id": assignment.volunteer_user_id })),
+    )
+    .await?;
+
+    transaction.commit().await?;
+    Ok(TaskResponse::new(task, Some(assignment), true))
+}
+
+pub async fn list_tasks(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    query: TaskListQuery,
+) -> Result<TaskListResponse, ApiError> {
+    let query = ValidatedTaskListQuery::try_from(query)?;
+    let case_role = require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    if case_role == CaseRole::Family {
+        return Ok(TaskListResponse {
+            items: Vec::new(),
+            page: query.page,
+            page_size: query.page_size,
+            total: 0,
+        });
+    }
+
+    let task_models = tasks::Entity::find()
+        .filter(tasks::Column::CaseId.eq(case_id))
+        .order_by_asc(tasks::Column::DueAt)
+        .order_by_asc(tasks::Column::Id)
+        .all(db)
+        .await?;
+    let assignments =
+        assignments_for_tasks(db, task_models.iter().map(|task| task.id.clone())).await?;
+    let visible_tasks = task_models
+        .into_iter()
+        .filter(|task| {
+            case_role == CaseRole::Commander
+                || assignments
+                    .get(&task.id)
+                    .is_some_and(|assignment| assignment.volunteer_user_id == auth.id)
+        })
+        .collect::<Vec<_>>();
+    let total = u64::try_from(visible_tasks.len()).map_err(|_| ApiError::Internal)?;
+    let start = query.offset()?;
+    let items = visible_tasks
+        .into_iter()
+        .skip(start)
+        .take(query.page_size_usize())
+        .map(|task| {
+            let assignment = assignments.get(&task.id).cloned();
+            TaskResponse::new(task, assignment, case_role == CaseRole::Commander)
+        })
+        .collect();
+
+    Ok(TaskListResponse {
+        items,
+        page: query.page,
+        page_size: query.page_size,
+        total,
+    })
+}
+
+pub async fn list_my_tasks(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<TaskResponse>, ApiError> {
+    if !auth
+        .global_capabilities
+        .contains(&GlobalCapability::Volunteer)
+    {
+        return Err(ApiError::Forbidden(
+            "only volunteer accounts can access the personal task queue".to_owned(),
+        ));
+    }
+
+    let volunteer_case_ids = case_memberships::Entity::find()
+        .filter(case_memberships::Column::UserId.eq(&auth.id))
+        .filter(case_memberships::Column::Role.eq(CaseRole::Volunteer.to_string()))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|membership| membership.case_id)
+        .collect::<HashSet<_>>();
+    if volunteer_case_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let assignments = task_assignments::Entity::find()
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
+        .all(db)
+        .await?;
+    if assignments.is_empty() {
+        return Ok(Vec::new());
+    }
+    let assignments = assignments
+        .into_iter()
+        .map(|assignment| (assignment.task_id.clone(), assignment))
+        .collect::<HashMap<_, _>>();
+    let task_models = tasks::Entity::find()
+        .filter(tasks::Column::Id.is_in(assignments.keys().cloned()))
+        .order_by_asc(tasks::Column::DueAt)
+        .order_by_asc(tasks::Column::Id)
+        .all(db)
+        .await?;
+
+    Ok(task_models
+        .into_iter()
+        .filter(|task| volunteer_case_ids.contains(&task.case_id))
+        .map(|task| {
+            let assignment = assignments.get(&task.id).cloned();
+            TaskResponse::new(task, assignment, false)
+        })
+        .collect())
+}
+
+pub async fn update_task_status(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+    request: UpdateTaskStatusRequest,
+) -> Result<TaskResponse, ApiError> {
+    let next_status = request.status.trim().to_lowercase();
+    if !TASK_STATUSES.contains(&next_status.as_str()) {
+        return Err(ApiError::Validation("status is unsupported".to_owned()));
+    }
+    let transaction = db.begin().await?;
+    let task = tasks::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case_role = require_case_role(
+        &transaction,
+        &auth.id,
+        &task.case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let assignment = task_assignments::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Database(sea_orm::DbErr::Custom(
+                "task is missing its required assignment".to_owned(),
+            ))
+        })?;
+
+    if case_role == CaseRole::Commander {
+        if next_status != "cancelled" || is_terminal_status(&task.status) {
+            return Err(ApiError::Conflict(
+                "commanders can only cancel unfinished tasks".to_owned(),
+            ));
+        }
+    } else {
+        if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
+            return Err(ApiError::NotFound("task was not found".to_owned()));
+        }
+        if !volunteer_transition_allowed(&task.status, &next_status) {
+            return Err(ApiError::Conflict(format!(
+                "task status cannot change from {:?} to {:?}",
+                task.status, next_status
+            )));
+        }
+    }
+
+    let previous_status = task.status.clone();
+    let mut active = task.into_active_model();
+    active.status = Set(next_status.clone());
+    active.updated_at = Set(now());
+    let updated = active.update(&transaction).await?;
+    write_audit(
+        &transaction,
+        Some(updated.case_id.clone()),
+        auth,
+        "task.status_changed",
+        "task",
+        updated.id.clone(),
+        Some(json!({ "from": previous_status, "to": next_status })),
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(TaskResponse::new(
+        updated,
+        Some(assignment),
+        case_role == CaseRole::Commander,
+    ))
+}
+
+async fn assignments_for_tasks(
+    db: &DatabaseConnection,
+    task_ids: impl IntoIterator<Item = String>,
+) -> Result<HashMap<String, task_assignments::Model>, ApiError> {
+    let task_ids = task_ids.into_iter().collect::<Vec<_>>();
+    if task_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(task_assignments::Entity::find()
+        .filter(task_assignments::Column::TaskId.is_in(task_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|assignment| (assignment.task_id.clone(), assignment))
+        .collect())
+}
+
+struct ValidatedCreateTaskRequest {
+    source_clue_id: String,
+    volunteer_user_id: String,
+    title: String,
+    objective: String,
+    area_text: String,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    due_at: String,
+    background: String,
+    risk_level: String,
+    risk_notes: String,
+    safety_briefing: String,
+    expected_feedback: String,
+}
+
+impl TryFrom<CreateTaskRequest> for ValidatedCreateTaskRequest {
+    type Error = ApiError;
+
+    fn try_from(value: CreateTaskRequest) -> Result<Self, Self::Error> {
+        let source_clue_id = required_field("source_clue_id", value.source_clue_id, 36)?;
+        let volunteer_user_id = required_field("volunteer_user_id", value.volunteer_user_id, 36)?;
+        let title = required_field("title", value.title, 200)?;
+        let objective = required_field("objective", value.objective, 4_000)?;
+        let area_text = required_field("area_text", value.area_text, 500)?;
+        validate_coordinates(value.latitude, value.longitude)?;
+        let due_at = parse_due_at(&value.due_at)?;
+        let background = required_field("background", value.background, 10_000)?;
+        let risk_level = value.risk_level.trim().to_lowercase();
+        if !TASK_RISK_LEVELS.contains(&risk_level.as_str()) {
+            return Err(ApiError::Validation("risk_level is unsupported".to_owned()));
+        }
+        let risk_notes = required_field("risk_notes", value.risk_notes, 4_000)?;
+        let safety_briefing = required_field("safety_briefing", value.safety_briefing, 4_000)?;
+        let expected_feedback =
+            required_field("expected_feedback", value.expected_feedback, 4_000)?;
+        Ok(Self {
+            source_clue_id,
+            volunteer_user_id,
+            title,
+            objective,
+            area_text,
+            latitude: value.latitude,
+            longitude: value.longitude,
+            due_at,
+            background,
+            risk_level,
+            risk_notes,
+            safety_briefing,
+            expected_feedback,
+        })
+    }
+}
+
+struct ValidatedTaskListQuery {
+    page: u64,
+    page_size: u64,
+}
+
+impl ValidatedTaskListQuery {
+    fn offset(&self) -> Result<usize, ApiError> {
+        let offset = self
+            .page
+            .checked_sub(1)
+            .and_then(|page| page.checked_mul(self.page_size))
+            .ok_or_else(|| ApiError::Validation("page is too large".to_owned()))?;
+        usize::try_from(offset).map_err(|_| ApiError::Validation("page is too large".to_owned()))
+    }
+
+    fn page_size_usize(&self) -> usize {
+        self.page_size as usize
+    }
+}
+
+impl TryFrom<TaskListQuery> for ValidatedTaskListQuery {
+    type Error = ApiError;
+
+    fn try_from(value: TaskListQuery) -> Result<Self, Self::Error> {
+        let page = value.page.unwrap_or(1);
+        let page_size = value.page_size.unwrap_or(25);
+        if page == 0 {
+            return Err(ApiError::Validation("page must be at least 1".to_owned()));
+        }
+        if page_size == 0 || page_size > MAX_TASK_PAGE_SIZE {
+            return Err(ApiError::Validation(format!(
+                "page_size must be between 1 and {MAX_TASK_PAGE_SIZE}"
+            )));
+        }
+        Ok(Self { page, page_size })
+    }
+}
+
+fn required_field(label: &str, value: String, maximum: usize) -> Result<String, ApiError> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > maximum {
+        return Err(ApiError::Validation(format!(
+            "{label} must contain between 1 and {maximum} characters"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_coordinates(latitude: Option<f64>, longitude: Option<f64>) -> Result<(), ApiError> {
+    match (latitude, longitude) {
+        (None, None) => Ok(()),
+        (Some(latitude), Some(longitude))
+            if latitude.is_finite()
+                && longitude.is_finite()
+                && (-90.0..=90.0).contains(&latitude)
+                && (-180.0..=180.0).contains(&longitude) =>
+        {
+            Ok(())
+        }
+        _ => Err(ApiError::Validation(
+            "latitude and longitude must be provided together and be within range".to_owned(),
+        )),
+    }
+}
+
+fn parse_due_at(value: &str) -> Result<String, ApiError> {
+    let due_at = DateTime::parse_from_rfc3339(value.trim())
+        .map_err(|_| ApiError::Validation("due_at must be an RFC 3339 timestamp".to_owned()))?
+        .with_timezone(&Utc);
+    if due_at <= Utc::now() {
+        return Err(ApiError::Validation(
+            "due_at must be in the future".to_owned(),
+        ));
+    }
+    Ok(due_at.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
+fn volunteer_transition_allowed(current: &str, next: &str) -> bool {
+    matches!(
+        (current, next),
+        ("assigned", "accepted")
+            | ("accepted", "active")
+            | ("active", "blocked")
+            | ("blocked", "active")
+            | ("active", "completed")
+    )
+}
+
+fn is_terminal_status(status: &str) -> bool {
+    matches!(status, "completed" | "cancelled")
+}
+
+fn now() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
