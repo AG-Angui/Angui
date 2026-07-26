@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
@@ -10,12 +10,13 @@ use serde_json::json;
 
 use crate::{
     entities::{
-        case_memberships, cases, clues, task_assignments, tasks, user_global_capabilities, users,
+        case_memberships, cases, clues, task_assignments, task_location_reports, tasks,
+        user_global_capabilities, users,
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateTaskRequest, TaskListQuery, TaskListResponse, TaskResponse,
-        UpdateTaskStatusRequest,
+        AuthenticatedUser, CreateTaskRequest, SubmitTaskLocationReportRequest, TaskListQuery,
+        TaskListResponse, TaskLocationReportReceipt, TaskResponse, UpdateTaskStatusRequest,
     },
     roles::{CaseRole, GlobalCapability},
     services::case_service::{require_case_role, write_audit},
@@ -32,6 +33,10 @@ const TASK_STATUSES: &[&str] = &[
 ];
 const TASK_RISK_LEVELS: &[&str] = &["low", "medium", "high", "critical"];
 const MAX_TASK_PAGE_SIZE: u64 = 100;
+const LOCATION_REPORT_SOURCE: &str = "simulated";
+const MAX_LOCATION_REPORT_AGE: Duration = Duration::minutes(15);
+const MAX_LOCATION_REPORT_FUTURE_SKEW: Duration = Duration::minutes(5);
+const LOCATION_REPORT_RETENTION: Duration = Duration::hours(24);
 
 pub async fn create_task(
     db: &DatabaseConnection,
@@ -347,6 +352,99 @@ pub async fn update_task_status(
     ))
 }
 
+pub async fn submit_location_report(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+    request: SubmitTaskLocationReportRequest,
+) -> Result<TaskLocationReportReceipt, ApiError> {
+    let request = ValidatedLocationReportRequest::try_from(request)?;
+    let transaction = db.begin().await?;
+    let task = tasks::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case_role = require_case_role(
+        &transaction,
+        &auth.id,
+        &task.case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let assignment = task_assignments::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Database(sea_orm::DbErr::Custom(
+                "task is missing its required assignment".to_owned(),
+            ))
+        })?;
+    if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
+        return Err(ApiError::NotFound("task was not found".to_owned()));
+    }
+    if task.status != "active" {
+        return Err(ApiError::Conflict(
+            "location reports can only be submitted while the task is active".to_owned(),
+        ));
+    }
+
+    let report_id = crate::services::case_service::new_id();
+    let created_at = now();
+    let active_guard = tasks::Entity::update_many()
+        .col_expr(tasks::Column::UpdatedAt, Expr::value(created_at.clone()))
+        .filter(tasks::Column::Id.eq(task_id))
+        .filter(tasks::Column::Status.eq("active"))
+        .exec(&transaction)
+        .await?;
+    if active_guard.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "location reports can only be submitted while the task is active".to_owned(),
+        ));
+    }
+    let retention_expires_at = request
+        .captured_at
+        .checked_add_signed(LOCATION_REPORT_RETENTION)
+        .ok_or_else(|| ApiError::Internal)?;
+    let report = task_location_reports::ActiveModel {
+        id: Set(report_id.clone()),
+        task_id: Set(task_id.to_owned()),
+        volunteer_user_id: Set(auth.id.clone()),
+        source: Set(LOCATION_REPORT_SOURCE.to_owned()),
+        latitude: Set(request.latitude),
+        longitude: Set(request.longitude),
+        accuracy_meters: Set(request.accuracy_meters),
+        captured_at: Set(format_timestamp(request.captured_at)),
+        retention_expires_at: Set(format_timestamp(retention_expires_at)),
+        created_at: Set(created_at.clone()),
+    }
+    .insert(&transaction)
+    .await?;
+
+    // Exact coordinates and accuracy are deliberately absent from audit metadata.
+    write_audit(
+        &transaction,
+        Some(task.case_id),
+        auth,
+        "task.location_reported",
+        "task_location_report",
+        report_id,
+        Some(json!({
+            "source": LOCATION_REPORT_SOURCE,
+            "captured_at": report.captured_at,
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(TaskLocationReportReceipt {
+        id: report.id,
+        source: report.source,
+        captured_at: report.captured_at,
+        retention_expires_at: report.retention_expires_at,
+        created_at: report.created_at,
+    })
+}
+
 async fn assignments_for_tasks(
     db: &DatabaseConnection,
     task_ids: impl IntoIterator<Item = String>,
@@ -421,6 +519,58 @@ impl TryFrom<CreateTaskRequest> for ValidatedCreateTaskRequest {
 struct ValidatedTaskListQuery {
     page: u64,
     page_size: u64,
+}
+
+struct ValidatedLocationReportRequest {
+    latitude: f64,
+    longitude: f64,
+    accuracy_meters: f64,
+    captured_at: DateTime<Utc>,
+}
+
+impl TryFrom<SubmitTaskLocationReportRequest> for ValidatedLocationReportRequest {
+    type Error = ApiError;
+
+    fn try_from(value: SubmitTaskLocationReportRequest) -> Result<Self, Self::Error> {
+        if value.source.trim().to_lowercase() != LOCATION_REPORT_SOURCE {
+            return Err(ApiError::Validation("source must be simulated".to_owned()));
+        }
+        if !value.latitude.is_finite()
+            || !value.longitude.is_finite()
+            || !(-90.0..=90.0).contains(&value.latitude)
+            || !(-180.0..=180.0).contains(&value.longitude)
+        {
+            return Err(ApiError::Validation(
+                "latitude and longitude must be within range".to_owned(),
+            ));
+        }
+        if !value.accuracy_meters.is_finite() || !(0.0..=10_000.0).contains(&value.accuracy_meters)
+        {
+            return Err(ApiError::Validation(
+                "accuracy_meters must be between 0 and 10000".to_owned(),
+            ));
+        }
+        let captured_at = DateTime::parse_from_rfc3339(value.captured_at.trim())
+            .map_err(|_| {
+                ApiError::Validation("captured_at must be an RFC 3339 timestamp".to_owned())
+            })?
+            .with_timezone(&Utc);
+        let current_time = Utc::now();
+        if captured_at < current_time - MAX_LOCATION_REPORT_AGE {
+            return Err(ApiError::Validation("captured_at is too old".to_owned()));
+        }
+        if captured_at > current_time + MAX_LOCATION_REPORT_FUTURE_SKEW {
+            return Err(ApiError::Validation(
+                "captured_at cannot be too far in the future".to_owned(),
+            ));
+        }
+        Ok(Self {
+            latitude: value.latitude,
+            longitude: value.longitude,
+            accuracy_meters: value.accuracy_meters,
+            captured_at,
+        })
+    }
 }
 
 impl ValidatedTaskListQuery {
@@ -511,5 +661,9 @@ fn is_terminal_status(status: &str) -> bool {
 }
 
 fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    format_timestamp(Utc::now())
+}
+
+fn format_timestamp(timestamp: DateTime<Utc>) -> String {
+    timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)
 }

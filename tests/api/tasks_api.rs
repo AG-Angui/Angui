@@ -2,7 +2,8 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
-use angui::entities::audit_events;
+use angui::entities::{audit_events, task_location_reports};
+use chrono::{Duration, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
@@ -58,6 +59,20 @@ macro_rules! update_status {
                 .uri(&format!("/api/tasks/{}/status", $task_id))
                 .insert_header((header::AUTHORIZATION, format!("Bearer {}", $token)))
                 .set_json(json!({ "status": $status }))
+                .to_request(),
+        )
+        .await
+    }};
+}
+
+macro_rules! submit_location_report {
+    ($app:expr, $task_id:expr, $token:expr, $body:expr) => {{
+        test::call_service(
+            $app,
+            test::TestRequest::post()
+                .uri(&format!("/api/tasks/{}/location-reports", $task_id))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {}", $token)))
+                .set_json($body)
                 .to_request(),
         )
         .await
@@ -380,6 +395,192 @@ async fn task_status_state_machine_is_limited_to_the_assignee_or_commander_cance
     }));
 }
 
+#[actix_web::test]
+async fn task_location_reports_accept_only_recent_simulated_points_from_the_active_assignee() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let commander_token = context.token(COMMANDER).await;
+    let volunteer_token = context.token(VOLUNTEER).await;
+    let volunteer = context.authenticated(VOLUNTEER).await;
+    let source_clue_id = confirmed_clue!(&context, &app, &case_id, &commander_token);
+    let task_id = create_task!(
+        &app,
+        &case_id,
+        &commander_token,
+        &source_clue_id,
+        &volunteer.id
+    );
+
+    let before_active = submit_location_report!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        location_report_json(Utc::now())
+    );
+    assert_error(before_active, StatusCode::CONFLICT, "conflict").await;
+
+    let accepted = update_status!(&app, &task_id, &volunteer_token, "accepted");
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let active = update_status!(&app, &task_id, &volunteer_token, "active");
+    assert_eq!(active.status(), StatusCode::OK);
+
+    let non_assignee = submit_location_report!(
+        &app,
+        &task_id,
+        &commander_token,
+        location_report_json(Utc::now())
+    );
+    assert_error(non_assignee, StatusCode::NOT_FOUND, "not_found").await;
+
+    let invalid_source = submit_location_report!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        json!({
+            "source": "device",
+            "latitude": 31.2,
+            "longitude": 121.5,
+            "accuracy_meters": 20,
+            "captured_at": Utc::now().to_rfc3339(),
+        })
+    );
+    assert_error(invalid_source, StatusCode::BAD_REQUEST, "validation_error").await;
+
+    let mut invalid_coordinates = location_report_json(Utc::now());
+    invalid_coordinates["latitude"] = json!(91);
+    let invalid_coordinates =
+        submit_location_report!(&app, &task_id, &volunteer_token, invalid_coordinates);
+    assert_error(
+        invalid_coordinates,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    let mut invalid_accuracy = location_report_json(Utc::now());
+    invalid_accuracy["accuracy_meters"] = json!(10_001);
+    let invalid_accuracy =
+        submit_location_report!(&app, &task_id, &volunteer_token, invalid_accuracy);
+    assert_error(
+        invalid_accuracy,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    for captured_at in [
+        Utc::now() - Duration::minutes(16),
+        Utc::now() + Duration::minutes(6),
+    ] {
+        let invalid_time = submit_location_report!(
+            &app,
+            &task_id,
+            &volunteer_token,
+            location_report_json(captured_at)
+        );
+        assert_error(invalid_time, StatusCode::BAD_REQUEST, "validation_error").await;
+    }
+
+    let unknown_device_field = submit_location_report!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        json!({
+            "source": "simulated",
+            "latitude": 31.2,
+            "longitude": 121.5,
+            "accuracy_meters": 20,
+            "captured_at": Utc::now().to_rfc3339(),
+            "device_id": "forbidden-device-identifier",
+        })
+    );
+    assert_error(
+        unknown_device_field,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    let report = submit_location_report!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        location_report_json(Utc::now())
+    );
+    assert_eq!(report.status(), StatusCode::CREATED);
+    let report: Value = test::read_body_json(report).await;
+    assert_eq!(report["source"], "simulated");
+    assert!(report.get("latitude").is_none());
+    assert!(report.get("longitude").is_none());
+    assert!(report.get("accuracy_meters").is_none());
+    let report_id = report["id"].as_str().expect("report id should be returned");
+
+    let stored = task_location_reports::Entity::find_by_id(report_id)
+        .one(&context.database)
+        .await
+        .expect("location report should be readable")
+        .expect("location report should be stored");
+    assert_eq!(stored.task_id, task_id);
+    assert_eq!(stored.volunteer_user_id, volunteer.id);
+    assert_eq!(stored.source, "simulated");
+    assert_eq!(stored.latitude, 31.2);
+    assert_eq!(stored.longitude, 121.5);
+    assert_eq!(stored.accuracy_meters, 20.0);
+
+    let audit = audit_events::Entity::find()
+        .filter(audit_events::Column::EntityId.eq(report_id))
+        .filter(audit_events::Column::Action.eq("task.location_reported"))
+        .one(&context.database)
+        .await
+        .expect("location report audit should be readable")
+        .expect("location report should be audited");
+    let metadata: Value = serde_json::from_str(
+        audit
+            .metadata_json
+            .as_deref()
+            .expect("location report audit should have metadata"),
+    )
+    .expect("location report audit metadata should be JSON");
+    assert_eq!(metadata["source"], "simulated");
+    assert!(metadata.get("latitude").is_none());
+    assert!(metadata.get("longitude").is_none());
+    assert!(metadata.get("accuracy_meters").is_none());
+
+    let completed = update_status!(&app, &task_id, &volunteer_token, "completed");
+    assert_eq!(completed.status(), StatusCode::OK);
+    let completed_report = submit_location_report!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        location_report_json(Utc::now())
+    );
+    assert_error(completed_report, StatusCode::CONFLICT, "conflict").await;
+
+    let cancelled_task_id = create_task!(
+        &app,
+        &case_id,
+        &commander_token,
+        &source_clue_id,
+        &volunteer.id
+    );
+    let cancelled = update_status!(&app, &cancelled_task_id, &commander_token, "cancelled");
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled_report = submit_location_report!(
+        &app,
+        &cancelled_task_id,
+        &volunteer_token,
+        location_report_json(Utc::now())
+    );
+    assert_error(cancelled_report, StatusCode::CONFLICT, "conflict").await;
+}
+
 fn task_json(source_clue_id: &str, volunteer_user_id: &str) -> Value {
     json!({
         "source_clue_id": source_clue_id,
@@ -395,5 +596,15 @@ fn task_json(source_clue_id: &str, volunteer_user_id: &str) -> Value {
         "risk_notes": "Stay in public areas and do not enter restricted property.",
         "safety_briefing": "Keep contact with the commander and stop if conditions change.",
         "expected_feedback": "Submit a factual text report for commander review."
+    })
+}
+
+fn location_report_json(captured_at: chrono::DateTime<Utc>) -> Value {
+    json!({
+        "source": "simulated",
+        "latitude": 31.2,
+        "longitude": 121.5,
+        "accuracy_meters": 20,
+        "captured_at": captured_at.to_rfc3339(),
     })
 }

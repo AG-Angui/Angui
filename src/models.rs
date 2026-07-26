@@ -487,6 +487,16 @@ pub struct UpdateTaskStatusRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SubmitTaskLocationReportRequest {
+    pub source: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy_meters: f64,
+    pub captured_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AddCaseMemberRequest {
     pub email: String,
     pub case_role: CaseRole,
@@ -606,6 +616,15 @@ pub struct TaskListResponse {
     pub page: u64,
     pub page_size: u64,
     pub total: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskLocationReportReceipt {
+    pub id: String,
+    pub source: String,
+    pub captured_at: String,
+    pub retention_expires_at: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -653,6 +653,42 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/tasks/{task_id}/location-reports:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      tags: [Tasks]
+      operationId: submitTaskLocationReport
+      summary: Submit one simulated location point while executing a task
+      description: |
+        Only the active task's assigned volunteer may submit a point. The endpoint accepts only
+        `simulated` source data, does not accept a device identifier, and is not a background or
+        continuous tracking API. The report must be recent (no more than 15 minutes old and no
+        more than 5 minutes in the future for clock skew); it is retained for 24 hours from its
+        capture time. Exact coordinates and accuracy are stored only in the protected location
+        report record, are not returned by this endpoint, and are never copied to audit metadata.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitTaskLocationReportRequest" }
+      responses:
+        "201":
+          description: Simulated point accepted; the receipt deliberately omits coordinates and accuracy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskLocationReportReceipt" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/places:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -1833,6 +1869,37 @@ components:
         status:
           $ref: "#/components/schemas/TaskStatusTransitionTarget"
           description: The current task state and caller role determine whether this otherwise valid target transition is allowed.
+
+    SubmitTaskLocationReportRequest:
+      type: object
+      additionalProperties: false
+      required: [source, latitude, longitude, accuracy_meters, captured_at]
+      properties:
+        source:
+          type: string
+          const: simulated
+          description: The only accepted source. Device IDs and continuous background tracking are unsupported.
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        accuracy_meters: { type: number, minimum: 0, maximum: 10000 }
+        captured_at:
+          type: string
+          format: date-time
+          description: Required RFC 3339 time; must be at most 15 minutes old and at most 5 minutes in the future.
+
+    TaskLocationReportReceipt:
+      type: object
+      additionalProperties: false
+      required: [id, source, captured_at, retention_expires_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        source: { type: string, const: simulated }
+        captured_at: { type: string, format: date-time }
+        retention_expires_at:
+          type: string
+          format: date-time
+          description: Server-derived 24-hour retention deadline for this protected location record.
+        created_at: { type: string, format: date-time }
 
     Task:
       type: object
