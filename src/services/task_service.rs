@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration as StdDuration,
+};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use sea_orm::sea_query::Expr;
@@ -37,6 +40,27 @@ const LOCATION_REPORT_SOURCE: &str = "simulated";
 const MAX_LOCATION_REPORT_AGE: Duration = Duration::minutes(15);
 const MAX_LOCATION_REPORT_FUTURE_SKEW: Duration = Duration::minutes(5);
 const LOCATION_REPORT_RETENTION: Duration = Duration::hours(24);
+const LOCATION_REPORT_PURGE_INTERVAL: StdDuration = StdDuration::from_secs(60);
+
+pub fn start_location_report_retention_purger(db: DatabaseConnection) {
+    actix_web::rt::spawn(async move {
+        let mut interval = tokio::time::interval(LOCATION_REPORT_PURGE_INTERVAL);
+        loop {
+            interval.tick().await;
+            if let Err(error) = purge_expired_location_reports(&db).await {
+                eprintln!("failed to purge expired task location reports: {error}");
+            }
+        }
+    });
+}
+
+pub async fn purge_expired_location_reports(db: &DatabaseConnection) -> Result<u64, ApiError> {
+    let deleted = task_location_reports::Entity::delete_many()
+        .filter(task_location_reports::Column::RetentionExpiresAt.lte(now()))
+        .exec(db)
+        .await?;
+    Ok(deleted.rows_affected)
+}
 
 pub async fn create_task(
     db: &DatabaseConnection,
