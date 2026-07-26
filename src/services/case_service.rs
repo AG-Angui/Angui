@@ -785,9 +785,11 @@ fn visible_clue_response(
             clue,
             attribution,
             &auth.id,
-            can_see_attachment_references
-                .then_some(attachment_ids)
-                .unwrap_or_default(),
+            if can_see_attachment_references {
+                attachment_ids
+            } else {
+                Vec::new()
+            },
         );
         if case_role != CaseRole::Commander && !own {
             // Confirmed facts can be shared for coordination, while controlled
@@ -1009,12 +1011,12 @@ fn validate_clue_request(request: &CreateClueRequest) -> Result<(), ApiError> {
     validate_optional_length("raw_record_reference", &request.raw_record_reference, 500)?;
     validate_optional_length("next_action", &request.next_action, 500)?;
     validate_optional_length("linked_task_reference", &request.linked_task_reference, 120)?;
-    if let Some(precision) = request.location_precision.as_deref() {
-        if !CLUE_LOCATION_PRECISIONS.contains(&precision.trim().to_lowercase().as_str()) {
-            return Err(ApiError::Validation(
-                "location_precision is unsupported".to_owned(),
-            ));
-        }
+    if let Some(precision) = request.location_precision.as_deref()
+        && !CLUE_LOCATION_PRECISIONS.contains(&precision.trim().to_lowercase().as_str())
+    {
+        return Err(ApiError::Validation(
+            "location_precision is unsupported".to_owned(),
+        ));
     }
     if request
         .location_precision

@@ -1,22 +1,14 @@
-ALTER TABLE clues ADD COLUMN source_type VARCHAR(32) NOT NULL DEFAULT 'manual_report';
--- statement-break
-ALTER TABLE clues ADD COLUMN raw_record_reference VARCHAR(500);
--- statement-break
-ALTER TABLE clues ADD COLUMN reported_at VARCHAR(40);
--- statement-break
-ALTER TABLE clues ADD COLUMN confirmed_at VARCHAR(40);
--- statement-break
-ALTER TABLE clues ADD COLUMN location_precision VARCHAR(32);
--- statement-break
-ALTER TABLE clues ADD COLUMN next_action VARCHAR(500);
--- statement-break
-ALTER TABLE clues ADD COLUMN linked_task_reference VARCHAR(120);
--- statement-break
-ALTER TABLE clues ADD COLUMN related_clue_id VARCHAR(36);
--- statement-break
-ALTER TABLE clues ADD COLUMN relationship_type VARCHAR(32);
--- statement-break
-ALTER TABLE clues ADD COLUMN review_reason VARCHAR(1000);
+ALTER TABLE clues
+    ADD COLUMN source_type VARCHAR(32) NOT NULL DEFAULT 'manual_report',
+    ADD COLUMN raw_record_reference VARCHAR(500),
+    ADD COLUMN reported_at VARCHAR(40),
+    ADD COLUMN confirmed_at VARCHAR(40),
+    ADD COLUMN location_precision VARCHAR(32),
+    ADD COLUMN next_action VARCHAR(500),
+    ADD COLUMN linked_task_reference VARCHAR(120),
+    ADD COLUMN related_clue_id VARCHAR(36),
+    ADD COLUMN relationship_type VARCHAR(32),
+    ADD COLUMN review_reason VARCHAR(1000);
 -- statement-break
 UPDATE clues SET reported_at = created_at WHERE reported_at IS NULL;
 -- statement-break
