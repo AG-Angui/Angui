@@ -61,7 +61,15 @@ export function ProfilePage() {
         if (!token) return
         setIsSaving(true); setError(''); setNotice('')
         void updateMyProfile(token, { display_name: displayName, avatar_reference: avatarReference, preferences: { locale, reduced_motion: reducedMotion } })
-          .then(async (next) => { setProfile(next); await refreshUser(); setNotice('个人资料已保存。') })
+          .then(async (next) => {
+            setProfile(next)
+            setNotice('个人资料已保存。')
+            try {
+              await refreshUser()
+            } catch {
+              // Keeping the locally returned profile is sufficient when the best-effort identity refresh fails.
+            }
+          })
           .catch((cause) => setError(messageFrom(cause)))
           .finally(() => setIsSaving(false))
       }}>
