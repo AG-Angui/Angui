@@ -193,4 +193,60 @@ describe('CaseWorkspacePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认提交' }))
     await waitFor(() => expect(mocked.reviewClue).toHaveBeenCalledWith('test-session', 'clue-pending', expect.objectContaining({ status: 'confirmed', reason: 'Reviewed against the fictional record.' })))
   })
+
+  it('discards a stale commander queue response after filters change', async () => {
+    vi.clearAllMocks()
+    const firstQueue = deferred<{ items: Array<Record<string, unknown>>; page: number; page_size: number; total: number }>()
+    const secondQueue = deferred<{ items: Array<Record<string, unknown>>; page: number; page_size: number; total: number }>()
+    const clue = (id: string, content: string, sourceType: string) => ({
+      id,
+      case_id: 'case-command',
+      status: 'pending_review',
+      source: 'field responder',
+      source_type: sourceType,
+      content,
+      raw_record_reference: null,
+      occurred_at: null,
+      reported_at: '2026-07-24T00:00:00Z',
+      confirmed_at: null,
+      location_text: null,
+      location_precision: null,
+      next_action: null,
+      linked_task_reference: null,
+      related_clue_id: null,
+      relationship_type: null,
+      review_reason: null,
+      attachment_ids: [],
+      created_at: '2026-07-24T00:00:00Z',
+      updated_at: '2026-07-24T00:00:00Z',
+      reviewed_at: null,
+      is_own_submission: false,
+    })
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: '指挥案件', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(detail('case-command', '指挥案件', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.listCaseClues
+      .mockReturnValueOnce(firstQueue.promise)
+      .mockReturnValueOnce(secondQueue.promise)
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: '指挥案件' })
+    await waitFor(() => expect(mocked.listCaseClues).toHaveBeenCalledTimes(1))
+    fireEvent.change(screen.getByLabelText('来源类型筛选'), { target: { value: 'field_report' } })
+    await waitFor(() => expect(mocked.listCaseClues).toHaveBeenCalledTimes(2))
+
+    await act(async () => {
+      secondQueue.resolve({ items: [clue('latest-clue', 'latest clue', 'field_report')], page: 1, page_size: 25, total: 1 })
+      await secondQueue.promise
+    })
+    expect(await screen.findByText('latest clue')).toBeInTheDocument()
+
+    await act(async () => {
+      firstQueue.resolve({ items: [clue('stale-clue', 'stale clue', 'manual_report')], page: 1, page_size: 25, total: 1 })
+      await firstQueue.promise
+    })
+    expect(screen.getByText('latest clue')).toBeInTheDocument()
+    expect(screen.queryByText('stale clue')).not.toBeInTheDocument()
+  })
 })

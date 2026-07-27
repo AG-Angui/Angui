@@ -303,6 +303,7 @@ function CaseDetailView({
   const [queueFilters, setQueueFilters] = useState<ClueQueueFilters>(defaultClueQueueFilters)
   const [isQueueLoading, setIsQueueLoading] = useState(false)
   const [queueError, setQueueError] = useState('')
+  const queueRequestVersion = useRef(0)
   const [place, setPlace] = useState<CreateCasePlacePayload>({ name: '', place_type: '', address: '', longitude: null, latitude: null, visibility: 'confirmed' })
   const [attachment, setAttachment] = useState<File | null>(null)
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status)
@@ -320,7 +321,10 @@ function CaseDetailView({
       : ['closed']
 
   const loadClueQueue = useCallback(async () => {
+    const requestVersion = queueRequestVersion.current + 1
+    queueRequestVersion.current = requestVersion
     if (!token || !isCommander) return
+    setClueQueue({ items: [], total: 0, page: queueFilters.page, pageSize: 25 })
     setIsQueueLoading(true)
     setQueueError('')
     try {
@@ -332,6 +336,7 @@ function CaseDetailView({
         sort: queueFilters.sort,
         order: queueFilters.order,
       })
+      if (requestVersion !== queueRequestVersion.current) return
       setClueQueue({
         items: page.items,
         total: page.total,
@@ -339,9 +344,10 @@ function CaseDetailView({
         pageSize: page.page_size,
       })
     } catch (cause) {
+      if (requestVersion !== queueRequestVersion.current) return
       setQueueError(messageFrom(cause))
     } finally {
-      setIsQueueLoading(false)
+      if (requestVersion === queueRequestVersion.current) setIsQueueLoading(false)
     }
   }, [detail.id, isCommander, queueFilters, token])
 
@@ -360,8 +366,10 @@ function CaseDetailView({
       void loadClueQueue()
       return
     }
+    queueRequestVersion.current += 1
     setClueQueue({ items: [], total: 0, page: 1, pageSize: 25 })
     setQueueError('')
+    setIsQueueLoading(false)
   }, [isCommander, loadClueQueue])
 
   async function run(key: string, action: () => Promise<unknown>, message: string) {
