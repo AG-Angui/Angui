@@ -212,7 +212,6 @@ pub async fn update_elder_profile(
     case_id: &str,
     request: UpdateElderProfileRequest,
 ) -> Result<CaseDetail, ApiError> {
-    validate_elder_profile_update(&request)?;
     let transaction = db.begin().await?;
     require_case_role(
         &transaction,
@@ -221,6 +220,7 @@ pub async fn update_elder_profile(
         &[CaseRole::Family, CaseRole::Commander],
     )
     .await?;
+    validate_elder_profile_update(&request)?;
     let profile = elder_profiles::Entity::find()
         .filter(elder_profiles::Column::CaseId.eq(case_id))
         .one(&transaction)

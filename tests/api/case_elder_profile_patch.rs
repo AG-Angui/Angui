@@ -53,7 +53,7 @@ async fn family_and_commander_revision_updates_while_volunteers_are_denied() {
         test::TestRequest::patch()
             .uri(&format!("/api/cases/{case_id}/elder-profile"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer}")))
-            .set_json(serde_json::json!({ "display_name": "Not allowed" }))
+            .set_json(serde_json::json!({}))
             .to_request(),
     )
     .await;
@@ -63,7 +63,7 @@ async fn family_and_commander_revision_updates_while_volunteers_are_denied() {
         test::TestRequest::patch()
             .uri(&format!("/api/cases/{case_id}/elder-profile"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {admin}")))
-            .set_json(serde_json::json!({ "display_name": "Not allowed" }))
+            .set_json(serde_json::json!({}))
             .to_request(),
     )
     .await;
@@ -79,16 +79,50 @@ async fn family_and_commander_revision_updates_while_volunteers_are_denied() {
     .await;
     assert_error(blocked_field, StatusCode::BAD_REQUEST, "validation_error").await;
 
+    for invalid_request in [
+        serde_json::json!({ "age": -1 }),
+        serde_json::json!({ "age": 131 }),
+        serde_json::json!({ "last_seen_at": "not-a-timestamp" }),
+    ] {
+        let invalid = test::call_service(
+            &app,
+            test::TestRequest::patch()
+                .uri(&format!("/api/cases/{case_id}/elder-profile"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {family}")))
+                .set_json(invalid_request)
+                .to_request(),
+        )
+        .await;
+        assert_error(invalid, StatusCode::BAD_REQUEST, "validation_error").await;
+    }
+
     let revisions = elder_profile_revisions::Entity::find()
         .filter(elder_profile_revisions::Column::CaseId.eq(&case_id))
         .all(&context.database)
         .await
         .expect("revision query should succeed");
     assert_eq!(revisions.len(), 2);
-    assert!(revisions.iter().all(
-        |revision| revision.previous_profile_json.contains("health_notes")
-            && revision.updated_profile_json.contains("display_name")
-    ));
+    let snapshots: Vec<(Value, Value)> = revisions
+        .into_iter()
+        .map(|revision| {
+            (
+                serde_json::from_str(&revision.previous_profile_json)
+                    .expect("previous profile snapshot should be JSON"),
+                serde_json::from_str(&revision.updated_profile_json)
+                    .expect("updated profile snapshot should be JSON"),
+            )
+        })
+        .collect();
+    assert!(snapshots.iter().any(|(previous, updated)| {
+        previous["health_notes"] != updated["health_notes"]
+            && updated["health_notes"] == "fictional changed note"
+            && previous["last_seen_location"] != updated["last_seen_location"]
+            && updated["last_seen_location"] == "Updated fictional place"
+    }));
+    assert!(snapshots.iter().any(|(previous, updated)| {
+        previous["physical_description"] != updated["physical_description"]
+            && updated["physical_description"] == "updated fictional description"
+    }));
     let audit = audit_events::Entity::find()
         .filter(audit_events::Column::Action.eq("elder_profile.updated"))
         .one(&context.database)
