@@ -1,4 +1,4 @@
-import { Button, Chip, Input, TextArea } from '@heroui/react'
+import { AlertDialog, Button, Chip, Input, TextArea } from '@heroui/react'
 import {
   CheckCircle2,
   ChevronRight,
@@ -734,6 +734,19 @@ function ReviewButton({
   const requiresRelationship = status === 'duplicate' || status === 'conflicting'
   const isReady = Boolean(reason.trim()) && (!requiresRelationship || Boolean(relatedClueId.trim()))
   const [isConfirming, setIsConfirming] = useState(false)
+  const reviewTriggerRef = useRef<HTMLButtonElement>(null)
+  const hadConfirmationOpen = useRef(false)
+
+  useEffect(() => {
+    if (isConfirming) {
+      hadConfirmationOpen.current = true
+      return
+    }
+    if (hadConfirmationOpen.current) {
+      reviewTriggerRef.current?.focus()
+      hadConfirmationOpen.current = false
+    }
+  }, [isConfirming])
 
   function submitReview() {
     const normalizedReason = reason.trim()
@@ -749,44 +762,33 @@ function ReviewButton({
     })
   }
   return (
-    <>
+    <AlertDialog isOpen={isConfirming} onOpenChange={setIsConfirming}>
     <Button
+      ref={reviewTriggerRef}
       size="sm"
       variant={status === 'confirmed' ? 'secondary' : 'ghost'}
       isDisabled={busy === key || !isReady}
-      onPress={() => {
-        if (!isConfirming) {
-          setIsConfirming(true)
-          return
-        }
-        const normalizedReason = reason.trim()
-        if (!token || !normalizedReason || (requiresRelationship && !relatedClueId.trim())) return
-        void run(key, () => reviewClue(token, clueId, {
-          status,
-          reason: normalizedReason,
-          related_clue_id: requiresRelationship ? relatedClueId.trim() : null,
-          relationship_type: status === 'duplicate' ? 'duplicate_of' : status === 'conflicting' ? 'conflicts_with' : null,
-        }), `线索已更新为${statusLabels[status]}`).then((succeeded) => {
-          if (succeeded) onReviewed()
-        })
-      }}
+      onPress={() => setIsConfirming(true)}
     >
       {status === 'confirmed' && <CheckCircle2 size={15} />}
       {label}
     </Button>
-    {isConfirming && (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4" role="presentation">
-        <section role="dialog" aria-modal="true" aria-labelledby={`review-confirmation-${clueId}`} className="w-full max-w-md rounded-md bg-white p-5 shadow-xl">
+    <AlertDialog.Backdrop
+      className="fixed inset-0 z-50 bg-slate-950/40 p-4"
+      isKeyboardDismissDisabled={false}
+    >
+      <AlertDialog.Container className="grid min-h-full place-items-center">
+        <AlertDialog.Dialog role="dialog" aria-labelledby={`review-confirmation-${clueId}`} className="w-full max-w-md rounded-md bg-white p-5 shadow-xl">
           <h4 id={`review-confirmation-${clueId}`} className="m-0 text-base font-bold text-slate-950">确认审核操作</h4>
           <p className="mb-0 mt-3 text-sm leading-6 text-slate-700">将把该线索从“{statusLabels.pending_review}”改为“{statusLabels[status]}”。此操作会记录审核理由和操作者，并更新其他角色可见的内容。</p>
           <div className="mt-5 flex justify-end gap-2">
             <Button size="sm" variant="ghost" isDisabled={busy === key} onPress={() => setIsConfirming(false)}>取消</Button>
             <Button size="sm" variant="primary" isDisabled={busy === key} onPress={submitReview}>确认提交</Button>
           </div>
-        </section>
-      </div>
-    )}
-    </>
+        </AlertDialog.Dialog>
+      </AlertDialog.Container>
+    </AlertDialog.Backdrop>
+    </AlertDialog>
   )
 }
 
