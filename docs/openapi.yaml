@@ -145,6 +145,33 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/users/me/profile:
+    get:
+      tags: [Authentication]
+      operationId: getMyProfile
+      summary: Get the current account profile
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: account-private
+      responses:
+        "200": { description: Current account profile, content: { application/json: { schema: { $ref: "#/components/schemas/UserProfile" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [Authentication]
+      operationId: updateMyProfile
+      summary: Update permitted current account profile fields
+      description: Roles, global capabilities, account status, and case roles are rejected. Audit metadata contains field names only.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: account-private
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateUserProfileRequest" } } }
+      responses:
+        "200": { description: Updated current account profile, content: { application/json: { schema: { $ref: "#/components/schemas/UserProfile" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/intake-sessions:
     post:
       tags: [Intake sessions]
@@ -436,6 +463,27 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /api/cases/{case_id}/elder-profile:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    patch:
+      tags: [Cases]
+      operationId: updateElderProfile
+      summary: Supplement or correct a case elder profile
+      description: Family and commander members only. Each update stores a revision with actor, timestamp, and before/after snapshots; case status, members, and task fields are rejected. Non-members receive 404.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [family, commander]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateElderProfileRequest" } } }
+      responses:
+        "200": { description: Updated role-cropped case detail, content: { application/json: { schema: { $ref: "#/components/schemas/CaseDetail" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/cases/{case_id}/clues:
     parameters:
@@ -1130,6 +1178,34 @@ components:
           items:
             $ref: "#/components/schemas/GlobalCapability"
 
+    UserPreferences:
+      type: object
+      additionalProperties: false
+      required: [locale, reduced_motion]
+      properties:
+        locale: { type: string, enum: [zh-CN, en-US] }
+        reduced_motion: { type: boolean }
+
+    UserProfile:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          additionalProperties: false
+          required: [team_name, avatar_reference, preferences]
+          properties:
+            team_name: { type: [string, "null"] }
+            avatar_reference: { type: [string, "null"], maxLength: 500 }
+            preferences: { $ref: "#/components/schemas/UserPreferences" }
+
+    UpdateUserProfileRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 120 }
+        avatar_reference: { type: string, maxLength: 500 }
+        preferences: { $ref: "#/components/schemas/UserPreferences" }
+
     AccountType:
       type: string
       enum: [member, learner]
@@ -1535,6 +1611,20 @@ components:
       properties:
         status:
           $ref: "#/components/schemas/CaseStatus"
+
+    UpdateElderProfileRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 120 }
+        age: { type: integer, minimum: 0, maximum: 130 }
+        gender: { type: string, maxLength: 64 }
+        physical_description: { type: string, maxLength: 2000 }
+        clothing_description: { type: string, maxLength: 2000 }
+        health_notes: { type: string, maxLength: 2000 }
+        last_seen_at: { type: string, format: date-time }
+        last_seen_location: { type: string, maxLength: 500 }
 
     CreateClueRequest:
       type: object

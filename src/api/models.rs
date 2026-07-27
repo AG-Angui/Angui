@@ -34,6 +34,42 @@ pub struct UserResponse {
     pub global_capabilities: Vec<GlobalCapability>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserPreferences {
+    pub locale: String,
+    pub reduced_motion: bool,
+}
+
+impl Default for UserPreferences {
+    fn default() -> Self {
+        Self {
+            locale: "zh-CN".to_owned(),
+            reduced_motion: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UserProfileResponse {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub account_type: AccountType,
+    pub global_capabilities: Vec<GlobalCapability>,
+    pub team_name: Option<String>,
+    pub avatar_reference: Option<String>,
+    pub preferences: UserPreferences,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateUserProfileRequest {
+    pub display_name: Option<String>,
+    pub avatar_reference: Option<String>,
+    pub preferences: Option<UserPreferences>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub token: String,
@@ -381,6 +417,19 @@ pub struct UpdateCaseStatusRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct UpdateElderProfileRequest {
+    pub display_name: Option<String>,
+    pub age: Option<i16>,
+    pub gender: Option<String>,
+    pub physical_description: Option<String>,
+    pub clothing_description: Option<String>,
+    pub health_notes: Option<String>,
+    pub last_seen_at: Option<String>,
+    pub last_seen_location: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateClueRequest {
     pub source: String,
     pub content: String,
@@ -554,7 +603,7 @@ pub struct CaseDetail {
     pub updated_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ElderProfileResponse {
     pub id: String,
     pub display_name: String,

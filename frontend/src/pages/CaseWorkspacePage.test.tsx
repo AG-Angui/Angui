@@ -28,6 +28,7 @@ vi.mock('../api/cases', () => ({
   createCasePlace: vi.fn(),
   uploadCaseAttachment: vi.fn(),
   updateCaseStatus: vi.fn(),
+  updateElderProfile: vi.fn(),
 }))
 
 function deferred<T>() {

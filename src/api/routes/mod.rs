@@ -4,6 +4,7 @@ mod clues;
 mod health;
 mod intake_sessions;
 mod tasks;
+mod user_profiles;
 
 use actix_web::{HttpResponse, web};
 
@@ -43,6 +44,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .wrap(ApiSessionAuthentication)
             .service(health::get_health)
             .configure(auth::configure)
+            .configure(user_profiles::configure)
             .configure(cases::configure)
             .configure(intake_sessions::configure)
             .configure(clues::configure)

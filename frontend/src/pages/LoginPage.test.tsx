@@ -18,6 +18,7 @@ function setAuth(login: AuthContextValue['login'] = vi.fn().mockResolvedValue(un
     sessionNotice: null,
     login,
     logout: vi.fn(),
+    refreshUser: vi.fn(),
   }
 }
 
