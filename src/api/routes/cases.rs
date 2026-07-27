@@ -6,9 +6,10 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AddCaseMemberRequest, AuthenticatedUser, CaseResourceConfigurationResponse,
-        CreateCasePlaceRequest, CreateCaseRequest, CreateClueRequest, CreateTaskRequest,
-        TaskListQuery, UpdateCaseStatusRequest, UpdateElderProfileRequest,
+        AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse,
+        CaseResourceConfigurationResponse, CreateCasePlaceRequest, CreateCaseRequest,
+        CreateClueRequest, CreateTaskRequest, TaskListQuery, UpdateCaseStatusRequest,
+        UpdateElderProfileRequest,
     },
     roles::CaseRole,
     services::case_service,
@@ -29,6 +30,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/clues", web::post().to(create_clue))
             .route("/{case_id}/tasks", web::get().to(list_tasks))
             .route("/{case_id}/tasks", web::post().to(create_task))
+            .route("/{case_id}/map-view", web::get().to(get_map_view))
             .route("/{case_id}/places", web::get().to(list_places))
             .route("/{case_id}/places", web::post().to(create_place))
             .route(
@@ -206,6 +208,114 @@ async fn get_case(
 ) -> Result<HttpResponse, ApiError> {
     let case = case_service::get_case(&state.db, &auth, &case_id).await?;
     Ok(HttpResponse::Ok().json(case))
+}
+
+async fn get_map_view(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    let detail = case_service::get_case(&state.db, &auth, &case_id).await?;
+    let tasks = crate::services::task_service::list_tasks(
+        &state.db,
+        &auth,
+        &case_id,
+        TaskListQuery {
+            page: Some(1),
+            page_size: Some(100),
+        },
+    )
+    .await?;
+    let mut items = Vec::new();
+    if detail.access_role != CaseRole::Volunteer
+        && let Some(location_text) = detail.elder_profile.last_seen_location
+    {
+        items.push(CaseMapItem {
+            id: format!("case:{}:last-seen", detail.id),
+            object_type: "last_seen".to_owned(),
+            display_name: "Last confirmed location".to_owned(),
+            longitude: None,
+            latitude: None,
+            location_text: Some(location_text),
+            location_precision: "unknown".to_owned(),
+            source: "case_profile".to_owned(),
+            occurred_at: detail.elder_profile.last_seen_at,
+            reported_at: None,
+            review_status: "confirmed".to_owned(),
+            related_task_id: None,
+            updated_at: detail.updated_at.clone(),
+        });
+    }
+    items.extend(detail.places.into_iter().map(|place| {
+        CaseMapItem {
+            id: place.id,
+            object_type: "place".to_owned(),
+            display_name: place.name,
+            longitude: place.longitude,
+            latitude: place.latitude,
+            location_text: Some(place.address),
+            location_precision: if place.longitude.is_some() {
+                "exact"
+            } else {
+                "unknown"
+            }
+            .to_owned(),
+            source: place.source,
+            occurred_at: None,
+            reported_at: Some(place.created_at),
+            review_status: place.review_status,
+            related_task_id: None,
+            updated_at: place.updated_at,
+        }
+    }));
+    if detail.access_role == CaseRole::Commander {
+        items.extend(
+            detail
+                .clues
+                .into_iter()
+                .filter(|clue| clue.status == "confirmed" && clue.location_text.is_some())
+                .map(|clue| CaseMapItem {
+                    id: clue.id,
+                    object_type: "clue".to_owned(),
+                    display_name: clue.content,
+                    longitude: None,
+                    latitude: None,
+                    location_text: clue.location_text,
+                    location_precision: clue
+                        .location_precision
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                    source: clue.source_type,
+                    occurred_at: clue.occurred_at,
+                    reported_at: Some(clue.reported_at),
+                    review_status: clue.status,
+                    related_task_id: clue.linked_task_reference,
+                    updated_at: clue.updated_at,
+                }),
+        );
+    }
+    items.extend(tasks.items.into_iter().map(|task| {
+        CaseMapItem {
+            id: task.id.clone(),
+            object_type: "task".to_owned(),
+            display_name: task.title,
+            longitude: task.longitude,
+            latitude: task.latitude,
+            location_text: Some(task.area_text),
+            location_precision: if task.longitude.is_some() {
+                "exact"
+            } else {
+                "unknown"
+            }
+            .to_owned(),
+            source: "task".to_owned(),
+            occurred_at: Some(task.due_at),
+            reported_at: Some(task.created_at),
+            review_status: task.status,
+            related_task_id: Some(task.id),
+            updated_at: task.updated_at,
+        }
+    }));
+    Ok(HttpResponse::Ok().json(CaseMapViewResponse { items }))
 }
 
 async fn update_case_status(

@@ -683,6 +683,28 @@ pub struct TaskListResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CaseMapViewResponse {
+    pub items: Vec<CaseMapItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CaseMapItem {
+    pub id: String,
+    pub object_type: String,
+    pub display_name: String,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub location_text: Option<String>,
+    pub location_precision: String,
+    pub source: String,
+    pub occurred_at: Option<String>,
+    pub reported_at: Option<String>,
+    pub review_status: String,
+    pub related_task_id: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TaskLocationReportReceipt {
     pub id: String,
     pub source: String,
