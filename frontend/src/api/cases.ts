@@ -65,6 +65,22 @@ export interface Clue {
   is_own_submission: boolean
 }
 
+export interface ClueTimelineQuery {
+  page?: number
+  page_size?: number
+  status?: ClueStatus
+  source_type?: ClueSourceType
+  sort?: 'created_at' | 'occurred_at'
+  order?: 'asc' | 'desc'
+}
+
+export interface ClueTimelinePage {
+  items: Clue[]
+  page: number
+  page_size: number
+  total: number
+}
+
 export interface CaseDetail {
   id: string
   case_code: string
@@ -200,6 +216,19 @@ export function createClue(
     { method: 'POST', body: JSON.stringify(payload) },
     token,
   )
+}
+
+export function listCaseClues(
+  token: string,
+  caseId: string,
+  query: ClueTimelineQuery = {},
+): Promise<ClueTimelinePage> {
+  const parameters = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) parameters.set(key, String(value))
+  }
+  const suffix = parameters.size > 0 ? `?${parameters}` : ''
+  return apiRequest<ClueTimelinePage>(`/cases/${caseId}/clues${suffix}`, {}, token)
 }
 
 export function createCasePlace(token: string, caseId: string, payload: CreateCasePlacePayload): Promise<CasePlace> {

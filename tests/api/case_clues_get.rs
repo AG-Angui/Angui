@@ -36,6 +36,25 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     .expect("fixture clue should be confirmed");
     context.create_clue(&case_id, COMMANDER).await;
     context.create_clue(&case_id, FAMILY).await;
+    angui::services::case_service::create_clue(
+        &context.database,
+        &commander,
+        &case_id,
+        angui::models::CreateClueRequest {
+            source: "field responder".to_owned(),
+            source_type: Some("field_report".to_owned()),
+            content: "A fictional field report for source filtering.".to_owned(),
+            raw_record_reference: None,
+            occurred_at: None,
+            location_text: None,
+            location_precision: None,
+            next_action: None,
+            linked_task_reference: None,
+            attachment_ids: Vec::new(),
+        },
+    )
+    .await
+    .expect("fixture field report should be created");
 
     let family_token = context.token(FAMILY).await;
     let volunteer_token = context.token(VOLUNTEER).await;
@@ -89,7 +108,7 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     )
     .await;
     let paged_body: Value = test::read_body_json(paged).await;
-    assert_eq!(paged_body["total"], 3);
+    assert_eq!(paged_body["total"], 4);
     assert_eq!(paged_body["items"].as_array().map(Vec::len), Some(2));
     assert_eq!(paged_body["page"], 1);
     assert_eq!(paged_body["page_size"], 2);
@@ -105,6 +124,43 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     let filtered_body: Value = test::read_body_json(filtered).await;
     assert_eq!(filtered_body["total"], 1);
     assert_eq!(filtered_body["items"][0]["id"], confirmed_clue);
+
+    let typed = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/cases/{case_id}/clues?source_type=manual_report"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    let typed_body: Value = test::read_body_json(typed).await;
+    assert_eq!(typed_body["total"], 3);
+    assert!(
+        typed_body["items"]
+            .as_array()
+            .expect("items should be an array")
+            .iter()
+            .all(|clue| clue["source_type"] == "manual_report")
+    );
+
+    let field_reports = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/cases/{case_id}/clues?source_type=field_report"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    let field_reports_body: Value = test::read_body_json(field_reports).await;
+    assert_eq!(field_reports_body["total"], 1);
+    assert_eq!(
+        field_reports_body["items"][0]["source_type"],
+        "field_report"
+    );
 
     let unavailable = test::call_service(
         &app,
@@ -128,6 +184,7 @@ async fn get_case_clues_rejects_invalid_whitelisted_query_values() {
         "page=0",
         "page_size=101",
         "status=unreviewed",
+        "source_type=untrusted_client_value",
         "sort=status",
         "order=sideways",
         "unexpected=value",

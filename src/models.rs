@@ -406,6 +406,7 @@ pub struct ClueTimelineQuery {
     pub page: Option<u64>,
     pub page_size: Option<u64>,
     pub status: Option<String>,
+    pub source_type: Option<String>,
     pub sort: Option<String>,
     pub order: Option<String>,
 }

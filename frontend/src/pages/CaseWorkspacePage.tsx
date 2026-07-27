@@ -16,6 +16,7 @@ import {
   createClue,
   getCase,
   getCaseResourceConfiguration,
+  listCaseClues,
   listCases,
   reviewClue,
   updateCaseStatus,
@@ -27,7 +28,10 @@ import type {
   CaseRole,
   CaseResourceConfiguration,
   CaseStatus,
+  Clue,
   ClueReviewStatus,
+  ClueSourceType,
+  ClueStatus,
   CreateCasePlacePayload,
   LocationPrecision,
   PublicClueSourceType,
@@ -41,6 +45,20 @@ import { FamilyIntakeForm } from './FamilyIntakeForm'
 
 type WorkspaceMode = 'family' | 'commander' | 'volunteer'
 type ReviewDraft = { reason: string; relatedClueId: string }
+type ClueQueueFilters = {
+  status: ClueStatus | ''
+  sourceType: ClueSourceType | ''
+  sort: 'created_at' | 'occurred_at'
+  order: 'asc' | 'desc'
+  page: number
+}
+const defaultClueQueueFilters: ClueQueueFilters = {
+  status: 'pending_review',
+  sourceType: '',
+  sort: 'created_at',
+  order: 'desc',
+  page: 1,
+}
 
 const workspaceCopy: Record<WorkspaceMode, { context: string; title: string }> = {
   family: { context: '家属端', title: '走失求助' },
@@ -276,6 +294,15 @@ function CaseDetailView({
   const [clueNextAction, setClueNextAction] = useState('')
   const [linkedAttachmentIds, setLinkedAttachmentIds] = useState<string[]>([])
   const [reviewDrafts, setReviewDrafts] = useState<Record<string, ReviewDraft>>({})
+  const [clueQueue, setClueQueue] = useState<{ items: Clue[]; total: number; page: number; pageSize: number }>({
+    items: [],
+    total: 0,
+    page: 1,
+    pageSize: 25,
+  })
+  const [queueFilters, setQueueFilters] = useState<ClueQueueFilters>(defaultClueQueueFilters)
+  const [isQueueLoading, setIsQueueLoading] = useState(false)
+  const [queueError, setQueueError] = useState('')
   const [place, setPlace] = useState<CreateCasePlacePayload>({ name: '', place_type: '', address: '', longitude: null, latitude: null, visibility: 'confirmed' })
   const [attachment, setAttachment] = useState<File | null>(null)
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status)
@@ -292,6 +319,34 @@ function CaseDetailView({
       ? ['resolved', 'active', 'closed']
       : ['closed']
 
+  const loadClueQueue = useCallback(async () => {
+    if (!token || !isCommander) return
+    setIsQueueLoading(true)
+    setQueueError('')
+    try {
+      const page = await listCaseClues(token, detail.id, {
+        page: queueFilters.page,
+        page_size: 25,
+        status: queueFilters.status || undefined,
+        source_type: queueFilters.sourceType || undefined,
+        sort: queueFilters.sort,
+        order: queueFilters.order,
+      })
+      setClueQueue({
+        items: page.items,
+        total: page.total,
+        page: page.page,
+        pageSize: page.page_size,
+      })
+    } catch (cause) {
+      setQueueError(messageFrom(cause))
+    } finally {
+      setIsQueueLoading(false)
+    }
+  }, [detail.id, isCommander, queueFilters, token])
+
+  const visibleClues = isCommander ? clueQueue.items : detail.clues
+
   useEffect(() => setNextStatus(detail.status), [detail.status])
   useEffect(() => {
     setPlace((current) => (
@@ -300,6 +355,14 @@ function CaseDetailView({
         : { ...current, place_type: placeTypes[0] ?? '' }
     ))
   }, [placeTypes])
+  useEffect(() => {
+    if (isCommander) {
+      void loadClueQueue()
+      return
+    }
+    setClueQueue({ items: [], total: 0, page: 1, pageSize: 25 })
+    setQueueError('')
+  }, [isCommander, loadClueQueue])
 
   async function run(key: string, action: () => Promise<unknown>, message: string) {
     setBusy(key)
@@ -307,6 +370,7 @@ function CaseDetailView({
     try {
       await action()
       await onChanged(message)
+      await loadClueQueue()
       return true
     } catch (cause) {
       setError(messageFrom(cause))
@@ -397,10 +461,69 @@ function CaseDetailView({
           <Chip size="sm" variant="soft"><Chip.Label>{detail.clues.length} 条可见</Chip.Label></Chip>
         </div>
 
+        {isCommander && (
+          <fieldset className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4">
+            <legend className="px-1 text-sm font-semibold text-slate-800">筛选与排序</legend>
+            <Field label="审核状态">
+              <select
+                aria-label="审核状态筛选"
+                className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                value={queueFilters.status}
+                onChange={(event) => setQueueFilters((current) => ({ ...current, status: event.target.value as ClueStatus | '', page: 1 }))}
+              >
+                <option value="">全部状态</option>
+                {Object.entries(statusLabels).filter(([status]) => !['active', 'resolved', 'closed'].includes(status)).map(([status, label]) => (
+                  <option key={status} value={status}>{label}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="来源类型">
+              <select
+                aria-label="来源类型筛选"
+                className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                value={queueFilters.sourceType}
+                onChange={(event) => setQueueFilters((current) => ({ ...current, sourceType: event.target.value as ClueSourceType | '', page: 1 }))}
+              >
+                <option value="">全部来源</option>
+                <option value="manual_report">人工上报</option>
+                <option value="field_report">现场反馈</option>
+                <option value="chat_draft">聊天整理草稿</option>
+                <option value="ai_draft">AI 字段草稿</option>
+              </select>
+            </Field>
+            <Field label="时间字段">
+              <select
+                aria-label="时间字段排序"
+                className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                value={queueFilters.sort}
+                onChange={(event) => setQueueFilters((current) => ({ ...current, sort: event.target.value as ClueQueueFilters['sort'], page: 1 }))}
+              >
+                <option value="created_at">上报时间</option>
+                <option value="occurred_at">发生时间</option>
+              </select>
+            </Field>
+            <Field label="排序方向">
+              <select
+                aria-label="排序方向"
+                className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                value={queueFilters.order}
+                onChange={(event) => setQueueFilters((current) => ({ ...current, order: event.target.value as ClueQueueFilters['order'], page: 1 }))}
+              >
+                <option value="desc">最新优先</option>
+                <option value="asc">最早优先</option>
+              </select>
+            </Field>
+          </fieldset>
+        )}
+
+        {isCommander && queueError && <div className="mt-4"><ErrorState message={queueError} onRetry={() => void loadClueQueue()} /></div>}
+
         <div className="mt-4 divide-y divide-slate-100 border-y border-slate-200">
-          {detail.clues.length === 0 ? (
+          {isQueueLoading ? (
+            <LoadingState label="正在加载审核队列" />
+          ) : visibleClues.length === 0 ? (
             <div className="flex min-h-28 items-center justify-center text-sm text-slate-500">暂无可见线索</div>
-          ) : detail.clues.map((clue) => (
+          ) : visibleClues.map((clue) => (
             <article key={clue.id} className="py-4">
               <div className="flex flex-wrap items-center gap-2">
                 <Chip size="sm" variant="soft"><Chip.Label>{statusLabels[clue.status] ?? clue.status}</Chip.Label></Chip>
@@ -421,7 +544,7 @@ function CaseDetailView({
               {isCommander && clue.status === 'pending_review' && (
                 <div className="mt-3 grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-3">
                   <Field label="审核理由（每次确认、排除、降级或合并必填）" required>
-                    <TextArea value={reviewDrafts[clue.id]?.reason ?? ''} maxLength={1000} rows={2} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: event.target.value, relatedClueId: current[clue.id]?.relatedClueId ?? '' } }))} fullWidth required />
+                    <TextArea aria-label="审核理由" value={reviewDrafts[clue.id]?.reason ?? ''} maxLength={1000} rows={2} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: event.target.value, relatedClueId: current[clue.id]?.relatedClueId ?? '' } }))} fullWidth required />
                   </Field>
                   <Field label="关联线索 ID（重复或冲突时必填）">
                     <Input value={reviewDrafts[clue.id]?.relatedClueId ?? ''} maxLength={36} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: current[clue.id]?.reason ?? '', relatedClueId: event.target.value } }))} placeholder="选择重复/冲突关系时填写" fullWidth />
@@ -440,6 +563,30 @@ function CaseDetailView({
             </article>
           ))}
         </div>
+
+        {isCommander && clueQueue.total > clueQueue.pageSize && (
+          <nav className="mt-4 flex items-center justify-between gap-3" aria-label="线索队列分页">
+            <span className="text-sm text-slate-600">第 {clueQueue.page} 页，共 {Math.ceil(clueQueue.total / clueQueue.pageSize)} 页</span>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                isDisabled={isQueueLoading || clueQueue.page <= 1}
+                onPress={() => setQueueFilters((current) => ({ ...current, page: current.page - 1 }))}
+              >
+                上一页
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                isDisabled={isQueueLoading || clueQueue.page * clueQueue.pageSize >= clueQueue.total}
+                onPress={() => setQueueFilters((current) => ({ ...current, page: current.page + 1 }))}
+              >
+                下一页
+              </Button>
+            </div>
+          </nav>
+        )}
 
         {detail.status !== 'closed' && (
           <form
@@ -578,12 +725,32 @@ function ReviewButton({
   const key = `review:${clueId}:${status}`
   const requiresRelationship = status === 'duplicate' || status === 'conflicting'
   const isReady = Boolean(reason.trim()) && (!requiresRelationship || Boolean(relatedClueId.trim()))
+  const [isConfirming, setIsConfirming] = useState(false)
+
+  function submitReview() {
+    const normalizedReason = reason.trim()
+    if (!token || !normalizedReason || (requiresRelationship && !relatedClueId.trim())) return
+    void run(key, () => reviewClue(token, clueId, {
+      status,
+      reason: normalizedReason,
+      related_clue_id: requiresRelationship ? relatedClueId.trim() : null,
+      relationship_type: status === 'duplicate' ? 'duplicate_of' : status === 'conflicting' ? 'conflicts_with' : null,
+    }), `线索已更新为${statusLabels[status]}`).then((succeeded) => {
+      if (succeeded) onReviewed()
+      setIsConfirming(false)
+    })
+  }
   return (
+    <>
     <Button
       size="sm"
       variant={status === 'confirmed' ? 'secondary' : 'ghost'}
       isDisabled={busy === key || !isReady}
       onPress={() => {
+        if (!isConfirming) {
+          setIsConfirming(true)
+          return
+        }
         const normalizedReason = reason.trim()
         if (!token || !normalizedReason || (requiresRelationship && !relatedClueId.trim())) return
         void run(key, () => reviewClue(token, clueId, {
@@ -599,6 +766,19 @@ function ReviewButton({
       {status === 'confirmed' && <CheckCircle2 size={15} />}
       {label}
     </Button>
+    {isConfirming && (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4" role="presentation">
+        <section role="dialog" aria-modal="true" aria-labelledby={`review-confirmation-${clueId}`} className="w-full max-w-md rounded-md bg-white p-5 shadow-xl">
+          <h4 id={`review-confirmation-${clueId}`} className="m-0 text-base font-bold text-slate-950">确认审核操作</h4>
+          <p className="mb-0 mt-3 text-sm leading-6 text-slate-700">将把该线索从“{statusLabels.pending_review}”改为“{statusLabels[status]}”。此操作会记录审核理由和操作者，并更新其他角色可见的内容。</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button size="sm" variant="ghost" isDisabled={busy === key} onPress={() => setIsConfirming(false)}>取消</Button>
+            <Button size="sm" variant="primary" isDisabled={busy === key} onPress={submitReview}>确认提交</Button>
+          </div>
+        </section>
+      </div>
+    )}
+    </>
   )
 }
 

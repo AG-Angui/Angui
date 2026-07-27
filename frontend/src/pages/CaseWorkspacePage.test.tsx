@@ -7,7 +7,9 @@ const mocked = vi.hoisted(() => ({
   getCase: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
+  listCaseClues: vi.fn(),
   addCaseMember: vi.fn(),
+  reviewClue: vi.fn(),
 }))
 
 vi.mock('../auth/useAuth', () => ({
@@ -17,10 +19,11 @@ vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
+  listCaseClues: (...args: unknown[]) => mocked.listCaseClues(...args),
   addCaseMember: (...args: unknown[]) => mocked.addCaseMember(...args),
   createCase: vi.fn(),
   createClue: vi.fn(),
-  reviewClue: vi.fn(),
+  reviewClue: (...args: unknown[]) => mocked.reviewClue(...args),
   createCasePlace: vi.fn(),
   uploadCaseAttachment: vi.fn(),
   updateCaseStatus: vi.fn(),
@@ -159,5 +162,35 @@ describe('CaseWorkspacePage', () => {
     expect(screen.queryByRole('button', { name: '提交地点' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '上传图片' })).not.toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: '案件状态' })).toBeDisabled()
+  })
+
+  it('loads a filtered commander queue and requires confirmation before reviewing a clue', async () => {
+    vi.clearAllMocks()
+    const pendingClue = {
+      id: 'clue-pending', case_id: 'case-command', status: 'pending_review', source: 'field responder', source_type: 'field_report',
+      content: 'A fictional field observation.', raw_record_reference: null, occurred_at: null, reported_at: '2026-07-24T00:00:00Z', confirmed_at: null,
+      location_text: null, location_precision: null, next_action: null, linked_task_reference: null, related_clue_id: null, relationship_type: null,
+      review_reason: null, attachment_ids: [], created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z', reviewed_at: null, is_own_submission: false,
+    }
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: '指挥案件', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(detail('case-command', '指挥案件', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.listCaseClues.mockResolvedValue({ items: [pendingClue], page: 1, page_size: 25, total: 1 })
+    mocked.reviewClue.mockResolvedValue({ ...pendingClue, status: 'confirmed' })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: '指挥案件' })
+    await waitFor(() => expect(mocked.listCaseClues).toHaveBeenCalledWith('test-session', 'case-command', expect.objectContaining({ status: 'pending_review', sort: 'created_at', order: 'desc' })))
+    fireEvent.change(screen.getByLabelText('来源类型筛选'), { target: { value: 'field_report' } })
+    await waitFor(() => expect(mocked.listCaseClues).toHaveBeenLastCalledWith('test-session', 'case-command', expect.objectContaining({ source_type: 'field_report' })))
+
+    fireEvent.change(screen.getByLabelText('审核理由'), { target: { value: 'Reviewed against the fictional record.' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认' }))
+    expect(mocked.reviewClue).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: '确认审核操作' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }))
+    await waitFor(() => expect(mocked.reviewClue).toHaveBeenCalledWith('test-session', 'clue-pending', expect.objectContaining({ status: 'confirmed', reason: 'Reviewed against the fictional record.' })))
   })
 })
