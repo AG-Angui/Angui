@@ -782,6 +782,27 @@ paths:
   /api/cases/{case_id}/places:
     parameters:
       - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: listCasePlaces
+      summary: 获取按角色裁剪的关键地点
+      description: 服务端按案件角色和审核/可见级别裁剪地点。指挥可见案件内部地点；家属仅见本人提交或已确认的非内部地点；志愿者仅见已确认的公开地点。非成员返回 404。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200":
+          description: 当前角色可见的地点
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CasePlace" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Cases]
       operationId: createCasePlace

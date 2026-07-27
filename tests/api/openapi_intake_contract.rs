@@ -173,3 +173,25 @@ fn clue_timeline_openapi_contract_covers_pagination_and_visibility() {
         ],
     );
 }
+
+#[test]
+fn case_places_openapi_contract_covers_role_filtered_reads() {
+    let (_, operation) = OPENAPI
+        .split_once("  /api/cases/{case_id}/places:\n")
+        .expect("OpenAPI places path must exist");
+    let get_operation = operation
+        .split_once("    get:\n")
+        .and_then(|(_, after_get)| after_get.split_once("    post:\n").map(|(get, _)| get))
+        .expect("OpenAPI places path must declare GET before POST");
+    for expected in [
+        "operationId: listCasePlaces",
+        "x-case-roles: [family, commander, volunteer]",
+        "#/components/schemas/CasePlace",
+        "\"404\": { $ref: \"#/components/responses/NotFound\" }",
+    ] {
+        assert!(
+            get_operation.contains(expected),
+            "OpenAPI places operation must declare {expected:?}"
+        );
+    }
+}

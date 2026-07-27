@@ -29,6 +29,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/clues", web::post().to(create_clue))
             .route("/{case_id}/tasks", web::get().to(list_tasks))
             .route("/{case_id}/tasks", web::post().to(create_task))
+            .route("/{case_id}/places", web::get().to(list_places))
             .route("/{case_id}/places", web::post().to(create_place))
             .route(
                 "/{case_id}/resource-configuration",
@@ -77,6 +78,24 @@ async fn create_place(
     )
     .await?;
     Ok(HttpResponse::Created().json(place))
+}
+
+async fn list_places(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    let role = case_service::require_case_role(
+        &state.db,
+        &auth.id,
+        &case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let places =
+        crate::services::case_resource_service::visible_places(&state.db, &case_id, &auth.id, role)
+            .await?;
+    Ok(HttpResponse::Ok().json(places))
 }
 
 async fn create_attachment(
