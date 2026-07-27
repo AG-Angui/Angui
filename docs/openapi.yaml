@@ -694,6 +694,43 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/tasks/{task_id}/feedback:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      tags: [Tasks]
+      operationId: submitTaskFeedback
+      summary: Submit an execution feedback clue for review
+      description: |
+        Only the assigned volunteer may submit feedback while both the task and case are active.
+        The server converts the feedback into a `pending_review` field-report clue linked to the
+        task. It does not confirm a clue, change case facts, advance the task status, or publish
+        a map update. Optional attachments must already belong to the case and have been uploaded
+        by the submitting volunteer. The endpoint accepts a textual location only; it does not
+        accept coordinates, device identifiers, or continuous tracking data.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [volunteer]
+      x-data-classification: case-restricted
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitTaskFeedbackRequest" }
+      responses:
+        "201":
+          description: Feedback was stored as a pending-review clue.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskFeedbackReceipt" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/places:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -1905,6 +1942,43 @@ components:
           format: date-time
           description: Server-derived 24-hour retention deadline for this protected location record.
         created_at: { type: string, format: date-time }
+
+    SubmitTaskFeedbackRequest:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: Field observation that remains unconfirmed until commander review.
+        occurred_at:
+          type: [string, "null"]
+          format: date-time
+        location_text:
+          type: [string, "null"]
+          maxLength: 500
+          description: Optional human-readable place description; exact coordinates are unsupported.
+        location_precision:
+          type: [string, "null"]
+          enum: [exact, approximate, unknown, null]
+          description: Requires location_text when supplied.
+        attachment_ids:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items: { type: string, format: uuid }
+
+    TaskFeedbackReceipt:
+      type: object
+      additionalProperties: false
+      required: [task_id, clue_id, status, submitted_at]
+      properties:
+        task_id: { type: string, format: uuid }
+        clue_id: { type: string, format: uuid }
+        status: { type: string, const: pending_review }
+        submitted_at: { type: string, format: date-time }
 
     Task:
       type: object

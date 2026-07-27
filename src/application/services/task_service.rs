@@ -13,13 +13,14 @@ use serde_json::json;
 
 use crate::{
     entities::{
-        case_memberships, cases, clues, task_assignments, task_location_reports, tasks,
-        user_global_capabilities, users,
+        case_attachments, case_memberships, cases, clue_attachment_links, clue_attributions, clues,
+        task_assignments, task_location_reports, tasks, user_global_capabilities, users,
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateTaskRequest, SubmitTaskLocationReportRequest, TaskListQuery,
-        TaskListResponse, TaskLocationReportReceipt, TaskResponse, UpdateTaskStatusRequest,
+        AuthenticatedUser, CreateTaskRequest, SubmitTaskFeedbackRequest,
+        SubmitTaskLocationReportRequest, TaskFeedbackReceipt, TaskListQuery, TaskListResponse,
+        TaskLocationReportReceipt, TaskResponse, UpdateTaskStatusRequest,
     },
     roles::{CaseRole, GlobalCapability},
     services::case_service::{require_case_role, write_audit},
@@ -41,6 +42,7 @@ const MAX_LOCATION_REPORT_AGE: Duration = Duration::minutes(15);
 const MAX_LOCATION_REPORT_FUTURE_SKEW: Duration = Duration::minutes(5);
 const LOCATION_REPORT_RETENTION: Duration = Duration::hours(24);
 const LOCATION_REPORT_PURGE_INTERVAL: StdDuration = StdDuration::from_secs(60);
+const CLUE_LOCATION_PRECISIONS: &[&str] = &["exact", "approximate", "unknown"];
 
 pub fn start_location_report_retention_purger(db: DatabaseConnection) {
     actix_web::rt::spawn(async move {
@@ -469,6 +471,159 @@ pub async fn submit_location_report(
     })
 }
 
+pub async fn submit_task_feedback(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+    request: SubmitTaskFeedbackRequest,
+) -> Result<TaskFeedbackReceipt, ApiError> {
+    let request = ValidatedTaskFeedbackRequest::try_from(request)?;
+    let transaction = db.begin().await?;
+    let task = tasks::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case_role = require_case_role(
+        &transaction,
+        &auth.id,
+        &task.case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let assignment = task_assignments::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Database(sea_orm::DbErr::Custom(
+                "task is missing its required assignment".to_owned(),
+            ))
+        })?;
+    if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
+        return Err(ApiError::NotFound("task was not found".to_owned()));
+    }
+    if task.status != "active" {
+        return Err(ApiError::Conflict(
+            "feedback can only be submitted while the task is active".to_owned(),
+        ));
+    }
+    let case_model = cases::Entity::find_by_id(&task.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case_model.status != "active" {
+        return Err(ApiError::Conflict(
+            "feedback cannot be submitted for a non-active case".to_owned(),
+        ));
+    }
+
+    let timestamp = now();
+    let active_guard = tasks::Entity::update_many()
+        .col_expr(tasks::Column::UpdatedAt, Expr::value(timestamp.clone()))
+        .filter(tasks::Column::Id.eq(task_id))
+        .filter(tasks::Column::Status.eq("active"))
+        .exec(&transaction)
+        .await?;
+    if active_guard.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "feedback can only be submitted while the task is active".to_owned(),
+        ));
+    }
+
+    let clue_id = crate::services::case_service::new_id();
+    let clue = clues::ActiveModel {
+        id: Set(clue_id.clone()),
+        case_id: Set(task.case_id.clone()),
+        status: Set("pending_review".to_owned()),
+        source: Set("task_feedback".to_owned()),
+        source_type: Set("field_report".to_owned()),
+        content: Set(request.content),
+        raw_record_reference: Set(None),
+        occurred_at: Set(request.occurred_at),
+        reported_at: Set(timestamp.clone()),
+        confirmed_at: Set(None),
+        location_text: Set(request.location_text),
+        location_precision: Set(request.location_precision),
+        next_action: Set(None),
+        linked_task_reference: Set(Some(task.id.clone())),
+        related_clue_id: Set(None),
+        relationship_type: Set(None),
+        review_reason: Set(None),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await?;
+
+    for attachment_id in &request.attachment_ids {
+        let attachment = case_attachments::Entity::find_by_id(attachment_id)
+            .one(&transaction)
+            .await?
+            .filter(|attachment| attachment.case_id == task.case_id)
+            .ok_or_else(|| {
+                ApiError::Validation(
+                    "attachment_ids must reference attachments in this case".to_owned(),
+                )
+            })?;
+        if attachment.created_by_user_id != auth.id {
+            return Err(ApiError::Forbidden(
+                "an attachment can only be linked by its uploader".to_owned(),
+            ));
+        }
+        clue_attachment_links::ActiveModel {
+            clue_id: Set(clue_id.clone()),
+            attachment_id: Set(attachment_id.clone()),
+            created_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+    }
+
+    clue_attributions::ActiveModel {
+        clue_id: Set(clue_id.clone()),
+        submitted_by_user_id: Set(Some(auth.id.clone())),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+    }
+    .insert(&transaction)
+    .await?;
+    write_audit(
+        &transaction,
+        Some(task.case_id.clone()),
+        auth,
+        "task.feedback_submitted",
+        "task",
+        task.id.clone(),
+        Some(json!({
+            "clue_id": clue_id,
+            "status": "pending_review",
+            "attachment_count": request.attachment_ids.len(),
+        })),
+    )
+    .await?;
+    write_audit(
+        &transaction,
+        Some(task.case_id),
+        auth,
+        "clue.submitted",
+        "clue",
+        clue.id.clone(),
+        Some(json!({
+            "status": "pending_review",
+            "source_type": "field_report",
+            "linked_task_reference": task.id,
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(TaskFeedbackReceipt {
+        task_id: task_id.to_owned(),
+        clue_id: clue.id,
+        status: clue.status,
+        submitted_at: timestamp,
+    })
+}
+
 async fn assignments_for_tasks(
     db: &DatabaseConnection,
     task_ids: impl IntoIterator<Item = String>,
@@ -552,6 +707,14 @@ struct ValidatedLocationReportRequest {
     captured_at: DateTime<Utc>,
 }
 
+struct ValidatedTaskFeedbackRequest {
+    content: String,
+    occurred_at: Option<String>,
+    location_text: Option<String>,
+    location_precision: Option<String>,
+    attachment_ids: Vec<String>,
+}
+
 impl TryFrom<SubmitTaskLocationReportRequest> for ValidatedLocationReportRequest {
     type Error = ApiError;
 
@@ -597,6 +760,68 @@ impl TryFrom<SubmitTaskLocationReportRequest> for ValidatedLocationReportRequest
     }
 }
 
+impl TryFrom<SubmitTaskFeedbackRequest> for ValidatedTaskFeedbackRequest {
+    type Error = ApiError;
+
+    fn try_from(value: SubmitTaskFeedbackRequest) -> Result<Self, Self::Error> {
+        let content = required_field("content", value.content, 4_000)?;
+        let occurred_at = match optional_field("occurred_at", value.occurred_at, 64)? {
+            Some(occurred_at) => Some(
+                DateTime::parse_from_rfc3339(&occurred_at)
+                    .map_err(|_| {
+                        ApiError::Validation("occurred_at must be an RFC 3339 timestamp".to_owned())
+                    })?
+                    .with_timezone(&Utc)
+                    .to_rfc3339_opts(SecondsFormat::Millis, true),
+            ),
+            None => None,
+        };
+        let location_text = optional_field("location_text", value.location_text, 500)?;
+        let location_precision =
+            optional_field("location_precision", value.location_precision, 16)?
+                .map(|precision| precision.to_lowercase());
+        if location_precision
+            .as_deref()
+            .is_some_and(|precision| !CLUE_LOCATION_PRECISIONS.contains(&precision))
+        {
+            return Err(ApiError::Validation(
+                "location_precision is unsupported".to_owned(),
+            ));
+        }
+        if location_precision.is_some() && location_text.is_none() {
+            return Err(ApiError::Validation(
+                "location_precision requires location_text".to_owned(),
+            ));
+        }
+        if value.attachment_ids.len() > 10 {
+            return Err(ApiError::Validation(
+                "attachment_ids cannot contain more than 10 items".to_owned(),
+            ));
+        }
+        let mut unique_ids = HashSet::new();
+        let attachment_ids = value
+            .attachment_ids
+            .into_iter()
+            .map(|attachment_id| attachment_id.trim().to_owned())
+            .collect::<Vec<_>>();
+        if attachment_ids
+            .iter()
+            .any(|attachment_id| attachment_id.is_empty() || !unique_ids.insert(attachment_id))
+        {
+            return Err(ApiError::Validation(
+                "attachment_ids must contain unique non-empty IDs".to_owned(),
+            ));
+        }
+        Ok(Self {
+            content,
+            occurred_at,
+            location_text,
+            location_precision,
+            attachment_ids,
+        })
+    }
+}
+
 impl ValidatedTaskListQuery {
     fn offset(&self) -> Result<usize, ApiError> {
         let offset = self
@@ -638,6 +863,26 @@ fn required_field(label: &str, value: String, maximum: usize) -> Result<String, 
         )));
     }
     Ok(value.to_owned())
+}
+
+fn optional_field(
+    label: &str,
+    value: Option<String>,
+    maximum: usize,
+) -> Result<Option<String>, ApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > maximum {
+        return Err(ApiError::Validation(format!(
+            "{label} must contain at most {maximum} characters"
+        )));
+    }
+    Ok(Some(value.to_owned()))
 }
 
 fn validate_coordinates(latitude: Option<f64>, longitude: Option<f64>) -> Result<(), ApiError> {
