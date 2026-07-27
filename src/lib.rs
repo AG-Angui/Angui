@@ -1,13 +1,15 @@
-pub mod ai_gateway;
-pub mod amap_service;
-pub mod app_state;
-pub mod auth;
+pub mod api;
+pub mod application;
 pub mod config;
-pub mod entities;
-pub mod error;
-pub mod intake_assessment;
-pub mod models;
-pub mod rate_limit;
-pub mod roles;
-pub mod routes;
-pub mod services;
+pub mod domain;
+pub mod integrations;
+pub mod persistence;
+
+// Preserve the crate's public module paths while the implementation is grouped
+// by responsibility. This keeps binaries, integration tests, and downstream
+// callers source-compatible with the pre-layout-refactor API.
+pub use api::{auth, error, models, rate_limit, routes};
+pub use application::{app_state, services};
+pub use domain::{intake_assessment, roles};
+pub use integrations::{ai_gateway, amap_service};
+pub use persistence::entities;

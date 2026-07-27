@@ -4,7 +4,7 @@ use std::{
     path::{Component, PathBuf},
 };
 
-use crate::ai_gateway::{ProviderConfig, validate_provider_configurations};
+use crate::integrations::ai_gateway::{ProviderConfig, validate_provider_configurations};
 
 /// Load a local development `.env` file without overriding process-level
 /// configuration. A missing file is normal in production and CI.

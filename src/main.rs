@@ -3,8 +3,10 @@ use std::io;
 use actix_cors::Cors;
 use actix_web::{App, HttpServer, http, middleware::Logger, web};
 use angui::{
-    ai_gateway::AiGateway, amap_service::AmapService, app_state::AppState, config::Settings,
-    rate_limit::LoginRateLimiter, routes, services::task_service,
+    api::{rate_limit::LoginRateLimiter, routes},
+    application::{app_state::AppState, services::task_service},
+    config::Settings,
+    integrations::{ai_gateway::AiGateway, amap_service::AmapService},
 };
 use sea_orm::Database;
 
