@@ -123,6 +123,22 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
     )
     .await
     .expect("fixture place should be created");
+    let confirmed_visible = case_resource_service::create_place(
+        &context.database,
+        &commander,
+        &case_id,
+        CreateCasePlaceRequest {
+            name: "Confirmed non-public meeting point".to_owned(),
+            place_type: "key_location".to_owned(),
+            address: "Fictional confirmed square".to_owned(),
+            longitude: None,
+            latitude: None,
+            visibility: PlaceVisibility::Confirmed,
+        },
+        &place_types,
+    )
+    .await
+    .expect("fixture place should be created");
     let unreviewed_public = case_resource_service::create_place(
         &context.database,
         &commander,
@@ -156,6 +172,7 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
     .await
     .expect("fixture place should be created");
     mark_place_confirmed(&context, &public_confirmed.id).await;
+    mark_place_confirmed(&context, &confirmed_visible.id).await;
     mark_place_confirmed(&context, &internal_confirmed.id).await;
 
     let app = crate::init_api_app!(&context);
@@ -181,6 +198,11 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
             .any(|place| place["id"] == public_confirmed.id)
     );
     assert!(
+        family_places
+            .iter()
+            .any(|place| place["id"] == confirmed_visible.id)
+    );
+    assert!(
         !family_places
             .iter()
             .any(|place| place["id"] == unreviewed_public.id)
@@ -202,7 +224,7 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
         test::call_service(&app, request_for(context.token(COMMANDER).await)).await,
     )
     .await;
-    assert_eq!(commander_places.len(), 4);
+    assert_eq!(commander_places.len(), 5);
 
     let hidden = test::call_service(&app, request_for(context.token(LEARNER).await)).await;
     assert_error(hidden, StatusCode::NOT_FOUND, "not_found").await;
