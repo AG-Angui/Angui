@@ -44,6 +44,7 @@ export function AppShell() {
   const { user, logout, isLoggingOut } = useAuth()
   const visibleNavigation = navigation.filter((item) => user && (
     item.to === '/'
+    || item.to === '/profile'
     || (user.account_type === 'member' && (!item.capability || user.global_capabilities.includes(item.capability)))
   ))
 
