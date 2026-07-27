@@ -4,6 +4,7 @@ import {
   createCase,
   createClue,
   getCase,
+  listCaseClues,
   listCases,
   reviewClue,
   updateCaseStatus,
@@ -31,6 +32,22 @@ describe('case API contract', () => {
     await getCase('test-session', 'case-1')
 
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/cases', '/api/cases/case-1'])
+  })
+
+  it('passes queue filters and pagination to the documented clue timeline endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [], page: 2, page_size: 25, total: 26 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listCaseClues('test-session', 'case-1', {
+      page: 2,
+      page_size: 25,
+      status: 'pending_review',
+      source_type: 'field_report',
+      sort: 'occurred_at',
+      order: 'asc',
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/cases/case-1/clues?page=2&page_size=25&status=pending_review&source_type=field_report&sort=occurred_at&order=asc')
   })
 
   it('sends a documented case creation request', async () => {

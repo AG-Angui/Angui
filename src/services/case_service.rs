@@ -42,6 +42,7 @@ const CLUE_STATUSES: &[&str] = &[
     "conflicting",
     "insufficient_information",
 ];
+const CLUE_SOURCE_TYPES: &[&str] = &["manual_report", "field_report", "chat_draft", "ai_draft"];
 const PUBLIC_CLUE_SOURCE_TYPES: &[&str] = &["manual_report", "field_report"];
 const CLUE_LOCATION_PRECISIONS: &[&str] = &["exact", "approximate", "unknown"];
 const MAX_CLUE_TIMELINE_PAGE_SIZE: u64 = 100;
@@ -330,6 +331,9 @@ pub async fn list_clues(
     if let Some(status) = &query.status {
         clue_query = clue_query.filter(clues::Column::Status.eq(status));
     }
+    if let Some(source_type) = &query.source_type {
+        clue_query = clue_query.filter(clues::Column::SourceType.eq(source_type));
+    }
 
     clue_query = match query.sort.as_str() {
         "created_at" => clue_query.order_by(clues::Column::CreatedAt, query.order.clone()),
@@ -501,6 +505,7 @@ struct ValidatedClueTimelineQuery {
     page: u64,
     page_size: u64,
     status: Option<String>,
+    source_type: Option<String>,
     sort: String,
     order: Order,
 }
@@ -542,6 +547,17 @@ impl TryFrom<ClueTimelineQuery> for ValidatedClueTimelineQuery {
         {
             return Err(ApiError::Validation("status is unsupported".to_owned()));
         }
+        let source_type = value
+            .source_type
+            .map(|source_type| source_type.trim().to_lowercase());
+        if source_type
+            .as_deref()
+            .is_some_and(|source_type| !CLUE_SOURCE_TYPES.contains(&source_type))
+        {
+            return Err(ApiError::Validation(
+                "source_type is unsupported".to_owned(),
+            ));
+        }
         let sort = value
             .sort
             .unwrap_or_else(|| "created_at".to_owned())
@@ -565,6 +581,7 @@ impl TryFrom<ClueTimelineQuery> for ValidatedClueTimelineQuery {
             page,
             page_size,
             status,
+            source_type,
             sort,
             order,
         })

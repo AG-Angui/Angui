@@ -462,6 +462,10 @@ paths:
         - name: status
           in: query
           schema: { $ref: "#/components/schemas/ClueStatus" }
+        - name: source_type
+          in: query
+          description: Filter by the recorded clue origin without broadening the caller's role-scoped visibility.
+          schema: { $ref: "#/components/schemas/ClueSourceType" }
         - name: sort
           in: query
           schema: { type: string, enum: [created_at, occurred_at], default: created_at }

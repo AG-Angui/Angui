@@ -11,7 +11,7 @@ while a PR update does not compile, test, migrate, or upload artifacts twice.
 Rust formatting, Clippy, tests, and the release build run in parallel with the
 frontend lint/build and live PostgreSQL/MySQL migration checks. The database job
 applies every migration, reports status, performs a full refresh, and checks
-status again for both server databases. Cargo and npm caches are enabled, and
+status again for both server databases. Cargo and Yarn caches are enabled, and
 successful binaries/bundles are retained for seven days.
 
 ## Pull request quality
@@ -40,11 +40,11 @@ license for a public repository or enabling the paid product.
 
 `security.yml` runs on pull requests, pushes to `main`, manual dispatch, and
 weekly at 03:17 UTC on Monday. It fails on RustSec advisories in `Cargo.lock`,
-high or critical npm advisories in the frontend lockfile, and detected secrets.
+high or critical Yarn advisories in the frontend lockfile, and detected secrets.
 Routine runs scan the working tree; the weekly run scans all Git history.
 
 The frontend lockfile downloads packages through npmmirror, which does not
-implement npm's audit endpoint. The workflow intentionally sends only the npm
+implement its advisory endpoint. The workflow intentionally sends only the Yarn
 audit request to `registry.npmjs.org`; ordinary CI dependency installation uses
 the configured Chinese mirror. Trivy image scanning belongs after preview images
 are enabled, and `cargo-deny` should be added after third-party license/source
@@ -130,7 +130,7 @@ permission only to trusted maintainers; use a separate, non-deployment runner
 if that trust boundary changes.
 
 CI dependency downloads use the repository-managed Chinese mirrors: Rustup and
-Cargo use `rsproxy.cn`, while Node.js and npm use `npmmirror.com`. Docker image
+Cargo use `rsproxy.cn`, while Node.js and Yarn use `npmmirror.com`. Docker image
 pulls remain governed by the Docker daemon configuration on the server. The
 self-hosted runner must still be able to reach GitHub Actions and GHCR through
 direct Internet access or a standard HTTPS proxy; URL-prefix download
