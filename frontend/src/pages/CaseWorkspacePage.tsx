@@ -803,6 +803,7 @@ function ReviewButton({
 }
 
 function ElderProfileEditor({ detail, token, busy, onSave }: { detail: CaseDetail; token: string | null; busy: string; onSave: (payload: import('../api/cases').UpdateElderProfilePayload) => Promise<boolean> }) {
+  const [ageError, setAgeError] = useState('')
   const [draft, setDraft] = useState({
     display_name: detail.elder_profile.display_name,
     age: detail.elder_profile.age == null ? '' : String(detail.elder_profile.age),
@@ -821,14 +822,21 @@ function ElderProfileEditor({ detail, token, busy, onSave }: { detail: CaseDetai
   }), [detail])
   const field = (key: keyof typeof draft, label: string, multiline = false) => <Field label={label}>{multiline
     ? <TextArea value={draft[key]} onChange={(event) => setDraft((value) => ({ ...value, [key]: event.target.value }))} fullWidth />
-    : <Input value={draft[key]} onChange={(event) => setDraft((value) => ({ ...value, [key]: event.target.value }))} fullWidth />
+    : <Input type={key === 'age' ? 'number' : undefined} min={key === 'age' ? 0 : undefined} max={key === 'age' ? 130 : undefined} value={draft[key]} onChange={(event) => { setAgeError(''); setDraft((value) => ({ ...value, [key]: event.target.value })) }} fullWidth />
   }</Field>
   return <form className="border-b border-slate-200 bg-brand-50/30 px-5 py-5 sm:px-6" onSubmit={(event) => {
     event.preventDefault(); if (!token) return
-    void onSave({ display_name: draft.display_name, age: draft.age ? Number(draft.age) : undefined, gender: draft.gender,
+    const ageText = draft.age.trim()
+    const age = ageText === '' ? undefined : Number(ageText)
+    if (age !== undefined && (!Number.isInteger(age) || age < 0 || age > 130)) {
+      setAgeError('年龄必须是 0 到 130 之间的整数。')
+      return
+    }
+    void onSave({ display_name: draft.display_name, age, gender: draft.gender,
       physical_description: draft.physical_description, clothing_description: draft.clothing_description,
       health_notes: draft.health_notes, last_seen_at: draft.last_seen_at, last_seen_location: draft.last_seen_location })
   }}>
+    {ageError && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{ageError}</p>}
     <h3 className="m-0 text-sm font-bold text-slate-950">人物摘要补充 / 更正</h3>
     <p className="mt-1 text-xs text-slate-600">每次保存都会保留前后版本；案件状态、成员和任务信息不在此表单中。</p>
     <div className="mt-3 grid gap-3 sm:grid-cols-2">{field('display_name', '姓名')} {field('age', '年龄')} {field('gender', '性别')} {field('last_seen_location', '最后出现地点')} {field('last_seen_at', '最后出现时间')} {field('physical_description', '体貌', true)} {field('clothing_description', '衣着', true)} {field('health_notes', '健康注意', true)}</div>
