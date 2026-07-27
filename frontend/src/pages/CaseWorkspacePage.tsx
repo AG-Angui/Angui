@@ -323,7 +323,13 @@ function CaseDetailView({
   const loadClueQueue = useCallback(async () => {
     const requestVersion = queueRequestVersion.current + 1
     queueRequestVersion.current = requestVersion
-    if (!token || !isCommander) return
+    if (!token) {
+      setClueQueue({ items: [], total: 0, page: 1, pageSize: 25 })
+      setQueueError('')
+      setIsQueueLoading(false)
+      return
+    }
+    if (!isCommander) return
     setClueQueue({ items: [], total: 0, page: queueFilters.page, pageSize: 25 })
     setIsQueueLoading(true)
     setQueueError('')

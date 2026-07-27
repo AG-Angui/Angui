@@ -4,6 +4,7 @@ import type { CaseDetail, CaseRole, CaseStatus } from '../api/cases'
 import { CaseWorkspacePage } from './CaseWorkspacePage'
 
 const mocked = vi.hoisted(() => ({
+  auth: { token: 'test-session' as string | null },
   getCase: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
@@ -13,7 +14,7 @@ const mocked = vi.hoisted(() => ({
 }))
 
 vi.mock('../auth/useAuth', () => ({
-  useAuth: () => ({ token: 'test-session' }),
+  useAuth: () => ({ token: mocked.auth.token }),
 }))
 vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
@@ -262,5 +263,30 @@ describe('CaseWorkspacePage', () => {
     })
     expect(screen.getByText('latest clue')).toBeInTheDocument()
     expect(screen.queryByText('stale clue')).not.toBeInTheDocument()
+  })
+
+  it('clears the commander queue when authentication is lost', async () => {
+    vi.clearAllMocks()
+    mocked.auth.token = 'test-session'
+    const sensitiveClue = {
+      id: 'sensitive-clue', case_id: 'case-command', status: 'pending_review', source: 'field responder', source_type: 'field_report',
+      content: 'Sensitive commander queue clue', raw_record_reference: null, occurred_at: null, reported_at: '2026-07-24T00:00:00Z', confirmed_at: null,
+      location_text: null, location_precision: null, next_action: null, linked_task_reference: null, related_clue_id: null, relationship_type: null,
+      review_reason: null, attachment_ids: [], created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z', reviewed_at: null, is_own_submission: false,
+    }
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: '指挥案件', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(detail('case-command', '指挥案件', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.listCaseClues.mockResolvedValue({ items: [sensitiveClue], page: 1, page_size: 25, total: 1 })
+
+    const { rerender } = render(<CaseWorkspacePage mode="commander" />)
+
+    expect(await screen.findByText('Sensitive commander queue clue')).toBeInTheDocument()
+    mocked.auth.token = null
+    rerender(<CaseWorkspacePage mode="commander" />)
+
+    await waitFor(() => expect(screen.queryByText('Sensitive commander queue clue')).not.toBeInTheDocument())
+    expect(screen.queryByText('正在加载审核队列')).not.toBeInTheDocument()
+    mocked.auth.token = 'test-session'
   })
 })
