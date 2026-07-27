@@ -498,6 +498,20 @@ pub struct SubmitTaskLocationReportRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SubmitTaskFeedbackRequest {
+    pub content: String,
+    #[serde(default)]
+    pub occurred_at: Option<String>,
+    #[serde(default)]
+    pub location_text: Option<String>,
+    #[serde(default)]
+    pub location_precision: Option<String>,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AddCaseMemberRequest {
     pub email: String,
     pub case_role: CaseRole,
@@ -626,6 +640,14 @@ pub struct TaskLocationReportReceipt {
     pub captured_at: String,
     pub retention_expires_at: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskFeedbackReceipt {
+    pub task_id: String,
+    pub clue_id: String,
+    pub status: String,
+    pub submitted_at: String,
 }
 
 #[derive(Debug, Serialize)]

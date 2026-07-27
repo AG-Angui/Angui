@@ -3,14 +3,16 @@ use actix_web::{
     test,
 };
 use angui::{
-    entities::{audit_events, task_location_reports},
+    entities::{
+        audit_events, clues, task_location_reports, tasks, user_global_capabilities, users,
+    },
     services::task_service,
 };
 use chrono::{Duration, Utc};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, sea_query::Expr};
 use serde_json::{Value, json};
 
-use crate::support::{ADMIN, COMMANDER, FAMILY, TestContext, VOLUNTEER, assert_error};
+use crate::support::{ADMIN, COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
 
 macro_rules! confirmed_clue {
     ($context:expr, $app:expr, $case_id:expr, $commander_token:expr) => {{
@@ -80,6 +82,42 @@ macro_rules! submit_location_report {
         )
         .await
     }};
+}
+
+macro_rules! submit_task_feedback {
+    ($app:expr, $task_id:expr, $token:expr, $body:expr) => {{
+        test::call_service(
+            $app,
+            test::TestRequest::post()
+                .uri(&format!("/api/tasks/{}/feedback", $task_id))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {}", $token)))
+                .set_json($body)
+                .to_request(),
+        )
+        .await
+    }};
+}
+
+async fn add_second_case_volunteer(context: &TestContext, case_id: &str) -> String {
+    let learner = context.authenticated(LEARNER).await;
+    users::Entity::update_many()
+        .col_expr(users::Column::AccountType, Expr::value("member"))
+        .filter(users::Column::Id.eq(&learner.id))
+        .exec(&context.database)
+        .await
+        .expect("fixture learner should become a member account");
+    user_global_capabilities::ActiveModel {
+        user_id: Set(learner.id),
+        capability: Set("volunteer".to_owned()),
+        created_at: Set(Utc::now().to_rfc3339()),
+    }
+    .insert(&context.database)
+    .await
+    .expect("fixture should grant a second volunteer capability");
+    context
+        .add_member(case_id, COMMANDER, LEARNER, "volunteer")
+        .await;
+    context.token(LEARNER).await
 }
 
 #[actix_web::test]
@@ -344,7 +382,10 @@ async fn task_status_state_machine_is_limited_to_the_assignee_or_commander_cance
         .await;
     let commander_token = context.token(COMMANDER).await;
     let volunteer_token = context.token(VOLUNTEER).await;
+    let family_token = context.token(FAMILY).await;
+    let admin_token = context.token(ADMIN).await;
     let volunteer = context.authenticated(VOLUNTEER).await;
+    let second_volunteer_token = add_second_case_volunteer(&context, &case_id).await;
     let source_clue_id = confirmed_clue!(&context, &app, &case_id, &commander_token);
     let task_id = create_task!(
         &app,
@@ -362,6 +403,10 @@ async fn task_status_state_machine_is_limited_to_the_assignee_or_commander_cance
         illegal["error"]["message"],
         "task status cannot change from assigned to completed"
     );
+    for token in [&family_token, &second_volunteer_token, &admin_token] {
+        let unauthorized = update_status!(&app, &task_id, token, "accepted");
+        assert_error(unauthorized, StatusCode::NOT_FOUND, "not_found").await;
+    }
     for status in ["accepted", "active", "blocked", "active", "completed"] {
         let response = update_status!(&app, &task_id, &volunteer_token, status);
         assert_eq!(response.status(), StatusCode::OK);
@@ -411,7 +456,10 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
         .await;
     let commander_token = context.token(COMMANDER).await;
     let volunteer_token = context.token(VOLUNTEER).await;
+    let family_token = context.token(FAMILY).await;
+    let admin_token = context.token(ADMIN).await;
     let volunteer = context.authenticated(VOLUNTEER).await;
+    let second_volunteer_token = add_second_case_volunteer(&context, &case_id).await;
     let source_clue_id = confirmed_clue!(&context, &app, &case_id, &commander_token);
     let task_id = create_task!(
         &app,
@@ -434,13 +482,22 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
     let active = update_status!(&app, &task_id, &volunteer_token, "active");
     assert_eq!(active.status(), StatusCode::OK);
 
-    let non_assignee = submit_location_report!(
-        &app,
-        &task_id,
+    for token in [
+        &family_token,
         &commander_token,
-        location_report_json(Utc::now())
-    );
-    assert_error(non_assignee, StatusCode::NOT_FOUND, "not_found").await;
+        &second_volunteer_token,
+        &admin_token,
+    ] {
+        let non_assignee =
+            submit_location_report!(&app, &task_id, token, location_report_json(Utc::now()));
+        assert_eq!(non_assignee.status(), StatusCode::NOT_FOUND);
+        let body: Value = test::read_body_json(non_assignee).await;
+        assert_eq!(body["error"]["code"], "not_found");
+        let serialized = body.to_string();
+        assert!(!serialized.contains("31.2"));
+        assert!(!serialized.contains("121.5"));
+        assert!(!serialized.contains("20"));
+    }
 
     let invalid_source = submit_location_report!(
         &app,
@@ -577,12 +634,31 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
             .is_none()
     );
 
-    let completed = update_status!(&app, &task_id, &volunteer_token, "completed");
+    let logout = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/auth/logout")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+    let logged_out_report = submit_location_report!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        location_report_json(Utc::now())
+    );
+    assert_error(logged_out_report, StatusCode::UNAUTHORIZED, "unauthorized").await;
+
+    let active_volunteer_token = context.token(VOLUNTEER).await;
+
+    let completed = update_status!(&app, &task_id, &active_volunteer_token, "completed");
     assert_eq!(completed.status(), StatusCode::OK);
     let completed_report = submit_location_report!(
         &app,
         &task_id,
-        &volunteer_token,
+        &active_volunteer_token,
         location_report_json(Utc::now())
     );
     assert_error(completed_report, StatusCode::CONFLICT, "conflict").await;
@@ -599,10 +675,195 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
     let cancelled_report = submit_location_report!(
         &app,
         &cancelled_task_id,
-        &volunteer_token,
+        &active_volunteer_token,
         location_report_json(Utc::now())
     );
     assert_error(cancelled_report, StatusCode::CONFLICT, "conflict").await;
+}
+
+#[actix_web::test]
+async fn task_feedback_is_an_assignee_only_pending_review_clue_without_task_side_effects() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let commander_token = context.token(COMMANDER).await;
+    let volunteer_token = context.token(VOLUNTEER).await;
+    let family_token = context.token(FAMILY).await;
+    let admin_token = context.token(ADMIN).await;
+    let volunteer = context.authenticated(VOLUNTEER).await;
+    let second_volunteer_token = add_second_case_volunteer(&context, &case_id).await;
+    let source_clue_id = confirmed_clue!(&context, &app, &case_id, &commander_token);
+    let task_id = create_task!(
+        &app,
+        &case_id,
+        &commander_token,
+        &source_clue_id,
+        &volunteer.id
+    );
+
+    let before_active = submit_task_feedback!(&app, &task_id, &volunteer_token, feedback_json());
+    assert_error(before_active, StatusCode::CONFLICT, "conflict").await;
+    assert_eq!(
+        update_status!(&app, &task_id, &volunteer_token, "accepted").status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        update_status!(&app, &task_id, &volunteer_token, "active").status(),
+        StatusCode::OK
+    );
+
+    for token in [
+        &family_token,
+        &commander_token,
+        &second_volunteer_token,
+        &admin_token,
+    ] {
+        let forbidden = submit_task_feedback!(&app, &task_id, token, feedback_json());
+        assert_error(forbidden, StatusCode::NOT_FOUND, "not_found").await;
+    }
+
+    let invalid_location = submit_task_feedback!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        json!({
+            "content": "Observed a safe route.",
+            "location_precision": "approximate"
+        })
+    );
+    assert_error(
+        invalid_location,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+    let invalid_attachment = submit_task_feedback!(
+        &app,
+        &task_id,
+        &volunteer_token,
+        json!({ "content": "Observed a safe route.", "attachment_ids": ["missing"] })
+    );
+    assert_error(
+        invalid_attachment,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    let feedback = submit_task_feedback!(&app, &task_id, &volunteer_token, feedback_json());
+    assert_eq!(feedback.status(), StatusCode::CREATED);
+    let feedback: Value = test::read_body_json(feedback).await;
+    assert_eq!(feedback["task_id"], task_id);
+    assert_eq!(feedback["status"], "pending_review");
+    let feedback_clue_id = feedback["clue_id"]
+        .as_str()
+        .expect("feedback receipt should identify its clue");
+
+    let feedback_clue = clues::Entity::find_by_id(feedback_clue_id)
+        .one(&context.database)
+        .await
+        .expect("feedback clue lookup should succeed")
+        .expect("feedback should create a clue");
+    assert_eq!(feedback_clue.status, "pending_review");
+    assert_eq!(feedback_clue.source, "task_feedback");
+    assert_eq!(feedback_clue.source_type, "field_report");
+    assert_eq!(
+        feedback_clue.content,
+        "Observed a safe route and no immediate hazard."
+    );
+    assert_eq!(
+        feedback_clue.location_text.as_deref(),
+        Some("North gate walkway")
+    );
+    assert_eq!(
+        feedback_clue.location_precision.as_deref(),
+        Some("approximate")
+    );
+    assert_eq!(
+        feedback_clue.linked_task_reference.as_deref(),
+        Some(task_id.as_str())
+    );
+
+    let task = tasks::Entity::find_by_id(&task_id)
+        .one(&context.database)
+        .await
+        .expect("task lookup should succeed")
+        .expect("task should exist");
+    assert_eq!(task.status, "active");
+    assert_eq!(task.result_summary, None);
+
+    let audit = audit_events::Entity::find()
+        .filter(audit_events::Column::EntityId.eq(&task_id))
+        .filter(audit_events::Column::Action.eq("task.feedback_submitted"))
+        .one(&context.database)
+        .await
+        .expect("feedback audit lookup should succeed")
+        .expect("feedback should be audited");
+    let metadata = audit
+        .metadata_json
+        .expect("feedback audit should include metadata");
+    assert!(metadata.contains(feedback_clue_id));
+    assert!(!metadata.contains("Observed a safe route"));
+    assert!(!metadata.contains("North gate walkway"));
+
+    let reviewed = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/clues/{feedback_clue_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(
+                json!({ "status": "confirmed", "reason": "commander verified field feedback" }),
+            )
+            .to_request(),
+    )
+    .await;
+    assert_eq!(reviewed.status(), StatusCode::OK);
+
+    assert_eq!(
+        update_status!(&app, &task_id, &volunteer_token, "completed").status(),
+        StatusCode::OK
+    );
+    let completed_feedback =
+        submit_task_feedback!(&app, &task_id, &volunteer_token, feedback_json());
+    assert_error(completed_feedback, StatusCode::CONFLICT, "conflict").await;
+
+    let closed_case_id = context.create_case().await;
+    context
+        .add_member(&closed_case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&closed_case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let closed_case_source = confirmed_clue!(&context, &app, &closed_case_id, &commander_token);
+    let closed_case_task_id = create_task!(
+        &app,
+        &closed_case_id,
+        &commander_token,
+        &closed_case_source,
+        &volunteer.id
+    );
+    assert_eq!(
+        update_status!(&app, &closed_case_task_id, &volunteer_token, "accepted").status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        update_status!(&app, &closed_case_task_id, &volunteer_token, "active").status(),
+        StatusCode::OK
+    );
+    context.close_case(&closed_case_id).await;
+    let closed_case_feedback = submit_task_feedback!(
+        &app,
+        &closed_case_task_id,
+        &volunteer_token,
+        feedback_json()
+    );
+    assert_error(closed_case_feedback, StatusCode::CONFLICT, "conflict").await;
 }
 
 fn task_json(source_clue_id: &str, volunteer_user_id: &str) -> Value {
@@ -630,5 +891,14 @@ fn location_report_json(captured_at: chrono::DateTime<Utc>) -> Value {
         "longitude": 121.5,
         "accuracy_meters": 20,
         "captured_at": captured_at.to_rfc3339(),
+    })
+}
+
+fn feedback_json() -> Value {
+    json!({
+        "content": "Observed a safe route and no immediate hazard.",
+        "occurred_at": "2026-07-27T09:00:00Z",
+        "location_text": "North gate walkway",
+        "location_precision": "approximate"
     })
 }
