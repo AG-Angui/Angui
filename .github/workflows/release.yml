@@ -102,11 +102,15 @@ jobs:
           registry-url: https://registry.npmmirror.com
           mirror: https://npmmirror.com/mirrors/node
 
+      - name: Enable Yarn
+        run: corepack enable
+
       - name: Build release frontend
+        working-directory: frontend
         run: |
-          npm ci --prefix frontend
-          npm run lint:frontend
-          npm run build:frontend
+          yarn install --frozen-lockfile
+          yarn lint
+          yarn build
 
       - name: Stage release image contexts
         shell: bash

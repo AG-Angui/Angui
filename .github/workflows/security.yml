@@ -50,8 +50,8 @@ jobs:
           cargo audit --file Cargo.lock
           --ignore RUSTSEC-2023-0071
 
-  npm-audit:
-    name: npm high and critical advisories
+  yarn-audit:
+    name: yarn high and critical advisories
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -64,11 +64,15 @@ jobs:
         with:
           node-version: 24
 
+      - name: Enable Yarn
+        run: corepack enable
+
       - name: Audit frontend lockfile
-        # The lockfile uses npmmirror for package downloads, whose audit endpoint
-        # is not implemented. Audit against npm's official advisory endpoint.
+        # npmmirror does not implement the advisory endpoint, so audit against
+        # the public registry while ordinary installs continue using the mirror.
+        working-directory: frontend
         run: >-
-          npm audit --prefix frontend --package-lock-only --audit-level=high
+          yarn audit --level high
           --registry=https://registry.npmjs.org
 
   secrets:
