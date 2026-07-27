@@ -26,6 +26,7 @@
 | `PATCH` | `/api/cases/{case_id}/status` | `200` | 人工更新案件状态 |
 | `GET` | `/api/cases/{case_id}/clues` | `200` | 获取角色裁剪、可分页的线索时间轴 |
 | `POST` | `/api/cases/{case_id}/clues` | `201` | 提交待审核线索 |
+| `GET` | `/api/cases/{case_id}/places` | `200` | 获取按案件角色、审核状态和可见级别裁剪的地点 |
 | `POST` | `/api/cases/{case_id}/places` | `201` | 家属或指挥提交常去/关键地点，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/resource-configuration` | `200` | 获取当前案件可用的地点类型和图片限制 |
 | `POST` | `/api/cases/{case_id}/attachments` | `201` | 上传受控 JPEG/PNG 案件图片，始终待人工审核 |
@@ -190,6 +191,8 @@ Example:
 ## 地点与图片补充
 
 `POST /api/cases/{case_id}/places` 只允许该案件的 `family` 或 `commander` 成员调用。请求需要地点名称、由 `GET /api/cases/{case_id}/resource-configuration` 返回的地点类型、文字地址和 `public`、`confirmed` 或 `internal` 可见级别；经纬度必须同时提供，且服务端校验 longitude 在 -180..180、latitude 在 -90..90。地点来源由服务端按提交者的案件角色写入，客户端不能伪造。新地点的 `review_status` 初始为 `pending_review`，不会直接成为确认进展。志愿者不能通过此接口添加家庭地址或其他敏感地点。
+
+`GET /api/cases/{case_id}/places` 只对案件成员开放，非成员统一返回 `404`。服务端按案件角色裁剪数据：指挥可查看案件全部地点；家属可查看本人提交的地点，以及已确认且非内部的地点；志愿者仅可查看已确认的公开地点。未审核地点和内部搜索方向不会通过该接口暴露给非必要角色。
 
 `POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
 

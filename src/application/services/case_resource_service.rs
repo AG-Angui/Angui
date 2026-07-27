@@ -217,8 +217,12 @@ pub async fn visible_places(
         CaseRole::Commander => query,
         CaseRole::Family => query.filter(
             Condition::any()
-                .add(case_places::Column::Visibility.ne("internal"))
-                .add(case_places::Column::CreatedByUserId.eq(viewer_id)),
+                .add(case_places::Column::CreatedByUserId.eq(viewer_id))
+                .add(
+                    Condition::all()
+                        .add(case_places::Column::ReviewStatus.eq("confirmed"))
+                        .add(case_places::Column::Visibility.ne("internal")),
+                ),
         ),
         CaseRole::Volunteer => query
             .filter(case_places::Column::Visibility.eq("public"))

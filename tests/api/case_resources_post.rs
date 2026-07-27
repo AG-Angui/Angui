@@ -2,9 +2,15 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
+use angui::{
+    entities::case_places,
+    models::{CreateCasePlaceRequest, PlaceVisibility},
+    services::case_resource_service,
+};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use serde_json::json;
 
-use crate::support::{COMMANDER, FAMILY, TestContext, VOLUNTEER, assert_error};
+use crate::support::{COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
 
 #[actix_web::test]
 async fn resource_configuration_is_available_only_to_case_members() {
@@ -70,6 +76,172 @@ async fn post_case_places_requires_family_or_commander_and_returns_pending_revie
         .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
         .set_json(json!({ "name": "Home", "place_type": "other", "address": "Private", "visibility": "internal" })).to_request()).await;
     assert_error(denied, StatusCode::FORBIDDEN, "forbidden").await;
+}
+
+#[actix_web::test]
+async fn get_case_places_applies_role_visibility_and_hides_non_members() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let place_types = context.app_state().case_place_types;
+    let family = context.authenticated(FAMILY).await;
+    let commander = context.authenticated(COMMANDER).await;
+    let own_draft = case_resource_service::create_place(
+        &context.database,
+        &family,
+        &case_id,
+        CreateCasePlaceRequest {
+            name: "Family private draft".to_owned(),
+            place_type: "frequent".to_owned(),
+            address: "Fictional family address".to_owned(),
+            longitude: None,
+            latitude: None,
+            visibility: PlaceVisibility::Internal,
+        },
+        &place_types,
+    )
+    .await
+    .expect("fixture place should be created");
+    let public_confirmed = case_resource_service::create_place(
+        &context.database,
+        &commander,
+        &case_id,
+        CreateCasePlaceRequest {
+            name: "Confirmed public meeting point".to_owned(),
+            place_type: "key_location".to_owned(),
+            address: "Fictional public square".to_owned(),
+            longitude: Some(117.2272),
+            latitude: Some(31.8206),
+            visibility: PlaceVisibility::Public,
+        },
+        &place_types,
+    )
+    .await
+    .expect("fixture place should be created");
+    let confirmed_visible = case_resource_service::create_place(
+        &context.database,
+        &commander,
+        &case_id,
+        CreateCasePlaceRequest {
+            name: "Confirmed non-public meeting point".to_owned(),
+            place_type: "key_location".to_owned(),
+            address: "Fictional confirmed square".to_owned(),
+            longitude: None,
+            latitude: None,
+            visibility: PlaceVisibility::Confirmed,
+        },
+        &place_types,
+    )
+    .await
+    .expect("fixture place should be created");
+    let unreviewed_public = case_resource_service::create_place(
+        &context.database,
+        &commander,
+        &case_id,
+        CreateCasePlaceRequest {
+            name: "Unreviewed public report".to_owned(),
+            place_type: "other".to_owned(),
+            address: "Fictional unreviewed address".to_owned(),
+            longitude: None,
+            latitude: None,
+            visibility: PlaceVisibility::Public,
+        },
+        &place_types,
+    )
+    .await
+    .expect("fixture place should be created");
+    let internal_confirmed = case_resource_service::create_place(
+        &context.database,
+        &commander,
+        &case_id,
+        CreateCasePlaceRequest {
+            name: "Internal search direction".to_owned(),
+            place_type: "other".to_owned(),
+            address: "Fictional internal address".to_owned(),
+            longitude: None,
+            latitude: None,
+            visibility: PlaceVisibility::Internal,
+        },
+        &place_types,
+    )
+    .await
+    .expect("fixture place should be created");
+    mark_place_confirmed(&context, &public_confirmed.id).await;
+    mark_place_confirmed(&context, &confirmed_visible.id).await;
+    mark_place_confirmed(&context, &internal_confirmed.id).await;
+
+    let app = crate::init_api_app!(&context);
+    let request_for = |token: String| {
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/places"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request()
+    };
+
+    let family_places: Vec<serde_json::Value> = test::read_body_json(
+        test::call_service(&app, request_for(context.token(FAMILY).await)).await,
+    )
+    .await;
+    assert!(
+        family_places
+            .iter()
+            .any(|place| place["id"] == own_draft.id)
+    );
+    assert!(
+        family_places
+            .iter()
+            .any(|place| place["id"] == public_confirmed.id)
+    );
+    assert!(
+        family_places
+            .iter()
+            .any(|place| place["id"] == confirmed_visible.id)
+    );
+    assert!(
+        !family_places
+            .iter()
+            .any(|place| place["id"] == unreviewed_public.id)
+    );
+    assert!(
+        !family_places
+            .iter()
+            .any(|place| place["id"] == internal_confirmed.id)
+    );
+
+    let volunteer_places: Vec<serde_json::Value> = test::read_body_json(
+        test::call_service(&app, request_for(context.token(VOLUNTEER).await)).await,
+    )
+    .await;
+    assert_eq!(volunteer_places.len(), 1);
+    assert_eq!(volunteer_places[0]["id"], public_confirmed.id);
+
+    let commander_places: Vec<serde_json::Value> = test::read_body_json(
+        test::call_service(&app, request_for(context.token(COMMANDER).await)).await,
+    )
+    .await;
+    assert_eq!(commander_places.len(), 5);
+
+    let hidden = test::call_service(&app, request_for(context.token(LEARNER).await)).await;
+    assert_error(hidden, StatusCode::NOT_FOUND, "not_found").await;
+}
+
+async fn mark_place_confirmed(context: &TestContext, place_id: &str) {
+    let place = case_places::Entity::find_by_id(place_id)
+        .one(&context.database)
+        .await
+        .expect("fixture place should load")
+        .expect("fixture place should exist");
+    let mut place = place.into_active_model();
+    place.review_status = Set("confirmed".to_owned());
+    place
+        .update(&context.database)
+        .await
+        .expect("fixture place should update");
 }
 
 #[actix_web::test]
