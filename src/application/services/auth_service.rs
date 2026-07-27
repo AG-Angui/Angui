@@ -209,6 +209,13 @@ pub async fn update_profile(
         validate_preferences(preferences)?;
     }
 
+    let UpdateUserProfileRequest {
+        display_name,
+        avatar_reference,
+        preferences: requested_preferences,
+    } = request;
+    let requested_avatar_reference = avatar_reference.map(optional_trimmed);
+
     let transaction = db.begin().await?;
     let user = users::Entity::find_by_id(&auth.id)
         .one(&transaction)
@@ -218,7 +225,7 @@ pub async fn update_profile(
     let timestamp = now();
     let mut changed_fields = Vec::new();
     let mut active_user = user.into_active_model();
-    if let Some(display_name) = request.display_name {
+    if let Some(display_name) = display_name {
         let display_name = display_name.trim().to_owned();
         if current_display_name != display_name {
             active_user.display_name = Set(display_name);
@@ -239,14 +246,20 @@ pub async fn update_profile(
         .map(|profile| preferences_from_json(&profile.preferences_json))
         .transpose()?
         .unwrap_or_default();
-    if let Some(value) = request.avatar_reference {
-        let value = optional_trimmed(value);
+    let avatar_changed = if let Some(value) = requested_avatar_reference {
         if value != avatar_reference {
             avatar_reference = value;
             changed_fields.push("avatar_reference");
+            true
+        } else {
+            false
         }
-    }
-    if let Some(value) = request.preferences {
+    } else {
+        false
+    };
+    let preferences_changed = if let Some(value) = requested_preferences {
+        let changed = value.locale != preferences.locale
+            || value.reduced_motion != preferences.reduced_motion;
         if value.locale != preferences.locale {
             changed_fields.push("preferences.locale");
         }
@@ -254,15 +267,36 @@ pub async fn update_profile(
             changed_fields.push("preferences.reduced_motion");
         }
         preferences = value;
-    }
+        changed
+    } else {
+        false
+    };
     let preferences_json = serde_json::to_string(&preferences).map_err(|_| ApiError::Internal)?;
     match existing {
         Some(profile) => {
-            let mut active = profile.into_active_model();
-            active.avatar_reference = Set(avatar_reference.clone());
-            active.preferences_json = Set(preferences_json);
-            active.updated_at = Set(timestamp.clone());
-            active.update(&transaction).await?;
+            if avatar_changed || preferences_changed {
+                let mut update = user_profiles::ActiveModel {
+                    updated_at: Set(timestamp.clone()),
+                    ..Default::default()
+                };
+                if avatar_changed {
+                    update.avatar_reference = Set(avatar_reference.clone());
+                }
+                if preferences_changed {
+                    update.preferences_json = Set(preferences_json);
+                }
+                let result = user_profiles::Entity::update_many()
+                    .set(update)
+                    .filter(user_profiles::Column::UserId.eq(&auth.id))
+                    .filter(user_profiles::Column::UpdatedAt.eq(&profile.updated_at))
+                    .exec(&transaction)
+                    .await?;
+                if result.rows_affected != 1 {
+                    return Err(ApiError::Conflict(
+                        "profile was updated concurrently; refresh and retry".to_owned(),
+                    ));
+                }
+            }
         }
         None => {
             user_profiles::ActiveModel {
