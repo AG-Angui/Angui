@@ -152,6 +152,17 @@ export interface CreateCasePayload {
   last_seen_location: string | null
 }
 
+export interface UpdateElderProfilePayload {
+  display_name?: string
+  age?: number
+  gender?: string
+  physical_description?: string
+  clothing_description?: string
+  health_notes?: string
+  last_seen_at?: string
+  last_seen_location?: string
+}
+
 export interface CaseMember {
   user_id: string
   email: string
@@ -272,6 +283,18 @@ export function updateCaseStatus(
   return apiRequest<CaseDetail>(
     `/cases/${caseId}/status`,
     { method: 'PATCH', body: JSON.stringify({ status }) },
+    token,
+  )
+}
+
+export function updateElderProfile(
+  token: string,
+  caseId: string,
+  payload: UpdateElderProfilePayload,
+): Promise<CaseDetail> {
+  return apiRequest<CaseDetail>(
+    `/cases/${caseId}/elder-profile`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
     token,
   )
 }

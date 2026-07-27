@@ -20,6 +20,7 @@ mod m0017_add_two_phase_intake_questions;
 mod m0018_create_case_places_and_attachments;
 mod m0019_expand_clue_lifecycle;
 mod m0020_create_tasks_and_location_reports;
+mod m0021_create_user_profiles_and_elder_profile_revisions;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -49,6 +50,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0018_create_case_places_and_attachments::Migration),
             Box::new(m0019_expand_clue_lifecycle::Migration),
             Box::new(m0020_create_tasks_and_location_reports::Migration),
+            Box::new(m0021_create_user_profiles_and_elder_profile_revisions::Migration),
         ]
     }
 }
@@ -320,7 +322,9 @@ mod tests {
             .await
             .expect("clue with a distinct report time should be stored");
 
-        assert!(Migrator::down(&database, Some(2)).await.is_err());
+        // The current tail migration stores profile revisions, so roll it back
+        // before exercising the lifecycle rollback guard from migration 0019.
+        assert!(Migrator::down(&database, Some(3)).await.is_err());
         assert!(database
             .query_one(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
@@ -395,7 +399,9 @@ mod tests {
             .await
             .expect("simulated task location should reference the assignment");
 
-        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        // Migration 0021 is non-destructive here; the second rollback reaches
+        // the task migration whose safety guard must reject this fixture.
+        assert!(Migrator::down(&database, Some(2)).await.is_err());
         database
             .execute_unprepared("DELETE FROM tasks WHERE id = 'task-1'")
             .await

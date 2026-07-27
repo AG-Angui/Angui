@@ -5,6 +5,7 @@ import {
   LogOut,
   Navigation,
   RadioTower,
+  UserRound,
 } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router'
 import brandMark from '../../../assets/brand/angui-mark.svg'
@@ -25,6 +26,7 @@ const navigation: NavigationItem[] = [
   { to: '/family', label: '家属端', icon: HeartHandshake },
   { to: '/command', label: '指挥端', icon: RadioTower, capability: 'commander' },
   { to: '/volunteer', label: '志愿者端', icon: Navigation, capability: 'volunteer' },
+  { to: '/profile', label: '个人资料', icon: UserRound },
 ]
 
 const roleLabels: Record<GlobalCapability, string> = {

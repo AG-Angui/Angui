@@ -6,6 +6,7 @@ import { AppShell } from './components/AppShell'
 import { CaseWorkspacePage } from './pages/CaseWorkspacePage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
+import { ProfilePage } from './pages/ProfilePage'
 
 function CaseRoleRoute({
   capability,
@@ -39,6 +40,7 @@ function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
+        <Route path="profile" element={<ProfilePage />} />
         <Route
           path="family"
           element={

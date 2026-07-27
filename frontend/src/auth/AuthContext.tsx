@@ -85,6 +85,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setIsLoggingOut(false)
         }
       },
+      refreshUser: async () => {
+        if (!token) return
+        const currentUser = await getCurrentUser(token)
+        setUser(currentUser)
+      },
     }),
     [clearSession, isLoading, isLoggingOut, sessionNotice, token, user],
   )

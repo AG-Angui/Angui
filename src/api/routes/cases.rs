@@ -8,7 +8,7 @@ use crate::{
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseResourceConfigurationResponse,
         CreateCasePlaceRequest, CreateCaseRequest, CreateClueRequest, CreateTaskRequest,
-        TaskListQuery, UpdateCaseStatusRequest,
+        TaskListQuery, UpdateCaseStatusRequest, UpdateElderProfileRequest,
     },
     roles::CaseRole,
     services::case_service,
@@ -21,6 +21,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("", web::post().to(create_case))
             .route("/{case_id}", web::get().to(get_case))
             .route("/{case_id}/status", web::patch().to(update_case_status))
+            .route(
+                "/{case_id}/elder-profile",
+                web::patch().to(update_elder_profile),
+            )
             .route("/{case_id}/clues", web::get().to(list_clues))
             .route("/{case_id}/clues", web::post().to(create_clue))
             .route("/{case_id}/tasks", web::get().to(list_tasks))
@@ -193,6 +197,17 @@ async fn update_case_status(
 ) -> Result<HttpResponse, ApiError> {
     let case =
         case_service::update_case_status(&state.db, &auth, &case_id, request.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(case))
+}
+
+async fn update_elder_profile(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    request: web::Json<UpdateElderProfileRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let case = case_service::update_elder_profile(&state.db, &auth, &case_id, request.into_inner())
+        .await?;
     Ok(HttpResponse::Ok().json(case))
 }
 

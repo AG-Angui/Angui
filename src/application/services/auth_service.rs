@@ -12,9 +12,12 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    entities::{audit_events, auth_sessions, user_global_capabilities, users},
+    entities::{audit_events, auth_sessions, user_global_capabilities, user_profiles, users},
     error::ApiError,
-    models::{AuthenticatedUser, LoginRequest, LoginResponse, UserResponse},
+    models::{
+        AuthenticatedUser, LoginRequest, LoginResponse, UpdateUserProfileRequest, UserPreferences,
+        UserProfileResponse, UserResponse,
+    },
     roles::{AccountType, GlobalCapability},
 };
 
@@ -157,6 +160,140 @@ pub async fn logout(db: &DatabaseConnection, auth: &AuthenticatedUser) -> Result
     .await?;
     transaction.commit().await?;
     Ok(())
+}
+
+pub async fn get_profile(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<UserProfileResponse, ApiError> {
+    let profile = user_profiles::Entity::find_by_id(&auth.id).one(db).await?;
+    let (avatar_reference, preferences) = match profile {
+        Some(profile) => (
+            profile.avatar_reference,
+            preferences_from_json(&profile.preferences_json)?,
+        ),
+        None => (None, UserPreferences::default()),
+    };
+    Ok(UserProfileResponse {
+        id: auth.id.clone(),
+        email: auth.email.clone(),
+        display_name: auth.display_name.clone(),
+        account_type: auth.account_type,
+        global_capabilities: auth.global_capabilities.clone(),
+        team_name: None,
+        avatar_reference,
+        preferences,
+    })
+}
+
+pub async fn update_profile(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    request: UpdateUserProfileRequest,
+) -> Result<UserProfileResponse, ApiError> {
+    if request.display_name.is_none()
+        && request.avatar_reference.is_none()
+        && request.preferences.is_none()
+    {
+        return Err(ApiError::Validation(
+            "at least one profile field is required".to_owned(),
+        ));
+    }
+    if let Some(display_name) = &request.display_name {
+        validate_display_name(display_name)?;
+    }
+    if let Some(avatar_reference) = &request.avatar_reference {
+        validate_avatar_reference(avatar_reference)?;
+    }
+    if let Some(preferences) = &request.preferences {
+        validate_preferences(preferences)?;
+    }
+
+    let transaction = db.begin().await?;
+    let user = users::Entity::find_by_id(&auth.id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::Unauthorized("invalid or expired session".to_owned()))?;
+    let current_display_name = user.display_name.clone();
+    let timestamp = now();
+    let mut changed_fields = Vec::new();
+    let mut active_user = user.into_active_model();
+    if let Some(display_name) = request.display_name {
+        let display_name = display_name.trim().to_owned();
+        if current_display_name != display_name {
+            active_user.display_name = Set(display_name);
+            active_user.updated_at = Set(timestamp.clone());
+            changed_fields.push("display_name");
+        }
+    }
+    active_user.update(&transaction).await?;
+
+    let existing = user_profiles::Entity::find_by_id(&auth.id)
+        .one(&transaction)
+        .await?;
+    let mut avatar_reference = existing
+        .as_ref()
+        .and_then(|profile| profile.avatar_reference.clone());
+    let mut preferences = existing
+        .as_ref()
+        .map(|profile| preferences_from_json(&profile.preferences_json))
+        .transpose()?
+        .unwrap_or_default();
+    if let Some(value) = request.avatar_reference {
+        let value = optional_trimmed(value);
+        if value != avatar_reference {
+            avatar_reference = value;
+            changed_fields.push("avatar_reference");
+        }
+    }
+    if let Some(value) = request.preferences {
+        if value.locale != preferences.locale {
+            changed_fields.push("preferences.locale");
+        }
+        if value.reduced_motion != preferences.reduced_motion {
+            changed_fields.push("preferences.reduced_motion");
+        }
+        preferences = value;
+    }
+    let preferences_json = serde_json::to_string(&preferences).map_err(|_| ApiError::Internal)?;
+    match existing {
+        Some(profile) => {
+            let mut active = profile.into_active_model();
+            active.avatar_reference = Set(avatar_reference.clone());
+            active.preferences_json = Set(preferences_json);
+            active.updated_at = Set(timestamp.clone());
+            active.update(&transaction).await?;
+        }
+        None => {
+            user_profiles::ActiveModel {
+                user_id: Set(auth.id.clone()),
+                avatar_reference: Set(avatar_reference.clone()),
+                preferences_json: Set(preferences_json),
+                created_at: Set(timestamp.clone()),
+                updated_at: Set(timestamp.clone()),
+            }
+            .insert(&transaction)
+            .await?;
+        }
+    }
+    if !changed_fields.is_empty() {
+        write_profile_audit(&transaction, auth, &changed_fields).await?;
+    }
+    transaction.commit().await?;
+    let user = users::Entity::find_by_id(&auth.id)
+        .one(db)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    Ok(UserProfileResponse {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        account_type: account_type_from_database(&user.account_type)?,
+        global_capabilities: global_capabilities_for_user(db, &auth.id).await?,
+        team_name: None,
+        avatar_reference,
+        preferences,
+    })
 }
 
 pub async fn bootstrap_demo_users(
@@ -376,6 +513,70 @@ async fn write_auth_audit<C: sea_orm::ConnectionTrait>(
     .insert(db)
     .await?;
     Ok(())
+}
+
+async fn write_profile_audit<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    auth: &AuthenticatedUser,
+    changed_fields: &[&str],
+) -> Result<(), ApiError> {
+    audit_events::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        case_id: Set(None),
+        actor: Set(auth.id.clone()),
+        action: Set("user.profile_updated".to_owned()),
+        entity_type: Set("user_profile".to_owned()),
+        entity_id: Set(auth.id.clone()),
+        metadata_json: Set(Some(
+            json!({ "changed_fields": changed_fields }).to_string(),
+        )),
+        created_at: Set(now()),
+    }
+    .insert(db)
+    .await?;
+    Ok(())
+}
+
+fn preferences_from_json(value: &str) -> Result<UserPreferences, ApiError> {
+    serde_json::from_str(value).map_err(|_| {
+        ApiError::Database(sea_orm::DbErr::Custom(
+            "user profile preferences are invalid".to_owned(),
+        ))
+    })
+}
+
+fn validate_display_name(value: &str) -> Result<(), ApiError> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 120 {
+        return Err(ApiError::Validation(
+            "display_name must contain between 1 and 120 characters".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_avatar_reference(value: &str) -> Result<(), ApiError> {
+    let value = value.trim();
+    if value.chars().count() > 500 || value.chars().any(char::is_control) {
+        return Err(ApiError::Validation(
+            "avatar_reference must be at most 500 printable characters".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_preferences(value: &UserPreferences) -> Result<(), ApiError> {
+    if !matches!(value.locale.as_str(), "zh-CN" | "en-US") {
+        return Err(ApiError::Validation(
+            "preferences.locale is unsupported".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn optional_trimmed(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn now() -> String {

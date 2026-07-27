@@ -21,6 +21,7 @@ vi.mock('./api/cases', () => ({
   addCaseMember: vi.fn(),
   reviewClue: vi.fn(),
   updateCaseStatus: vi.fn(),
+  updateElderProfile: vi.fn(),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
 }))
 vi.mock('./components/ServiceStatus', () => ({ ServiceStatus: () => <span>服务状态</span> }))
@@ -39,6 +40,7 @@ function setAuth(
     sessionNotice: null,
     login: vi.fn(),
     logout: vi.fn(),
+    refreshUser: vi.fn(),
   }
 }
 

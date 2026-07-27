@@ -37,11 +37,14 @@ async fn every_protected_endpoint_rejects_missing_and_invalid_bearer_tokens() {
     let app = crate::init_api_app!(&context);
 
     assert_unauthorized!(app, get, "/api/auth/me");
+    assert_unauthorized!(app, get, "/api/users/me/profile");
+    assert_unauthorized!(app, patch, "/api/users/me/profile");
     assert_unauthorized!(app, post, "/api/auth/logout");
     assert_unauthorized!(app, get, "/api/cases");
     assert_unauthorized!(app, post, "/api/cases");
     assert_unauthorized!(app, get, "/api/cases/not-used");
     assert_unauthorized!(app, patch, "/api/cases/not-used/status");
+    assert_unauthorized!(app, patch, "/api/cases/not-used/elder-profile");
     assert_unauthorized!(app, post, "/api/cases/not-used/members");
     assert_unauthorized!(app, get, "/api/cases/not-used/clues");
     assert_unauthorized!(app, post, "/api/cases/not-used/clues");

@@ -11,13 +11,15 @@ use uuid::Uuid;
 use crate::{
     entities::{
         audit_events, case_attachments, case_memberships, cases, clue_attachment_links,
-        clue_attributions, clues, elder_profiles, user_global_capabilities, users,
+        clue_attributions, clues, elder_profile_revisions, elder_profiles,
+        user_global_capabilities, users,
     },
     error::ApiError,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseDetail, CaseListItem, CaseMemberResponse,
         ClueResponse, ClueTimelineQuery, ClueTimelineResponse, CreateCaseRequest,
         CreateClueRequest, ElderProfileResponse, ReviewClueRequest, UpdateCaseStatusRequest,
+        UpdateElderProfileRequest,
     },
     roles::{AccountType, CaseRole, GlobalCapability},
 };
@@ -200,6 +202,122 @@ pub async fn update_case_status(
     )
     .await?;
 
+    transaction.commit().await?;
+    get_case(db, auth, case_id).await
+}
+
+pub async fn update_elder_profile(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    request: UpdateElderProfileRequest,
+) -> Result<CaseDetail, ApiError> {
+    validate_elder_profile_update(&request)?;
+    let transaction = db.begin().await?;
+    require_case_role(
+        &transaction,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander],
+    )
+    .await?;
+    let profile = elder_profiles::Entity::find()
+        .filter(elder_profiles::Column::CaseId.eq(case_id))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    let previous = ElderProfileResponse::from(profile.clone());
+    let mut active = profile.into_active_model();
+    let mut changed_fields = Vec::new();
+    if let Some(value) = request.display_name {
+        let value = value.trim().to_owned();
+        if previous.display_name != value {
+            active.display_name = Set(value);
+            changed_fields.push("display_name");
+        }
+    }
+    if let Some(value) = request.age
+        && previous.age != Some(value)
+    {
+        active.age = Set(Some(value));
+        changed_fields.push("age");
+    }
+    if let Some(value) = request.gender {
+        let value = trim_optional(Some(value));
+        if previous.gender != value {
+            active.gender = Set(value);
+            changed_fields.push("gender");
+        }
+    }
+    if let Some(value) = request.physical_description {
+        let value = trim_optional(Some(value));
+        if previous.physical_description != value {
+            active.physical_description = Set(value);
+            changed_fields.push("physical_description");
+        }
+    }
+    if let Some(value) = request.clothing_description {
+        let value = trim_optional(Some(value));
+        if previous.clothing_description != value {
+            active.clothing_description = Set(value);
+            changed_fields.push("clothing_description");
+        }
+    }
+    if let Some(value) = request.health_notes {
+        let value = trim_optional(Some(value));
+        if previous.health_notes != value {
+            active.health_notes = Set(value);
+            changed_fields.push("health_notes");
+        }
+    }
+    if let Some(value) = request.last_seen_at {
+        let value = trim_optional(Some(value));
+        if previous.last_seen_at != value {
+            active.last_seen_at = Set(value);
+            changed_fields.push("last_seen_at");
+        }
+    }
+    if let Some(value) = request.last_seen_location {
+        let value = trim_optional(Some(value));
+        if previous.last_seen_location != value {
+            active.last_seen_location = Set(value);
+            changed_fields.push("last_seen_location");
+        }
+    }
+    if changed_fields.is_empty() {
+        return Err(ApiError::Validation(
+            "at least one changed elder profile field is required".to_owned(),
+        ));
+    }
+    active.updated_at = Set(now());
+    let updated = active.update(&transaction).await?;
+    let timestamp = now();
+    elder_profile_revisions::ActiveModel {
+        id: Set(new_id()),
+        elder_profile_id: Set(updated.id.clone()),
+        case_id: Set(case_id.to_owned()),
+        updated_by_user_id: Set(auth.id.clone()),
+        previous_profile_json: Set(
+            serde_json::to_string(&previous).map_err(|_| ApiError::Internal)?
+        ),
+        updated_profile_json: Set(serde_json::to_string(&ElderProfileResponse::from(
+            updated.clone(),
+        ))
+        .map_err(|_| ApiError::Internal)?),
+        created_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+    write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "elder_profile.updated",
+        "elder_profile",
+        updated.id,
+        Some(json!({ "changed_fields": changed_fields })),
+    )
+    .await?;
     transaction.commit().await?;
     get_case(db, auth, case_id).await
 }
@@ -1007,6 +1125,51 @@ fn validate_case_request(request: &CreateCaseRequest) -> Result<(), ApiError> {
         return Err(ApiError::Validation(
             "last_seen_location is required".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_elder_profile_update(request: &UpdateElderProfileRequest) -> Result<(), ApiError> {
+    if request.display_name.is_none()
+        && request.age.is_none()
+        && request.gender.is_none()
+        && request.physical_description.is_none()
+        && request.clothing_description.is_none()
+        && request.health_notes.is_none()
+        && request.last_seen_at.is_none()
+        && request.last_seen_location.is_none()
+    {
+        return Err(ApiError::Validation(
+            "at least one elder profile field is required".to_owned(),
+        ));
+    }
+    if let Some(display_name) = &request.display_name {
+        let value = display_name.trim();
+        if value.is_empty() || value.chars().count() > 120 {
+            return Err(ApiError::Validation(
+                "display_name must contain between 1 and 120 characters".to_owned(),
+            ));
+        }
+    }
+    if request.age.is_some_and(|age| !(0..=130).contains(&age)) {
+        return Err(ApiError::Validation(
+            "age must be between 0 and 130".to_owned(),
+        ));
+    }
+    validate_optional_length("gender", &request.gender, 64)?;
+    validate_optional_length("physical_description", &request.physical_description, 2000)?;
+    validate_optional_length("clothing_description", &request.clothing_description, 2000)?;
+    validate_optional_length("health_notes", &request.health_notes, 2000)?;
+    validate_optional_length("last_seen_at", &request.last_seen_at, 40)?;
+    validate_optional_length("last_seen_location", &request.last_seen_location, 500)?;
+    if let Some(value) = request
+        .last_seen_at
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        chrono::DateTime::parse_from_rfc3339(value).map_err(|_| {
+            ApiError::Validation("last_seen_at must be an RFC 3339 timestamp".to_owned())
+        })?;
     }
     Ok(())
 }
