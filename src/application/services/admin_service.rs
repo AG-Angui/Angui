@@ -389,11 +389,12 @@ fn validate_timestamp_filter(
 ) -> Result<Option<String>, ApiError> {
     value
         .map(|value| {
-            let value = value.trim().to_owned();
-            DateTime::parse_from_rfc3339(&value).map_err(|_| {
+            let timestamp = DateTime::parse_from_rfc3339(value.trim()).map_err(|_| {
                 ApiError::Validation(format!("{label} must be an RFC 3339 timestamp"))
             })?;
-            Ok(value)
+            Ok(timestamp
+                .with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         })
         .transpose()
 }
@@ -568,4 +569,44 @@ fn sort_users(items: &mut [AdminUserResponse], query: &ValidatedUserQuery) {
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ValidatedAuditQuery;
+    use crate::models::AdminAuditEventQuery;
+
+    fn audit_query(from: &str, to: &str) -> AdminAuditEventQuery {
+        AdminAuditEventQuery {
+            case_id: None,
+            entity_type: None,
+            action: None,
+            from: Some(from.to_owned()),
+            to: Some(to.to_owned()),
+            page: None,
+            page_size: None,
+            sort: None,
+            order: None,
+        }
+    }
+
+    #[test]
+    fn audit_time_filters_compare_canonical_utc_timestamps() {
+        let query = ValidatedAuditQuery::try_from(audit_query(
+            "2026-01-01T05:00:00+05:00",
+            "2026-01-01T00:30:00Z",
+        ))
+        .expect("chronologically ordered timestamps with different offsets should be accepted");
+        assert_eq!(query.from.as_deref(), Some("2026-01-01T00:00:00.000Z"));
+        assert_eq!(query.to.as_deref(), Some("2026-01-01T00:30:00.000Z"));
+
+        assert!(
+            ValidatedAuditQuery::try_from(audit_query(
+                "2026-01-01T00:30:00Z",
+                "2026-01-01T05:00:00+05:00",
+            ))
+            .is_err(),
+            "chronologically reversed timestamps must be rejected after UTC normalization"
+        );
+    }
 }
