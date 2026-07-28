@@ -38,7 +38,7 @@ pub async fn get_public_progress(
         .filter(|clue| clue.status == "confirmed")
         .map(|clue| CasePublicProgressItem {
             clue_id: clue.id.clone(),
-            content: clue.content.clone(),
+            progress_type: "confirmed_update".to_owned(),
             review_status: clue.status.clone(),
             updated_at: clue.updated_at.clone(),
         })
@@ -54,7 +54,7 @@ pub async fn get_public_progress(
         })
         .map(|clue| CasePublicProgressItem {
             clue_id: clue.id.clone(),
-            content: clue.content.clone(),
+            progress_type: "family_follow_up".to_owned(),
             review_status: clue.status.clone(),
             updated_at: clue.updated_at.clone(),
         })

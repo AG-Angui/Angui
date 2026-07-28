@@ -805,11 +805,11 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
           {publicProgress && <div className="mt-3 space-y-3">
             <div className="rounded-md border border-emerald-200 bg-white p-3">
               <h4 className="m-0 text-sm font-semibold text-slate-900">已确认信息</h4>
-              {publicProgress.confirmed_progress.length === 0 ? <p className="mb-0 mt-2 text-sm text-slate-500">暂时没有可公开的已确认信息。</p> : publicProgress.confirmed_progress.map((item) => <p key={item.clue_id} className="mb-0 mt-2 text-sm leading-6 text-slate-700">{item.content}<span className="ml-2 text-xs text-slate-500">{formatDate(item.updated_at)}</span></p>)}
+              {publicProgress.confirmed_progress.length === 0 ? <p className="mb-0 mt-2 text-sm text-slate-500">暂时没有可公开的已确认信息。</p> : publicProgress.confirmed_progress.map((item) => <p key={item.clue_id} className="mb-0 mt-2 text-sm leading-6 text-slate-700">已确认一项案件进展。<span className="ml-2 text-xs text-slate-500">{formatDate(item.updated_at)}</span></p>)}
             </div>
             <div className="rounded-md border border-amber-200 bg-white p-3">
               <h4 className="m-0 text-sm font-semibold text-slate-900">需要补充或核实</h4>
-              {publicProgress.requested_family_information.length === 0 ? <p className="mb-0 mt-2 text-sm text-slate-500">当前没有需要你补充的项目。</p> : publicProgress.requested_family_information.map((item) => <p key={item.clue_id} className="mb-0 mt-2 text-sm leading-6 text-slate-700">{item.content}<span className="ml-2 text-xs text-slate-500">{statusLabels[item.review_status] ?? item.review_status}</span></p>)}
+              {publicProgress.requested_family_information.length === 0 ? <p className="mb-0 mt-2 text-sm text-slate-500">当前没有需要你补充的项目。</p> : publicProgress.requested_family_information.map((item) => <p key={item.clue_id} className="mb-0 mt-2 text-sm leading-6 text-slate-700">你提交的一项信息仍待补充或核实。<span className="ml-2 text-xs text-slate-500">{statusLabels[item.review_status] ?? item.review_status}</span></p>)}
             </div>
             <ul className="m-0 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-600">{publicProgress.safety_and_contact_reminders.map((reminder) => <li key={reminder}>{reminder}</li>)}</ul>
           </div>}

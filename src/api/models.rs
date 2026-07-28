@@ -785,7 +785,7 @@ pub struct CasePublicProgressResponse {
 #[derive(Debug, Serialize)]
 pub struct CasePublicProgressItem {
     pub clue_id: String,
-    pub content: String,
+    pub progress_type: String,
     pub review_status: String,
     pub updated_at: String,
 }

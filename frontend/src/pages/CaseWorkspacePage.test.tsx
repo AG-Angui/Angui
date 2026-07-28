@@ -141,17 +141,17 @@ describe('CaseWorkspacePage', () => {
     await waitFor(() => expect(mocked.getCasePublicProgress).toHaveBeenCalledWith('test-session', 'case-2'))
 
     await act(async () => {
-      secondProgress.resolve({ case_id: 'case-2', status: 'active', generated_at: '2026-07-24T00:00:00Z', confirmed_progress: [{ clue_id: 'new', content: 'new public progress', review_status: 'confirmed', updated_at: '2026-07-24T00:00:00Z' }], requested_family_information: [], safety_and_contact_reminders: [] })
+      secondProgress.resolve({ case_id: 'case-2', status: 'active', generated_at: '2026-07-24T00:00:00Z', confirmed_progress: [{ clue_id: 'new', progress_type: 'confirmed_update', review_status: 'confirmed', updated_at: '2026-07-24T00:00:00Z' }], requested_family_information: [], safety_and_contact_reminders: [] })
       await secondProgress.promise
     })
-    expect(await screen.findByText('new public progress')).toBeInTheDocument()
+    expect(await screen.findByText('已确认一项案件进展。')).toBeInTheDocument()
 
     await act(async () => {
-      firstProgress.resolve({ case_id: 'case-1', status: 'active', generated_at: '2026-07-24T00:00:00Z', confirmed_progress: [{ clue_id: 'old', content: 'stale public progress', review_status: 'confirmed', updated_at: '2026-07-24T00:00:00Z' }], requested_family_information: [], safety_and_contact_reminders: [] })
-      await firstProgress.promise
+      firstProgress.reject(new Error('stale public progress failure'))
+      await firstProgress.promise.catch(() => undefined)
     })
-    expect(screen.getByText('new public progress')).toBeInTheDocument()
-    expect(screen.queryByText('stale public progress')).not.toBeInTheDocument()
+    expect(screen.getByText('已确认一项案件进展。')).toBeInTheDocument()
+    expect(screen.queryByText('stale public progress failure')).not.toBeInTheDocument()
   })
 
   it('lets an authorized commander invite the demo volunteer to an active case', async () => {

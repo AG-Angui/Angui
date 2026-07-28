@@ -298,4 +298,8 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
             "rule_based_fallback",
         ],
     );
+    let public_progress_item = schema("CasePublicProgressItem");
+    assert!(public_progress_item.contains("progress_type:"));
+    assert!(public_progress_item.contains("Raw clue text is never returned."));
+    assert!(!public_progress_item.contains("content:"));
 }

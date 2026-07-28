@@ -53,6 +53,15 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
         confirmed_id
     );
     assert_eq!(
+        public_progress["confirmed_progress"][0]["progress_type"],
+        "confirmed_update"
+    );
+    assert!(
+        public_progress["confirmed_progress"][0]
+            .get("content")
+            .is_none()
+    );
+    assert_eq!(
         public_progress["requested_family_information"][0]["clue_id"],
         own_pending_id
     );
@@ -60,6 +69,16 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
         public_progress["requested_family_information"][0]["clue_id"],
         internal_pending_id
     );
+    assert_eq!(
+        public_progress["requested_family_information"][0]["progress_type"],
+        "family_follow_up"
+    );
+    assert!(
+        public_progress["requested_family_information"][0]
+            .get("content")
+            .is_none()
+    );
+    assert!(!public_progress.to_string().contains("测试线索"));
     assert!(public_progress.get("task_status").is_none());
     assert_error(
         test::call_service(
