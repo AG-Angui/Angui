@@ -866,6 +866,128 @@ async fn task_feedback_is_an_assignee_only_pending_review_clue_without_task_side
     assert_error(closed_case_feedback, StatusCode::CONFLICT, "conflict").await;
 }
 
+#[actix_web::test]
+async fn task_safety_and_navigation_are_limited_to_the_assignee_and_commander() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let commander_token = context.token(COMMANDER).await;
+    let volunteer_token = context.token(VOLUNTEER).await;
+    let family_token = context.token(FAMILY).await;
+    let admin_token = context.token(ADMIN).await;
+    let volunteer = context.authenticated(VOLUNTEER).await;
+    let second_volunteer_token = add_second_case_volunteer(&context, &case_id).await;
+    let source_clue_id = confirmed_clue!(&context, &app, &case_id, &commander_token);
+    let task_id = create_task!(
+        &app,
+        &case_id,
+        &commander_token,
+        &source_clue_id,
+        &volunteer.id
+    );
+
+    for token in [&commander_token, &volunteer_token] {
+        let safety = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/tasks/{task_id}/safety-briefing"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(safety.status(), StatusCode::OK);
+        let safety: Value = test::read_body_json(safety).await;
+        assert_eq!(safety["task_id"], task_id);
+        assert_eq!(safety["risk_level"], "medium");
+        assert_eq!(safety["source"], "rule_based");
+        assert_eq!(safety["degradation_status"], "rule_based_fallback");
+        assert!(safety["emergency_stop_message"].as_str().is_some());
+        assert!(
+            safety["notices"]
+                .as_array()
+                .is_some_and(|notices| !notices.is_empty())
+        );
+
+        let navigation = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/tasks/{task_id}/navigation"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(navigation.status(), StatusCode::OK);
+        let navigation: Value = test::read_body_json(navigation).await;
+        assert_eq!(navigation["task_id"], task_id);
+        assert_eq!(navigation["source"], "task_area_text");
+        assert_eq!(navigation["degradation_status"], "text_fallback");
+        assert!(navigation["navigation_url"].is_null());
+        assert!(
+            navigation["route_summary"]
+                .as_str()
+                .is_some_and(|summary| summary.contains("North gate to market"))
+        );
+    }
+
+    for token in [&family_token, &second_volunteer_token, &admin_token] {
+        for endpoint in ["safety-briefing", "navigation"] {
+            assert_error(
+                test::call_service(
+                    &app,
+                    test::TestRequest::get()
+                        .uri(&format!("/api/tasks/{task_id}/{endpoint}"))
+                        .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                        .to_request(),
+                )
+                .await,
+                StatusCode::NOT_FOUND,
+                "not_found",
+            )
+            .await;
+        }
+    }
+
+    let mut no_coordinate_payload = task_json(&source_clue_id, &volunteer.id);
+    no_coordinate_payload["latitude"] = Value::Null;
+    no_coordinate_payload["longitude"] = Value::Null;
+    let no_coordinate_task = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/tasks"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(no_coordinate_payload)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(no_coordinate_task.status(), StatusCode::CREATED);
+    let no_coordinate_task: Value = test::read_body_json(no_coordinate_task).await;
+    let no_coordinate_task_id = no_coordinate_task["id"]
+        .as_str()
+        .expect("task id should be returned");
+    let navigation = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/tasks/{no_coordinate_task_id}/navigation"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(navigation.status(), StatusCode::OK);
+    let navigation: Value = test::read_body_json(navigation).await;
+    assert!(navigation["navigation_url"].is_null());
+    assert!(
+        navigation["route_summary"]
+            .as_str()
+            .is_some_and(|summary| summary.contains("未配置坐标"))
+    );
+}
+
 fn task_json(source_clue_id: &str, volunteer_user_id: &str) -> Value {
     json!({
         "source_clue_id": source_clue_id,

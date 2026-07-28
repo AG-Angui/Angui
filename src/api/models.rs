@@ -862,6 +862,29 @@ pub struct TaskFeedbackReceipt {
 }
 
 #[derive(Debug, Serialize)]
+pub struct TaskSafetyBriefingResponse {
+    pub task_id: String,
+    pub risk_level: String,
+    pub notices: Vec<String>,
+    pub emergency_stop_message: String,
+    pub source: String,
+    pub degradation_status: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskNavigationResponse {
+    pub task_id: String,
+    pub area_text: String,
+    pub navigation_url: Option<String>,
+    pub route_summary: String,
+    pub source: String,
+    pub degradation_status: String,
+    pub fallback_message: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CasePlaceResponse {
     pub id: String,
     pub case_id: String,
