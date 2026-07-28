@@ -1,0 +1,1 @@
+DROP INDEX idx_summary_drafts_one_published_per_case;
