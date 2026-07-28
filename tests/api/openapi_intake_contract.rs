@@ -195,3 +195,41 @@ fn case_places_openapi_contract_covers_role_filtered_reads() {
         );
     }
 }
+
+#[test]
+fn case_summary_openapi_contract_covers_role_filtered_deterministic_output() {
+    let (_, operation) = OPENAPI
+        .split_once("  /api/cases/{case_id}/summary:\n")
+        .expect("OpenAPI case summary path must exist");
+    let get_operation = operation
+        .split_once("    get:\n")
+        .and_then(|(_, get)| {
+            get.split_once("\n  /api/cases/{case_id}/places:")
+                .map(|(get, _)| get)
+        })
+        .expect("OpenAPI case summary path must declare GET");
+    for expected in [
+        "operationId: getCaseSummary",
+        "x-case-roles: [family, commander, volunteer]",
+        "#/components/schemas/CaseSummary",
+        "\"404\": { $ref: \"#/components/responses/NotFound\" }",
+    ] {
+        assert!(
+            get_operation.contains(expected),
+            "OpenAPI case summary operation must declare {expected:?}"
+        );
+    }
+    assert_schema_contains(
+        "CaseSummary",
+        &[
+            "generated_at:",
+            "source_scope:",
+            "last_confirmed_information:",
+            "pending_verification:",
+            "excluded_directions:",
+            "current_focus:",
+            "task_status:",
+            "safety_reminders:",
+        ],
+    );
+}

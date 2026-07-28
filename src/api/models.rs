@@ -705,6 +705,50 @@ pub struct CaseMapItem {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CaseSummaryResponse {
+    pub case_id: String,
+    pub access_role: CaseRole,
+    pub generated_at: String,
+    pub source_scope: Vec<String>,
+    pub last_confirmed_information: Option<CaseSummaryClue>,
+    pub confirmed_clues: Vec<CaseSummaryClue>,
+    pub pending_verification: Vec<CaseSummaryClue>,
+    pub excluded_directions: Vec<CaseSummaryClue>,
+    pub current_focus: Vec<CaseSummaryFocus>,
+    pub task_status: Vec<CaseSummaryTask>,
+    pub safety_reminders: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CaseSummaryClue {
+    pub clue_id: String,
+    pub content: String,
+    pub status: String,
+    pub occurred_at: Option<String>,
+    pub reported_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CaseSummaryFocus {
+    pub task_id: String,
+    pub title: String,
+    pub objective: String,
+    pub area_text: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CaseSummaryTask {
+    pub task_id: String,
+    pub title: String,
+    pub objective: String,
+    pub area_text: String,
+    pub due_at: String,
+    pub status: String,
+    pub safety_briefing: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TaskLocationReportReceipt {
     pub id: String,
     pub source: String,

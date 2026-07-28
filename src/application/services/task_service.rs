@@ -188,6 +188,28 @@ pub async fn list_tasks(
     query: TaskListQuery,
 ) -> Result<TaskListResponse, ApiError> {
     let query = ValidatedTaskListQuery::try_from(query)?;
+    let visible_tasks = load_visible_tasks(db, auth, case_id).await?;
+    let total = u64::try_from(visible_tasks.len()).map_err(|_| ApiError::Internal)?;
+    let start = query.offset()?;
+    let items = visible_tasks
+        .into_iter()
+        .skip(start)
+        .take(query.page_size_usize())
+        .collect();
+
+    Ok(TaskListResponse {
+        items,
+        page: query.page,
+        page_size: query.page_size,
+        total,
+    })
+}
+
+async fn load_visible_tasks(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<TaskResponse>, ApiError> {
     let case_role = require_case_role(
         db,
         &auth.id,
@@ -196,12 +218,7 @@ pub async fn list_tasks(
     )
     .await?;
     if case_role == CaseRole::Family {
-        return Ok(TaskListResponse {
-            items: Vec::new(),
-            page: query.page,
-            page_size: query.page_size,
-            total: 0,
-        });
+        return Ok(Vec::new());
     }
 
     let task_models = tasks::Entity::find()
@@ -212,7 +229,7 @@ pub async fn list_tasks(
         .await?;
     let assignments =
         assignments_for_tasks(db, task_models.iter().map(|task| task.id.clone())).await?;
-    let visible_tasks = task_models
+    Ok(task_models
         .into_iter()
         .filter(|task| {
             case_role == CaseRole::Commander
@@ -220,25 +237,19 @@ pub async fn list_tasks(
                     .get(&task.id)
                     .is_some_and(|assignment| assignment.volunteer_user_id == auth.id)
         })
-        .collect::<Vec<_>>();
-    let total = u64::try_from(visible_tasks.len()).map_err(|_| ApiError::Internal)?;
-    let start = query.offset()?;
-    let items = visible_tasks
-        .into_iter()
-        .skip(start)
-        .take(query.page_size_usize())
         .map(|task| {
             let assignment = assignments.get(&task.id).cloned();
             TaskResponse::new(task, assignment, case_role == CaseRole::Commander)
         })
-        .collect();
+        .collect())
+}
 
-    Ok(TaskListResponse {
-        items,
-        page: query.page,
-        page_size: query.page_size,
-        total,
-    })
+pub async fn list_all_visible_tasks(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<TaskResponse>, ApiError> {
+    load_visible_tasks(db, auth, case_id).await
 }
 
 pub async fn list_my_tasks(
