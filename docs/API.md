@@ -195,7 +195,7 @@ Example:
 
 `GET /api/cases/{case_id}/places` 只对案件成员开放，非成员统一返回 `404`。服务端按案件角色裁剪数据：指挥可查看案件全部地点；家属可查看本人提交的地点，以及已确认且非内部的地点；志愿者仅可查看已确认的公开地点。未审核地点和内部搜索方向不会通过该接口暴露给非必要角色。
 
-`GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
+`GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属申报的最后出现地点始终标为 `pending_review`，其 `display_name` 为 `null`，客户端必须按 `object_type` 本地化标签而不能呈现为确认进展。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
 
 `POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
 

@@ -100,7 +100,10 @@ async fn get_case_map_view_returns_only_role_necessary_layers_with_text_fallback
     assert!(
         commander_items
             .iter()
-            .any(|item| item["object_type"] == "last_seen" && item["longitude"].is_null())
+            .any(|item| item["object_type"] == "last_seen"
+                && item["longitude"].is_null()
+                && item["review_status"] == "pending_review"
+                && item["display_name"].is_null())
     );
     assert!(
         commander_items

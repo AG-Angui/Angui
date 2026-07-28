@@ -691,7 +691,7 @@ pub struct CaseMapViewResponse {
 pub struct CaseMapItem {
     pub id: String,
     pub object_type: String,
-    pub display_name: String,
+    pub display_name: Option<String>,
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
     pub location_text: Option<String>,

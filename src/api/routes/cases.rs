@@ -242,7 +242,7 @@ async fn get_map_view(
         items.push(CaseMapItem {
             id: format!("case:{}:last-seen", detail.id),
             object_type: "last_seen".to_owned(),
-            display_name: "Last confirmed location".to_owned(),
+            display_name: None,
             longitude: None,
             latitude: None,
             location_text: Some(location_text),
@@ -250,7 +250,7 @@ async fn get_map_view(
             source: "case_profile".to_owned(),
             occurred_at: detail.elder_profile.last_seen_at,
             reported_at: None,
-            review_status: "confirmed".to_owned(),
+            review_status: "pending_review".to_owned(),
             related_task_id: None,
             updated_at: detail.updated_at.clone(),
         });
@@ -259,7 +259,7 @@ async fn get_map_view(
         CaseMapItem {
             id: place.id,
             object_type: "place".to_owned(),
-            display_name: place.name,
+            display_name: Some(place.name),
             longitude: place.longitude,
             latitude: place.latitude,
             location_text: Some(place.address),
@@ -286,7 +286,7 @@ async fn get_map_view(
                 .map(|clue| CaseMapItem {
                     id: clue.id,
                     object_type: "clue".to_owned(),
-                    display_name: clue.content,
+                    display_name: Some(clue.content),
                     longitude: None,
                     latitude: None,
                     location_text: clue.location_text,
@@ -306,7 +306,7 @@ async fn get_map_view(
         CaseMapItem {
             id: task.id.clone(),
             object_type: "task".to_owned(),
-            display_name: task.title,
+            display_name: Some(task.title),
             longitude: task.longitude,
             latitude: task.latitude,
             location_text: Some(task.area_text),

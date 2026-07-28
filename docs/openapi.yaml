@@ -786,7 +786,7 @@ paths:
       tags: [Cases]
       operationId: getCaseMapView
       summary: 获取按角色裁剪的地图态势
-      description: 返回已授权的地点、已确认线索、任务区域和无坐标文字地点回退，不包含预测位置。家属不见内部任务；志愿者仅见本人任务和已确认公开地点；非成员返回 404。
+      description: 返回已授权的地点、已确认线索、任务区域和无坐标文字地点回退，不包含预测位置。家属申报的最后出现地点保持 pending_review，客户端依据 object_type 本地化其展示标签；家属不见内部任务；志愿者仅见本人任务和已确认公开地点；非成员返回 404。
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -2191,7 +2191,9 @@ components:
       properties:
         id: { type: string }
         object_type: { type: string, enum: [last_seen, place, clue, task] }
-        display_name: { type: string }
+        display_name:
+          type: [string, "null"]
+          description: 对象自身名称；last_seen 为 null，客户端必须依据 object_type 本地化展示标签。
         longitude: { type: [number, "null"] }
         latitude: { type: [number, "null"] }
         location_text: { type: [string, "null"] }
