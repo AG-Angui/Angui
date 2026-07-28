@@ -184,6 +184,7 @@ pub async fn create_summary_draft(
     };
     let timestamp = now();
     let scope = serde_json::to_string(&summary.source_scope).map_err(|_| ApiError::Internal)?;
+    let transaction = db.begin().await?;
     let model = summary_drafts::ActiveModel {
         id: Set(case_service::new_id()),
         case_id: Set(case_id.to_owned()),
@@ -200,10 +201,10 @@ pub async fn create_summary_draft(
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp),
     }
-    .insert(db)
+    .insert(&transaction)
     .await?;
     case_service::write_audit(
-        db,
+        &transaction,
         Some(case_id.to_owned()),
         auth,
         "summary_draft.created",
@@ -212,6 +213,7 @@ pub async fn create_summary_draft(
         Some(json!({ "status": initial_status, "template_version": DRAFT_TEMPLATE_VERSION, "publication_eligible": publication_eligible })),
     )
     .await?;
+    transaction.commit().await?;
     response(model)
 }
 
