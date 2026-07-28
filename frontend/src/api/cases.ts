@@ -194,6 +194,13 @@ export interface ReviewCluePayload {
   linked_task_reference?: string | null
 }
 
+export interface PublicProgressItem { clue_id: string; content: string; review_status: string; updated_at: string }
+export interface CasePublicProgress { case_id: string; status: CaseStatus; generated_at: string; confirmed_progress: PublicProgressItem[]; requested_family_information: PublicProgressItem[]; safety_and_contact_reminders: string[] }
+export interface ClueDraft { id: string; case_id: string; status: 'draft' | 'pending_review'; content: string; source_type: PublicClueSourceType; raw_record_reference: string | null; occurred_at: string | null; location_text: string | null; uncertainty_notice: string; template_version: string; provider_model: string | null; degradation_status: string }
+export interface SummaryDraft { id: string; case_id: string; status: 'draft' | 'pending_review' | 'published' | 'rejected' | 'withdrawn' | 'superseded'; content: string; source_scope: string[]; template_version: string; provider_model: string | null; generated_at: string; reviewed_at: string | null; review_reason: string | null; created_at: string; updated_at: string; publication_eligible: boolean }
+export interface CasePoi { id: string; name: string; category: string; address: string | null; longitude: number | null; latitude: number | null }
+export interface CasePois { items: CasePoi[]; source: string; degradation_status: string; fallback_message: string | null }
+
 export function listCases(token: string): Promise<CaseListItem[]> {
   return apiRequest<CaseListItem[]>('/cases', {}, token)
 }
@@ -227,6 +234,26 @@ export function createClue(
     { method: 'POST', body: JSON.stringify(payload) },
     token,
   )
+}
+
+export function getCasePublicProgress(token: string, caseId: string): Promise<CasePublicProgress> {
+  return apiRequest<CasePublicProgress>(`/cases/${caseId}/public-progress`, {}, token)
+}
+
+export function createClueDraft(token: string, caseId: string, payload: { text: string; source_type?: PublicClueSourceType; raw_record_reference?: string }): Promise<ClueDraft[]> {
+  return apiRequest<ClueDraft[]>(`/cases/${caseId}/clue-drafts`, { method: 'POST', body: JSON.stringify(payload) }, token)
+}
+
+export function listCasePois(token: string, caseId: string, category = 'hospital'): Promise<CasePois> {
+  return apiRequest<CasePois>(`/cases/${caseId}/pois?category=${encodeURIComponent(category)}`, {}, token)
+}
+
+export function createSummaryDraft(token: string, caseId: string, content?: string): Promise<SummaryDraft> {
+  return apiRequest<SummaryDraft>(`/cases/${caseId}/summary-drafts`, { method: 'POST', body: JSON.stringify(content ? { content } : {}) }, token)
+}
+
+export function reviewSummaryDraft(token: string, caseId: string, draftId: string, payload: { action: 'submit' | 'publish' | 'reject' | 'withdraw'; reason: string }): Promise<SummaryDraft> {
+  return apiRequest<SummaryDraft>(`/cases/${caseId}/summary-drafts/${draftId}/review`, { method: 'PATCH', body: JSON.stringify(payload) }, token)
 }
 
 export function listCaseClues(

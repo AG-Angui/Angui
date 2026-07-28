@@ -233,3 +233,69 @@ fn case_summary_openapi_contract_covers_role_filtered_deterministic_output() {
         ],
     );
 }
+
+#[test]
+fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() {
+    for (path, operation_id, roles, schema_name) in [
+        (
+            "/api/cases/{case_id}/public-progress:\n",
+            "operationId: getCasePublicProgress",
+            "x-case-roles: [family]",
+            "#/components/schemas/CasePublicProgress",
+        ),
+        (
+            "/api/cases/{case_id}/clue-drafts:\n",
+            "operationId: createClueDrafts",
+            "x-case-roles: [family, commander, volunteer]",
+            "#/components/schemas/CreateClueDraftRequest",
+        ),
+        (
+            "/api/cases/{case_id}/pois:\n",
+            "operationId: listCasePois",
+            "x-case-roles: [commander, volunteer]",
+            "#/components/schemas/CasePois",
+        ),
+        (
+            "/api/cases/{case_id}/summary-drafts:\n",
+            "operationId: createSummaryDraft",
+            "x-case-roles: [commander]",
+            "#/components/schemas/SummaryDraft",
+        ),
+        (
+            "/api/cases/{case_id}/summary-drafts/{draft_id}/review:\n",
+            "operationId: reviewSummaryDraft",
+            "x-case-roles: [commander]",
+            "#/components/schemas/ReviewSummaryDraftRequest",
+        ),
+    ] {
+        let (_, operation) = OPENAPI
+            .split_once(&format!("  {path}"))
+            .unwrap_or_else(|| panic!("OpenAPI path {path} must exist"));
+        for expected in [operation_id, roles, schema_name] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI operation {path} must declare {expected:?}"
+            );
+        }
+    }
+    assert_schema_contains(
+        "SummaryDraft",
+        &[
+            "enum: [draft, pending_review, published, rejected, withdrawn, superseded]",
+            "publication_eligible:",
+            "source_scope:",
+        ],
+    );
+    assert_schema_contains(
+        "CasePois",
+        &["maxItems: 10", "fixed_demo_fallback", "degraded"],
+    );
+    assert_schema_contains(
+        "ClueDraft",
+        &[
+            "raw_record_reference:",
+            "uncertainty_notice:",
+            "rule_based_fallback",
+        ],
+    );
+}

@@ -21,6 +21,8 @@ mod m0018_create_case_places_and_attachments;
 mod m0019_expand_clue_lifecycle;
 mod m0020_create_tasks_and_location_reports;
 mod m0021_create_user_profiles_and_elder_profile_revisions;
+mod m0022_create_summary_drafts;
+mod m0023_create_clue_drafts;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -51,6 +53,8 @@ impl MigratorTrait for Migrator {
             Box::new(m0019_expand_clue_lifecycle::Migration),
             Box::new(m0020_create_tasks_and_location_reports::Migration),
             Box::new(m0021_create_user_profiles_and_elder_profile_revisions::Migration),
+            Box::new(m0022_create_summary_drafts::Migration),
+            Box::new(m0023_create_clue_drafts::Migration),
         ]
     }
 }
@@ -322,9 +326,15 @@ mod tests {
             .await
             .expect("clue with a distinct report time should be stored");
 
-        // The current tail migration stores profile revisions, so roll it back
-        // before exercising the lifecycle rollback guard from migration 0019.
-        assert!(Migrator::down(&database, Some(3)).await.is_err());
+        // Roll back every migration after the lifecycle migration before
+        // exercising migration 0019's reported-at safety guard.
+        let migrations_after_lifecycle =
+            u32::try_from(Migrator::migrations().len() - 18).expect("migration count must fit u32");
+        assert!(
+            Migrator::down(&database, Some(migrations_after_lifecycle))
+                .await
+                .is_err()
+        );
         assert!(database
             .query_one(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
@@ -399,9 +409,15 @@ mod tests {
             .await
             .expect("simulated task location should reference the assignment");
 
-        // Migration 0021 is non-destructive here; the second rollback reaches
-        // the task migration whose safety guard must reject this fixture.
-        assert!(Migrator::down(&database, Some(2)).await.is_err());
+        // Roll back every migration after the task migration; its safety guard
+        // must reject this fixture.
+        let migrations_after_tasks =
+            u32::try_from(Migrator::migrations().len() - 19).expect("migration count must fit u32");
+        assert!(
+            Migrator::down(&database, Some(migrations_after_tasks))
+                .await
+                .is_err()
+        );
         database
             .execute_unprepared("DELETE FROM tasks WHERE id = 'task-1'")
             .await

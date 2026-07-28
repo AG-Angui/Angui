@@ -748,6 +748,102 @@ pub struct CaseSummaryTask {
     pub safety_briefing: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CreateClueDraftRequest {
+    pub text: String,
+    pub source_type: Option<String>,
+    pub raw_record_reference: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClueDraftResponse {
+    pub id: String,
+    pub case_id: String,
+    pub status: String,
+    pub content: String,
+    pub source_type: String,
+    pub raw_record_reference: Option<String>,
+    pub occurred_at: Option<String>,
+    pub location_text: Option<String>,
+    pub uncertainty_notice: String,
+    pub template_version: String,
+    pub provider_model: Option<String>,
+    pub degradation_status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasePublicProgressResponse {
+    pub case_id: String,
+    pub status: String,
+    pub generated_at: String,
+    pub confirmed_progress: Vec<CasePublicProgressItem>,
+    pub requested_family_information: Vec<CasePublicProgressItem>,
+    pub safety_and_contact_reminders: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasePublicProgressItem {
+    pub clue_id: String,
+    pub content: String,
+    pub review_status: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSummaryDraftRequest {
+    pub content: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewSummaryDraftRequest {
+    pub action: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SummaryDraftResponse {
+    pub id: String,
+    pub case_id: String,
+    pub status: String,
+    pub content: String,
+    pub source_scope: Vec<String>,
+    pub template_version: String,
+    pub provider_model: Option<String>,
+    pub generated_at: String,
+    pub reviewed_at: Option<String>,
+    pub review_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub publication_eligible: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CasePoiQuery {
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasePoiResponse {
+    pub items: Vec<CasePoiItem>,
+    pub source: String,
+    pub degradation_status: String,
+    pub fallback_message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasePoiItem {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub address: Option<String>,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TaskLocationReportReceipt {
     pub id: String,

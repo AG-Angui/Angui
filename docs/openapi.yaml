@@ -828,6 +828,113 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/cases/{case_id}/public-progress:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: getCasePublicProgress
+      summary: Get family-only reviewed public progress
+      description: Returns only human-confirmed progress, the requesting family's own pending items, and safety/contact reminders. It never exposes tasks, internal directions, volunteer locations, membership details, or health-note text.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [family]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Family-safe public progress, content: { application/json: { schema: { $ref: "#/components/schemas/CasePublicProgress" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/clue-drafts:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    post:
+      tags: [Cases]
+      operationId: createClueDrafts
+      summary: Convert controlled text into persisted, unreviewed clue drafts
+      description: Stores the original controlled-text reference, template/model metadata, uncertainty notice, and degradation state. The endpoint never creates a formal clue or a confirmed fact; provider unavailability returns a rule-based draft without blocking work.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateClueDraftRequest" } } }
+      responses:
+        "201": { description: Persisted unreviewed drafts, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ClueDraft" } } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/pois:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: listCasePois
+      summary: Find bounded nearby resources from a server-authorized center
+      description: The caller can choose only an allow-listed category; it cannot submit coordinates. The server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task or confirmed place. AMap transport, quota, or business failures return a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string, enum: [hospital, police, transit, market, community_service], default: hospital }
+      responses:
+        "200": { description: Nearby POIs or explicit degraded fallback, content: { application/json: { schema: { $ref: "#/components/schemas/CasePois" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/cases/{case_id}/summary-drafts:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    post:
+      tags: [Cases]
+      operationId: createSummaryDraft
+      summary: Create a commander-only summary draft
+      description: Server-generated drafts are built from the commander's authorized summary scope and start in pending_review. Free-form commander drafts remain internal and are not publication eligible.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateSummaryDraftRequest" } } }
+      responses:
+        "201": { description: Versioned internal summary draft, content: { application/json: { schema: { $ref: "#/components/schemas/SummaryDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/summary-drafts/{draft_id}/review:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+      - name: draft_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Cases]
+      operationId: reviewSummaryDraft
+      summary: Submit, review, publish, or withdraw a versioned summary draft
+      description: Every state transition records operator, reason, and time. Publishing only accepts a server-generated scope-controlled pending_review draft; publishing supersedes older published versions. Review cannot overwrite draft content.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReviewSummaryDraftRequest" } } }
+      responses:
+        "200": { description: Updated versioned summary draft, content: { application/json: { schema: { $ref: "#/components/schemas/SummaryDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/cases/{case_id}/places:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -2230,6 +2337,110 @@ components:
         review_status: { type: string }
         related_task_id: { type: [string, "null"] }
         updated_at: { type: string, format: date-time }
+
+    CasePublicProgressItem:
+      type: object
+      additionalProperties: false
+      required: [clue_id, content, review_status, updated_at]
+      properties:
+        clue_id: { type: string, format: uuid }
+        content: { type: string }
+        review_status: { type: string, enum: [pending_review, needs_verification, confirmed] }
+        updated_at: { type: string, format: date-time }
+
+    CasePublicProgress:
+      type: object
+      additionalProperties: false
+      required: [case_id, status, generated_at, confirmed_progress, requested_family_information, safety_and_contact_reminders]
+      properties:
+        case_id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/CaseStatus" }
+        generated_at: { type: string, format: date-time }
+        confirmed_progress: { type: array, items: { $ref: "#/components/schemas/CasePublicProgressItem" } }
+        requested_family_information: { type: array, items: { $ref: "#/components/schemas/CasePublicProgressItem" } }
+        safety_and_contact_reminders: { type: array, items: { type: string } }
+
+    CreateClueDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1, maxLength: 4000 }
+        source_type: { type: string, enum: [manual_report, field_report], default: manual_report }
+        raw_record_reference: { type: string, minLength: 1, maxLength: 500 }
+
+    ClueDraft:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, status, content, source_type, uncertainty_notice, template_version, provider_model, degradation_status]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, pending_review] }
+        content: { type: string }
+        source_type: { type: string, enum: [manual_report, field_report] }
+        raw_record_reference: { type: [string, "null"] }
+        occurred_at: { type: [string, "null"], format: date-time }
+        location_text: { type: [string, "null"] }
+        uncertainty_notice: { type: string }
+        template_version: { type: string }
+        provider_model: { type: [string, "null"] }
+        degradation_status: { type: string, enum: [manual_review_required, rule_based_fallback] }
+
+    CasePoi:
+      type: object
+      additionalProperties: false
+      required: [id, name, category, address, longitude, latitude]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        category: { type: string, enum: [hospital, police, transit, market, community_service] }
+        address: { type: [string, "null"] }
+        longitude: { type: [number, "null"] }
+        latitude: { type: [number, "null"] }
+
+    CasePois:
+      type: object
+      additionalProperties: false
+      required: [items, source, degradation_status, fallback_message]
+      properties:
+        items: { type: array, maxItems: 10, items: { $ref: "#/components/schemas/CasePoi" } }
+        source: { type: string, enum: [amap_webservice, fixed_demo_fallback] }
+        degradation_status: { type: string, enum: [available, degraded] }
+        fallback_message: { type: [string, "null"] }
+
+    CreateSummaryDraftRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        content: { type: string, minLength: 1, maxLength: 12000, description: Internal-only commander draft content; it is never publication eligible. }
+
+    ReviewSummaryDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason]
+      properties:
+        action: { type: string, enum: [submit, publish, reject, withdraw] }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    SummaryDraft:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, status, content, source_scope, template_version, provider_model, generated_at, reviewed_at, review_reason, created_at, updated_at, publication_eligible]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, pending_review, published, rejected, withdrawn, superseded] }
+        content: { type: string }
+        source_scope: { type: array, items: { type: string } }
+        template_version: { type: string }
+        provider_model: { type: [string, "null"] }
+        generated_at: { type: string, format: date-time }
+        reviewed_at: { type: [string, "null"], format: date-time }
+        review_reason: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        publication_eligible: { type: boolean }
 
     CaseSummary:
       type: object

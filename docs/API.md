@@ -28,6 +28,11 @@
 | `POST` | `/api/cases/{case_id}/clues` | `201` | 提交待审核线索 |
 | `GET` | `/api/cases/{case_id}/map-view` | `200` | 获取含文字地点回退的角色裁剪地图态势 |
 | `GET` | `/api/cases/{case_id}/summary` | `200` | 获取含来源范围与生成时间的角色裁剪确定性案件摘要 |
+| `GET` | `/api/cases/{case_id}/public-progress` | `200` | 家属查看仅含已确认信息和本人待补充事项的公开进展 |
+| `POST` | `/api/cases/{case_id}/clue-drafts` | `201` | 将受控文本持久化为不可直接确认的线索草稿 |
+| `GET` | `/api/cases/{case_id}/pois` | `200` | 按服务端授权中心查询有上限的周边资源，失败时明确降级 |
+| `POST` | `/api/cases/{case_id}/summary-drafts` | `201` | 指挥创建带来源范围和版本的内部摘要草稿 |
+| `PATCH` | `/api/cases/{case_id}/summary-drafts/{draft_id}/review` | `200` | 指挥提交、审核发布、驳回或撤回摘要草稿 |
 | `GET` | `/api/cases/{case_id}/places` | `200` | 获取按案件角色、审核状态和可见级别裁剪的地点 |
 | `POST` | `/api/cases/{case_id}/places` | `201` | 家属或指挥提交常去/关键地点，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/resource-configuration` | `200` | 获取当前案件可用的地点类型和图片限制 |
@@ -199,6 +204,16 @@ Example:
 `GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属申报的最后出现地点始终标为 `pending_review`，其 `display_name` 为 `null`，客户端必须按 `object_type` 本地化标签而不能呈现为确认进展。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
 
 `GET /api/cases/{case_id}/summary` 提供不依赖外部 AI 的确定性案件摘要。响应的 `generated_at` 和 `source_scope` 说明生成时间与当前角色可用的数据范围。只有人工审核为 `confirmed` 的线索才会进入 `last_confirmed_information` 与 `confirmed_clues`；`pending_review` 和 `needs_verification` 始终保留在 `pending_verification`，不会被表述为确认事实。指挥可见待核实事项、已排除方向、未完成任务形成的当前重点和全部任务状态；家属不接收任务或内部搜索方向；志愿者只接收本人任务的执行与安全信息。
+
+## 公开进展、草稿与周边资源
+
+`GET /api/cases/{case_id}/public-progress` 仅对该案件的 `family` 成员开放。它仅返回已人工审核为 `confirmed` 的进展、请求者本人仍待补充/核实的项目、以及安全和联系提醒；它绝不返回未核实的他人线索、内部搜索方向、任务与分配、志愿者位置、病史全文或成员详情。每项均包含审核状态和更新时间，客户端不得把其他案件详情替代为“公开进展”。
+
+`POST /api/cases/{case_id}/clue-drafts` 可由案件 `family`、`commander` 或 `volunteer` 调用，用于将聊天/文本整理成持久化的 `draft`。响应会保留草稿 ID、受控原始记录引用、模板版本、可选模型标识和不确定性提示。服务不可用时以 `rule_based_fallback` 返回，不阻断人工工作；该接口不创建正式线索，更不允许创建 `confirmed` 线索。
+
+`GET /api/cases/{case_id}/pois` 只允许 `commander` 和 `volunteer`，且客户端只能选择医院、派出所、公交站、市场或社区服务中心等白名单类别。中心坐标只能由服务端从当前角色可见的任务点或指挥已确认地点选取；单次查询固定为 3 km、单页、最多 10 项。高德 Web 服务的 key 仅保存在服务端；HTTP 或业务状态失败时，响应将标记为 `degraded` 并给出固定的虚构非坐标回退结果，绝不泄露 key、上游 URL 或案件中心坐标。
+
+`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。生命周期包含 `draft`、`pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次提交、审核、发布或撤回都记录操作者、理由、时间和版本；发布会将该案件既有的已发布版本标为 `superseded`。只有服务端依据受控来源范围生成的 `pending_review` 草稿可发布；自由文本草稿仅限内部使用，审核阶段不可用请求内容覆盖草稿，从而避免把未审核线索、内部任务或健康字段发布给非必要角色。
 
 `POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
 
