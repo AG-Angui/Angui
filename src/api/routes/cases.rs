@@ -217,25 +217,8 @@ async fn get_map_view(
     case_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     let detail = case_service::get_case(&state.db, &auth, &case_id).await?;
-    let mut task_items = Vec::new();
-    let mut task_page = 1;
-    loop {
-        let tasks = crate::services::task_service::list_tasks(
-            &state.db,
-            &auth,
-            &case_id,
-            TaskListQuery {
-                page: Some(task_page),
-                page_size: Some(100),
-            },
-        )
-        .await?;
-        task_items.extend(tasks.items);
-        if u64::try_from(task_items.len()).map_err(|_| ApiError::Internal)? >= tasks.total {
-            break;
-        }
-        task_page = task_page.checked_add(1).ok_or(ApiError::Internal)?;
-    }
+    let task_items =
+        crate::services::task_service::list_all_visible_tasks(&state.db, &auth, &case_id).await?;
     let mut items = Vec::new();
     if detail.access_role != CaseRole::Volunteer
         && let Some(location_text) = detail.elder_profile.last_seen_location

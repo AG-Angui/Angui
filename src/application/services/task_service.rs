@@ -241,6 +241,32 @@ pub async fn list_tasks(
     })
 }
 
+pub async fn list_all_visible_tasks(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<TaskResponse>, ApiError> {
+    let mut items = Vec::new();
+    let mut page = 1;
+    loop {
+        let response = list_tasks(
+            db,
+            auth,
+            case_id,
+            TaskListQuery {
+                page: Some(page),
+                page_size: Some(MAX_TASK_PAGE_SIZE),
+            },
+        )
+        .await?;
+        items.extend(response.items);
+        if u64::try_from(items.len()).map_err(|_| ApiError::Internal)? >= response.total {
+            return Ok(items);
+        }
+        page = page.checked_add(1).ok_or(ApiError::Internal)?;
+    }
+}
+
 pub async fn list_my_tasks(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,

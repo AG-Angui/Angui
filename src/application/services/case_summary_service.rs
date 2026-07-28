@@ -5,7 +5,7 @@ use crate::{
     error::ApiError,
     models::{
         AuthenticatedUser, CaseSummaryClue, CaseSummaryFocus, CaseSummaryResponse, CaseSummaryTask,
-        ClueResponse, TaskListQuery, TaskResponse,
+        ClueResponse, TaskResponse,
     },
     roles::CaseRole,
     services::{case_service, task_service},
@@ -25,13 +25,19 @@ pub async fn get_case_summary(
     case_id: &str,
 ) -> Result<CaseSummaryResponse, ApiError> {
     let detail = case_service::get_case(db, auth, case_id).await?;
-    let task_status = list_visible_tasks(db, auth, case_id).await?;
-    let confirmed_clues = detail
+    let task_status = task_service::list_all_visible_tasks(db, auth, case_id).await?;
+    let mut confirmed_clues = detail
         .clues
         .iter()
         .filter(|clue| clue.status == "confirmed")
         .map(summary_clue)
         .collect::<Vec<_>>();
+    confirmed_clues.sort_by(|left, right| {
+        right
+            .reported_at
+            .cmp(&left.reported_at)
+            .then_with(|| right.clue_id.cmp(&left.clue_id))
+    });
     let last_confirmed_information = (detail.access_role != CaseRole::Volunteer)
         .then(|| confirmed_clues.first().cloned())
         .flatten();
@@ -88,32 +94,6 @@ pub async fn get_case_summary(
         task_status: task_status.into_iter().map(summary_task).collect(),
         safety_reminders: safety_reminders(detail.access_role),
     })
-}
-
-async fn list_visible_tasks(
-    db: &DatabaseConnection,
-    auth: &AuthenticatedUser,
-    case_id: &str,
-) -> Result<Vec<TaskResponse>, ApiError> {
-    let mut items = Vec::new();
-    let mut page = 1;
-    loop {
-        let response = task_service::list_tasks(
-            db,
-            auth,
-            case_id,
-            TaskListQuery {
-                page: Some(page),
-                page_size: Some(100),
-            },
-        )
-        .await?;
-        items.extend(response.items);
-        if u64::try_from(items.len()).map_err(|_| ApiError::Internal)? >= response.total {
-            return Ok(items);
-        }
-        page = page.checked_add(1).ok_or(ApiError::Internal)?;
-    }
 }
 
 fn summary_clue(clue: &ClueResponse) -> CaseSummaryClue {
