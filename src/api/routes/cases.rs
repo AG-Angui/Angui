@@ -31,6 +31,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/tasks", web::get().to(list_tasks))
             .route("/{case_id}/tasks", web::post().to(create_task))
             .route("/{case_id}/map-view", web::get().to(get_map_view))
+            .route("/{case_id}/summary", web::get().to(get_case_summary))
             .route("/{case_id}/places", web::get().to(list_places))
             .route("/{case_id}/places", web::post().to(create_place))
             .route(
@@ -325,6 +326,16 @@ async fn get_map_view(
         }
     }));
     Ok(HttpResponse::Ok().json(CaseMapViewResponse { items }))
+}
+
+async fn get_case_summary(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_summary_service::get_case_summary(&state.db, &auth, &case_id).await?,
+    ))
 }
 
 async fn update_case_status(

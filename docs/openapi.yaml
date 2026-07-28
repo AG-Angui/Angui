@@ -802,6 +802,32 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/cases/{case_id}/summary:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: getCaseSummary
+      summary: 获取按角色裁剪的确定性案件摘要
+      description: |
+        不调用外部 AI 的确定性聚合。仅 `confirmed` 线索会出现在最后确认信息和已确认线索中；
+        `pending_review` 与 `needs_verification` 始终单列为待核实事项。指挥可见完整内部摘要，
+        家属不接收任务或搜索方向，志愿者仅接收本人任务的必要执行信息。响应包含生成时间和数据来源范围。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200":
+          description: 当前案件角色可见的确定性摘要
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaseSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/places:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -2204,6 +2230,81 @@ components:
         review_status: { type: string }
         related_task_id: { type: [string, "null"] }
         updated_at: { type: string, format: date-time }
+
+    CaseSummary:
+      type: object
+      additionalProperties: false
+      required: [case_id, access_role, generated_at, source_scope, last_confirmed_information, confirmed_clues, pending_verification, excluded_directions, current_focus, task_status, safety_reminders]
+      properties:
+        case_id: { type: string, format: uuid }
+        access_role: { $ref: "#/components/schemas/CaseRole" }
+        generated_at: { type: string, format: date-time }
+        source_scope:
+          type: array
+          description: Machine-readable list of the authorized data categories used for this role's summary.
+          items: { type: string }
+        last_confirmed_information:
+          oneOf:
+            - $ref: "#/components/schemas/CaseSummaryClue"
+            - type: "null"
+          description: Most recently reported confirmed clue; never an unreviewed profile assertion or clue.
+        confirmed_clues:
+          type: array
+          items: { $ref: "#/components/schemas/CaseSummaryClue" }
+        pending_verification:
+          type: array
+          description: Items remain unverified and must not be presented as confirmed facts.
+          items: { $ref: "#/components/schemas/CaseSummaryClue" }
+        excluded_directions:
+          type: array
+          description: Commander-only non-confirmed directions with an exclusion status.
+          items: { $ref: "#/components/schemas/CaseSummaryClue" }
+        current_focus:
+          type: array
+          description: Commander-only active search directions derived from unfinished tasks.
+          items: { $ref: "#/components/schemas/CaseSummaryFocus" }
+        task_status:
+          type: array
+          description: Commander receives all tasks; volunteer receives only their assigned tasks; family receives none.
+          items: { $ref: "#/components/schemas/CaseSummaryTask" }
+        safety_reminders:
+          type: array
+          items: { type: string }
+
+    CaseSummaryClue:
+      type: object
+      additionalProperties: false
+      required: [clue_id, content, status, occurred_at, reported_at]
+      properties:
+        clue_id: { type: string, format: uuid }
+        content: { type: string }
+        status: { type: string }
+        occurred_at: { type: [string, "null"], format: date-time }
+        reported_at: { type: string, format: date-time }
+
+    CaseSummaryFocus:
+      type: object
+      additionalProperties: false
+      required: [task_id, title, objective, area_text, status]
+      properties:
+        task_id: { type: string, format: uuid }
+        title: { type: string }
+        objective: { type: string }
+        area_text: { type: string }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+
+    CaseSummaryTask:
+      type: object
+      additionalProperties: false
+      required: [task_id, title, objective, area_text, due_at, status, safety_briefing]
+      properties:
+        task_id: { type: string, format: uuid }
+        title: { type: string }
+        objective: { type: string }
+        area_text: { type: string }
+        due_at: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        safety_briefing: { type: string }
 
     CasePlace:
       type: object

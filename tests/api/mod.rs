@@ -10,6 +10,7 @@ mod case_map_view_get;
 mod case_members_post;
 mod case_resources_post;
 mod case_status_patch;
+mod case_summary_get;
 mod cases_create_post;
 mod cases_list_get;
 mod clue_review_patch;
