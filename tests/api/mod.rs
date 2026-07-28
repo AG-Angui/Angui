@@ -6,6 +6,7 @@ mod case_clues_get;
 mod case_clues_post;
 mod case_detail_get;
 mod case_elder_profile_patch;
+mod case_map_view_get;
 mod case_members_post;
 mod case_resources_post;
 mod case_status_patch;
