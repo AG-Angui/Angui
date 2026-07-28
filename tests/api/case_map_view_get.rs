@@ -2,6 +2,8 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
+use angui::entities::tasks;
+use sea_orm::{ActiveModelTrait, Set};
 use serde_json::{Value, json};
 
 use crate::support::{COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
@@ -36,7 +38,7 @@ async fn get_case_map_view_returns_only_role_necessary_layers_with_text_fallback
             .uri(&format!("/api/cases/{case_id}/tasks"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
             .set_json(json!({
-                "source_clue_id": clue_id,
+                "source_clue_id": clue_id.clone(),
                 "volunteer_user_id": volunteer.id,
                 "title": "Verify fictional north gate",
                 "objective": "Check the fictional reported route and submit observations.",
@@ -56,6 +58,33 @@ async fn get_case_map_view_returns_only_role_necessary_layers_with_text_fallback
     assert_eq!(task.status(), StatusCode::CREATED);
     let task: Value = test::read_body_json(task).await;
     let task_id = task["id"].as_str().expect("task id");
+    let commander = context.authenticated(COMMANDER).await;
+    for index in 0..100 {
+        tasks::ActiveModel {
+            id: Set(format!("map-extra-task-{index}")),
+            case_id: Set(case_id.clone()),
+            source_clue_id: Set(Some(clue_id.clone())),
+            title: Set(format!("Fictional extra task {index}")),
+            objective: Set("Fictional task objective.".to_owned()),
+            area_text: Set("Fictional task area".to_owned()),
+            latitude: Set(None),
+            longitude: Set(None),
+            due_at: Set("2099-07-27T12:00:00Z".to_owned()),
+            background: Set("Fictional confirmed clue.".to_owned()),
+            risk_level: Set("medium".to_owned()),
+            risk_notes: Set("Fictional safety note.".to_owned()),
+            safety_briefing: Set("Fictional safety briefing.".to_owned()),
+            expected_feedback: Set("Fictional feedback.".to_owned()),
+            status: Set("pending_claim".to_owned()),
+            result_summary: Set(None),
+            created_by_user_id: Set(commander.id.clone()),
+            created_at: Set("2026-07-27T00:00:00Z".to_owned()),
+            updated_at: Set("2026-07-27T00:00:00Z".to_owned()),
+        }
+        .insert(&context.database)
+        .await
+        .expect("fixture task should be created");
+    }
 
     let request_for = |token: String| {
         test::TestRequest::get()
@@ -82,6 +111,18 @@ async fn get_case_map_view_returns_only_role_necessary_layers_with_text_fallback
         commander_items
             .iter()
             .any(|item| item["id"] == task_id && item["latitude"] == 31.8206)
+    );
+    assert_eq!(
+        commander_items
+            .iter()
+            .filter(|item| item["object_type"] == "task")
+            .count(),
+        101
+    );
+    assert!(
+        commander_items
+            .iter()
+            .any(|item| item["id"] == "map-extra-task-99")
     );
 
     let family_view: Value = test::read_body_json(
