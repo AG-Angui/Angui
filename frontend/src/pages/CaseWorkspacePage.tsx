@@ -821,7 +821,7 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
           <h3 className="m-0 text-base font-bold text-slate-950">任务区域周边资源</h3>
           <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">检索中心由服务端按案件任务或已确认地点确定；此处不会提交任意坐标。</p>
           <div className="mt-3 flex gap-2">
-            <select aria-label="周边资源类别" className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm" value={poiCategory} onChange={(event) => setPoiCategory(event.target.value)}>
+            <select aria-label="周边资源类别" className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm" value={poiCategory} onChange={(event) => { setPoiCategory(event.target.value); setPois(null) }}>
               <option value="hospital">医院</option><option value="police">派出所</option><option value="transit">公交站</option><option value="market">市场</option><option value="community_service">社区服务中心</option>
             </select>
             <Button size="sm" variant="secondary" isDisabled={!token || busy === 'pois'} onPress={() => void run('pois', async () => { if (!token) return; setPois(await listCasePois(token, detail.id, poiCategory)) })}>查询</Button>

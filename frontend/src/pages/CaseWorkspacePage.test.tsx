@@ -10,6 +10,7 @@ const mocked = vi.hoisted(() => ({
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
   listCaseClues: vi.fn(),
+  listCasePois: vi.fn(),
   addCaseMember: vi.fn(),
   reviewClue: vi.fn(),
 }))
@@ -23,6 +24,7 @@ vi.mock('../api/cases', () => ({
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
   listCaseClues: (...args: unknown[]) => mocked.listCaseClues(...args),
+  listCasePois: (...args: unknown[]) => mocked.listCasePois(...args),
   addCaseMember: (...args: unknown[]) => mocked.addCaseMember(...args),
   createCase: vi.fn(),
   createClue: vi.fn(),
@@ -202,6 +204,24 @@ describe('CaseWorkspacePage', () => {
     expect(screen.queryByRole('button', { name: '提交地点' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '上传图片' })).not.toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: '案件状态' })).toBeDisabled()
+  })
+
+  it('clears nearby resource results when the selected category changes', async () => {
+    vi.clearAllMocks()
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: 'Commander case', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(detail('case-command', 'Commander case', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.listCaseClues.mockResolvedValue({ items: [], page: 1, page_size: 25, total: 0 })
+    mocked.listCasePois.mockResolvedValue({ items: [{ id: 'hospital-1', name: 'Fictional hospital', category: 'hospital', address: 'Fictional address', longitude: null, latitude: null }], source: 'fixed_demo_fallback', degradation_status: 'degraded', fallback_message: null })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: 'Commander case' })
+    fireEvent.click(screen.getByRole('button', { name: '查询' }))
+    expect(await screen.findByText('Fictional hospital')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('周边资源类别'), { target: { value: 'police' } })
+    expect(screen.queryByText('Fictional hospital')).not.toBeInTheDocument()
   })
 
   it('loads a filtered commander queue and requires confirmation before reviewing a clue', async () => {
