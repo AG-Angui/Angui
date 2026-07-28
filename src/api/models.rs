@@ -79,6 +79,77 @@ pub struct LoginResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AdminAuditEventQuery {
+    pub case_id: Option<String>,
+    pub entity_type: Option<String>,
+    pub action: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+    pub sort: Option<String>,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminUserQuery {
+    pub account_type: Option<String>,
+    pub status: Option<String>,
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+    pub sort: Option<String>,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateAdminUserStatusRequest {
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminAuditEventResponse {
+    pub id: String,
+    pub case_id: Option<String>,
+    pub actor_user_id: String,
+    pub action: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminAuditEventPage {
+    pub items: Vec<AdminAuditEventResponse>,
+    pub page: u64,
+    pub page_size: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminUserResponse {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub account_type: AccountType,
+    pub global_capabilities: Vec<GlobalCapability>,
+    pub status: String,
+    pub created_at: String,
+    pub last_session_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminUserPage {
+    pub items: Vec<AdminUserResponse>,
+    pub page: u64,
+    pub page_size: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateCaseRequest {
     pub display_name: String,
     pub age: Option<i16>,

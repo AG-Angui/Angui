@@ -343,6 +343,78 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
 }
 
 #[test]
+fn admin_openapi_contract_limits_access_and_sensitive_fields() {
+    for (path, operation_id, schema_name, expected_parameters) in [
+        (
+            "/api/admin/audit-events:\n",
+            "operationId: listAdminAuditEvents",
+            "#/components/schemas/AdminAuditEventPage",
+            ["name: case_id", "name: from", "name: to", "name: sort"],
+        ),
+        (
+            "/api/admin/users:\n",
+            "operationId: listAdminUsers",
+            "#/components/schemas/AdminUserPage",
+            [
+                "name: status",
+                "name: account_type",
+                "name: sort",
+                "name: order",
+            ],
+        ),
+        (
+            "/api/admin/users/{user_id}/status:\n",
+            "operationId: updateAdminUserStatus",
+            "#/components/schemas/UpdateAdminUserStatusRequest",
+            [
+                "name: user_id",
+                "x-global-capabilities: [admin]",
+                "requestBody:",
+                "patch:",
+            ],
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [operation_id, "x-global-capabilities: [admin]", schema_name] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI operation {path} must declare {expected:?}"
+            );
+        }
+        for expected in expected_parameters {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI operation {path} must declare {expected:?}"
+            );
+        }
+    }
+
+    let audit_event = schema("AdminAuditEvent");
+    assert!(!audit_event.contains("metadata_json"));
+    assert_schema_contains(
+        "AdminAuditEvent",
+        &["actor_user_id:", "action:", "entity_type:", "created_at:"],
+    );
+
+    let admin_user = schema("AdminUser");
+    assert!(!admin_user.contains("password_hash"));
+    assert!(!admin_user.contains("token_hash"));
+    assert_schema_contains(
+        "AdminUser",
+        &[
+            "global_capabilities:",
+            "status:",
+            "created_at:",
+            "last_session_at:",
+        ],
+    );
+    assert_schema_contains(
+        "UpdateAdminUserStatusRequest",
+        &["enum: [active, disabled, locked]", "reason:"],
+    );
+}
+
+#[test]
 fn clue_attachment_openapi_contract_keeps_evidence_case_restricted() {
     let attachment_operation = operation("/api/clues/{clue_id}/attachments:\n");
     for expected in [

@@ -1,3 +1,4 @@
+mod admin_api;
 mod auth_login_post;
 mod auth_logout_post;
 mod auth_me_get;
