@@ -233,6 +233,21 @@ mod tests {
         ),
     ];
 
+    const SUMMARY_DRAFT_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/up/0022_create_summary_drafts.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/up/0022_create_summary_drafts.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/up/0022_create_summary_drafts.sql"),
+        ),
+    ];
+
     #[tokio::test]
     async fn sqlite_migrations_support_up_down_up() {
         let database = Database::connect("sqlite::memory:")
@@ -712,6 +727,28 @@ mod tests {
                     "{name} must exclude learner"
                 );
                 assert!(!normalized.contains("'admin'"), "{name} must exclude admin");
+            }
+        }
+    }
+
+    #[test]
+    fn summary_drafts_keep_publication_eligibility_boolean_across_dialects() {
+        for (name, script) in SUMMARY_DRAFT_SCRIPTS {
+            let normalized = script.to_ascii_lowercase();
+            assert!(
+                normalized.contains("publication_eligible"),
+                "{name} summary drafts must persist publication eligibility"
+            );
+            if *name == "postgres" {
+                assert!(
+                    normalized.contains("publication_eligible boolean not null"),
+                    "postgres must use a native non-null boolean"
+                );
+            } else {
+                assert!(
+                    normalized.contains("check (publication_eligible in (0, 1))"),
+                    "{name} must constrain publication eligibility to 0 or 1"
+                );
             }
         }
     }
