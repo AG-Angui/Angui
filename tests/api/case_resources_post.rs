@@ -3,11 +3,11 @@ use actix_web::{
     test,
 };
 use angui::{
-    entities::case_places,
+    entities::{audit_events, case_places, clue_attachment_links},
     models::{CreateCasePlaceRequest, PlaceVisibility},
     services::case_resource_service,
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
 use serde_json::json;
 
 use crate::support::{COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
@@ -451,4 +451,115 @@ async fn post_case_attachments_rejects_mismatched_or_non_image_content() {
         .await;
         assert_error(response, StatusCode::BAD_REQUEST, "validation_error").await;
     }
+}
+
+#[actix_web::test]
+async fn post_clue_attachments_links_evidence_atomically_and_enforces_submitter_scope() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let family_clue_id = context.create_clue(&case_id, FAMILY).await;
+    let volunteer_clue_id = context.create_clue(&case_id, VOLUNTEER).await;
+    let app = crate::init_api_app!(&context);
+    let png: [u8; 68] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+        0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1, 5,
+        1, 1, 39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    let upload = |clue_id: &str, token: &str, boundary: &str| {
+        let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"fictional-evidence.png\"\r\nContent-Type: image/png\r\n\r\n").into_bytes();
+        body.extend_from_slice(&png);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        test::TestRequest::post()
+            .uri(&format!("/api/clues/{clue_id}/attachments"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request()
+    };
+
+    let family_token = context.token(FAMILY).await;
+    let uploaded = test::call_service(
+        &app,
+        upload(&family_clue_id, &family_token, "clue-attachment-family"),
+    )
+    .await;
+    assert_eq!(uploaded.status(), StatusCode::CREATED);
+    let uploaded: serde_json::Value = test::read_body_json(uploaded).await;
+    let attachment_id = uploaded["id"].as_str().expect("attachment id");
+    assert_eq!(uploaded["review_status"], "pending_review");
+    assert!(
+        clue_attachment_links::Entity::find()
+            .filter(clue_attachment_links::Column::ClueId.eq(&family_clue_id))
+            .filter(clue_attachment_links::Column::AttachmentId.eq(attachment_id))
+            .one(&context.database)
+            .await
+            .expect("attachment link query should succeed")
+            .is_some()
+    );
+    assert!(
+        audit_events::Entity::find()
+            .filter(audit_events::Column::EntityId.eq(attachment_id))
+            .filter(audit_events::Column::Action.eq("clue.attachment_submitted"))
+            .one(&context.database)
+            .await
+            .expect("attachment audit query should succeed")
+            .is_some()
+    );
+
+    let volunteer_token = context.token(VOLUNTEER).await;
+    let hidden = test::call_service(
+        &app,
+        upload(&family_clue_id, &volunteer_token, "clue-attachment-hidden"),
+    )
+    .await;
+    assert_error(hidden, StatusCode::NOT_FOUND, "not_found").await;
+
+    let commander_token = context.token(COMMANDER).await;
+    let commander_upload = test::call_service(
+        &app,
+        upload(
+            &volunteer_clue_id,
+            &commander_token,
+            "clue-attachment-commander",
+        ),
+    )
+    .await;
+    assert_eq!(commander_upload.status(), StatusCode::CREATED);
+    let commander_attachment: serde_json::Value = test::read_body_json(commander_upload).await;
+    let commander_attachment_id = commander_attachment["id"]
+        .as_str()
+        .expect("commander attachment id");
+    let family_cannot_download_internal_evidence = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/cases/{case_id}/attachments/{commander_attachment_id}"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        family_cannot_download_internal_evidence,
+        StatusCode::FORBIDDEN,
+        "forbidden",
+    )
+    .await;
+
+    context.close_case(&case_id).await;
+    let closed = test::call_service(
+        &app,
+        upload(&family_clue_id, &family_token, "clue-attachment-closed"),
+    )
+    .await;
+    assert_error(closed, StatusCode::CONFLICT, "conflict").await;
 }

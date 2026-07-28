@@ -989,6 +989,25 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/cases/{case_id}/archive-drafts:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    post:
+      tags: [Cases]
+      operationId: createCaseArchiveDraft
+      summary: Create a controlled internal archive draft
+      description: Only a case commander may create this deterministic internal draft for a resolved or closed case. It records only allowlisted status and count metadata, remains manual_review_required, and cannot publish, index, export, or print case material.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: case-restricted
+      responses:
+        "201": { description: Internal archive draft requiring de-identification review, content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveDraft" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/places:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -1215,6 +1234,40 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /api/clues/{clue_id}/attachments:
+    parameters:
+      - $ref: "#/components/parameters/ClueId"
+    post:
+      tags: [Clues]
+      operationId: uploadClueAttachment
+      summary: Upload pending-review image evidence for one clue
+      description: Accepts exactly one multipart file (JPEG or PNG). The server verifies actual format, re-encodes the image to remove EXIF/GPS metadata, creates a pending_review attachment, links it to the clue, and audits the operation atomically. Commanders may attach evidence to any clue in their case; family and volunteers may only attach to clues they submitted. Attachments remain case-restricted and are never exposed through public progress.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [family, commander, volunteer]
+      x-data-classification: case-restricted
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201": { description: Pending-review image evidence linked to the clue, content: { application/json: { schema: { $ref: "#/components/schemas/CaseAttachment" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
 components:
   securitySchemes:
@@ -2534,6 +2587,22 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         publication_eligible: { type: boolean }
+
+    ArchiveDraft:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, status, content, source_scope, deidentification_status, template_version, provider_model, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft] }
+        content: { type: string, description: Internal deterministic draft content containing no raw case materials. }
+        source_scope: { type: array, items: { type: string, enum: [confirmed_clue_metadata, completed_task_metadata] } }
+        deidentification_status: { type: string, enum: [manual_review_required] }
+        template_version: { type: string }
+        provider_model: { type: [string, "null"], description: Always null for the rule-based draft generator. }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     CaseSummary:
       type: object

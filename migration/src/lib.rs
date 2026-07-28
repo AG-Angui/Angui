@@ -24,6 +24,7 @@ mod m0021_create_user_profiles_and_elder_profile_revisions;
 mod m0022_create_summary_drafts;
 mod m0023_create_clue_drafts;
 mod m0024_enforce_single_published_summary_draft;
+mod m0025_create_archive_drafts;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -57,6 +58,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0022_create_summary_drafts::Migration),
             Box::new(m0023_create_clue_drafts::Migration),
             Box::new(m0024_enforce_single_published_summary_draft::Migration),
+            Box::new(m0025_create_archive_drafts::Migration),
         ]
     }
 }
@@ -265,6 +267,21 @@ mod tests {
         ),
     ];
 
+    const ARCHIVE_DRAFT_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/up/0025_create_archive_drafts.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/up/0025_create_archive_drafts.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/up/0025_create_archive_drafts.sql"),
+        ),
+    ];
+
     #[tokio::test]
     async fn sqlite_migrations_support_up_down_up() {
         let database = Database::connect("sqlite::memory:")
@@ -280,6 +297,44 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[tokio::test]
+    async fn sqlite_archive_draft_migration_preserves_data_and_refuses_unsafe_rollback() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, Some(24))
+            .await
+            .expect("schema before archive draft migration should succeed");
+        insert_member_and_session(&database, "archive-draft").await;
+        database
+            .execute_unprepared(
+                "INSERT INTO cases (id, case_code, status, created_at, updated_at) VALUES ('archive-draft-case', 'AG-00000025', 'resolved', '2026-07-28T00:00:00.000Z', '2026-07-28T00:00:00.000Z')",
+            )
+            .await
+            .expect("archive draft case fixture should be stored");
+
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("archive draft migration should succeed");
+        database
+            .execute_unprepared(
+                "INSERT INTO archive_drafts (id, case_id, status, content, source_scope_json, deidentification_status, template_version, provider_model, created_by_user_id, created_at, updated_at) VALUES ('archive-draft-1', 'archive-draft-case', 'draft', 'Internal test archive draft.', '[\"confirmed_clue_metadata\"]', 'manual_review_required', 'v1', NULL, 'archive-draft-user', '2026-07-28T00:00:00.000Z', '2026-07-28T00:00:00.000Z')",
+            )
+            .await
+            .expect("archive draft should satisfy schema constraints");
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        assert!(
+            database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM archive_drafts WHERE id = 'archive-draft-1'",
+                ))
+                .await
+                .expect("archive draft query should succeed")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -814,6 +869,26 @@ mod tests {
                 assert!(
                     normalized.contains("check (publication_eligible in (0, 1))"),
                     "{name} must constrain publication eligibility to 0 or 1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn archive_drafts_have_matching_restricted_lifecycle_constraints_across_dialects() {
+        for (name, script) in ARCHIVE_DRAFT_SCRIPTS {
+            let normalized = script.to_ascii_lowercase();
+            for required in [
+                "archive_drafts",
+                "source_scope_json",
+                "manual_review_required",
+                "foreign key (case_id)",
+                "foreign key (created_by_user_id)",
+                "idx_archive_drafts_case_created",
+            ] {
+                assert!(
+                    normalized.contains(required),
+                    "{name} archive draft schema must declare {required}"
                 );
             }
         }
