@@ -79,7 +79,6 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
             .is_none()
     );
     assert!(!public_progress.to_string().contains("测试线索"));
-    assert!(public_progress.get("task_status").is_none());
     assert_error(
         test::call_service(
             &app,
@@ -143,6 +142,21 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     )
     .await;
     assert_eq!(task.status(), StatusCode::CREATED);
+
+    let public_progress_after_task = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/public-progress"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(FAMILY).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(public_progress_after_task.status(), StatusCode::OK);
+    let public_progress_after_task: Value = test::read_body_json(public_progress_after_task).await;
+    assert!(public_progress_after_task.get("task_status").is_none());
 
     let pois = test::call_service(
         &app,
