@@ -249,7 +249,7 @@ export function listCasePois(token: string, caseId: string, category = 'hospital
 }
 
 export function createSummaryDraft(token: string, caseId: string, content?: string): Promise<SummaryDraft> {
-  return apiRequest<SummaryDraft>(`/cases/${caseId}/summary-drafts`, { method: 'POST', body: JSON.stringify(content ? { content } : {}) }, token)
+  return apiRequest<SummaryDraft>(`/cases/${caseId}/summary-drafts`, { method: 'POST', body: JSON.stringify(content === undefined ? {} : { content }) }, token)
 }
 
 export function reviewSummaryDraft(token: string, caseId: string, draftId: string, payload: { action: 'submit' | 'publish' | 'reject' | 'withdraw'; reason: string }): Promise<SummaryDraft> {
