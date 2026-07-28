@@ -260,7 +260,9 @@ struct AmapPoiResponse {
 
 #[derive(Deserialize)]
 struct AmapPoi {
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     name: String,
     #[serde(default)]
     address: String,
@@ -280,7 +282,7 @@ fn parse_coordinate(value: &str) -> Option<Coordinate> {
 mod tests {
     use std::env;
 
-    use super::{AmapService, Coordinate, RouteEstimate, RouteMode};
+    use super::{AmapPoiResponse, AmapService, Coordinate, RouteEstimate, RouteMode};
 
     #[test]
     fn coordinates_use_longitude_before_latitude() {
@@ -301,6 +303,26 @@ mod tests {
             }
             .is_valid()
         );
+    }
+
+    #[test]
+    fn pois_with_missing_identity_fields_do_not_reject_the_whole_response() {
+        let response: AmapPoiResponse = serde_json::from_str(
+            r#"{
+                "status": "1",
+                "pois": [
+                    { "id": "valid-poi", "name": "Fictional community clinic", "address": "Fictional public road", "location": "117.2272,31.8206" },
+                    { "name": "Missing identifier" },
+                    { "id": "missing-name" }
+                ]
+            }"#,
+        )
+        .expect("a malformed POI entry should not prevent the response from deserializing");
+
+        assert_eq!(response.pois.len(), 3);
+        assert_eq!(response.pois[0].id, "valid-poi");
+        assert!(response.pois[1].id.is_empty());
+        assert!(response.pois[2].name.is_empty());
     }
 
     #[actix_web::test]
