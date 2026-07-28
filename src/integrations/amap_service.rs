@@ -38,6 +38,21 @@ pub enum RouteUnavailableReason {
     InvalidResponse,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum PoiSearch {
+    Available(Vec<Poi>),
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Poi {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub address: Option<String>,
+    pub coordinate: Option<Coordinate>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Coordinate {
     pub longitude: f64,
@@ -153,6 +168,69 @@ impl AmapService {
             mode,
         }
     }
+
+    pub async fn search_nearby_pois(&self, center: Coordinate, category: &str) -> PoiSearch {
+        if !center.is_valid()
+            || !matches!(
+                category,
+                "hospital" | "police" | "transit" | "market" | "community_service"
+            )
+        {
+            return PoiSearch::Unavailable;
+        }
+        let Some(key) = self.key.as_ref() else {
+            return PoiSearch::Unavailable;
+        };
+        let types = match category {
+            "hospital" => "090100",
+            "police" => "130501",
+            "transit" => "150500",
+            "market" => "060101",
+            "community_service" => "130104",
+            _ => return PoiSearch::Unavailable,
+        };
+        let location = center.as_query_value();
+        let response = match self
+            .client
+            .get(format!("{}/v3/place/around", self.base_url))
+            .query(&[
+                ("key", key.as_str()),
+                ("location", location.as_str()),
+                ("types", types),
+                ("radius", "3000"),
+                ("offset", "10"),
+                ("page", "1"),
+            ])
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => response,
+            Ok(_) | Err(_) => return PoiSearch::Unavailable,
+        };
+        let payload: AmapPoiResponse = match response.json().await {
+            Ok(payload) => payload,
+            Err(_) => return PoiSearch::Unavailable,
+        };
+        if payload.status.as_deref() != Some("1") {
+            return PoiSearch::Unavailable;
+        }
+        PoiSearch::Available(
+            payload
+                .pois
+                .into_iter()
+                .filter_map(|poi| {
+                    let coordinate = poi.location.as_deref().and_then(parse_coordinate);
+                    (!poi.id.trim().is_empty() && !poi.name.trim().is_empty()).then_some(Poi {
+                        id: poi.id,
+                        name: poi.name,
+                        category: category.to_owned(),
+                        address: (!poi.address.trim().is_empty()).then_some(poi.address),
+                        coordinate,
+                    })
+                })
+                .collect(),
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -173,11 +251,38 @@ struct AmapPath {
     duration: String,
 }
 
+#[derive(Deserialize)]
+struct AmapPoiResponse {
+    status: Option<String>,
+    #[serde(default)]
+    pois: Vec<AmapPoi>,
+}
+
+#[derive(Deserialize)]
+struct AmapPoi {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    address: String,
+    location: Option<String>,
+}
+
+fn parse_coordinate(value: &str) -> Option<Coordinate> {
+    let (longitude, latitude) = value.split_once(',')?;
+    let coordinate = Coordinate {
+        longitude: longitude.parse().ok()?,
+        latitude: latitude.parse().ok()?,
+    };
+    coordinate.is_valid().then_some(coordinate)
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
 
-    use super::{AmapService, Coordinate, RouteEstimate, RouteMode};
+    use super::{AmapPoiResponse, AmapService, Coordinate, RouteEstimate, RouteMode};
 
     #[test]
     fn coordinates_use_longitude_before_latitude() {
@@ -198,6 +303,26 @@ mod tests {
             }
             .is_valid()
         );
+    }
+
+    #[test]
+    fn pois_with_missing_identity_fields_do_not_reject_the_whole_response() {
+        let response: AmapPoiResponse = serde_json::from_str(
+            r#"{
+                "status": "1",
+                "pois": [
+                    { "id": "valid-poi", "name": "Fictional community clinic", "address": "Fictional public road", "location": "117.2272,31.8206" },
+                    { "name": "Missing identifier" },
+                    { "id": "missing-name" }
+                ]
+            }"#,
+        )
+        .expect("a malformed POI entry should not prevent the response from deserializing");
+
+        assert_eq!(response.pois.len(), 3);
+        assert_eq!(response.pois[0].id, "valid-poi");
+        assert!(response.pois[1].id.is_empty());
+        assert!(response.pois[2].name.is_empty());
     }
 
     #[actix_web::test]

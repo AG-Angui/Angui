@@ -1,4 +1,5 @@
 pub mod auth_service;
+pub mod case_collaboration_service;
 pub mod case_resource_service;
 pub mod case_service;
 pub mod case_summary_service;

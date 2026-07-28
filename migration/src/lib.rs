@@ -21,6 +21,9 @@ mod m0018_create_case_places_and_attachments;
 mod m0019_expand_clue_lifecycle;
 mod m0020_create_tasks_and_location_reports;
 mod m0021_create_user_profiles_and_elder_profile_revisions;
+mod m0022_create_summary_drafts;
+mod m0023_create_clue_drafts;
+mod m0024_enforce_single_published_summary_draft;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -51,6 +54,9 @@ impl MigratorTrait for Migrator {
             Box::new(m0019_expand_clue_lifecycle::Migration),
             Box::new(m0020_create_tasks_and_location_reports::Migration),
             Box::new(m0021_create_user_profiles_and_elder_profile_revisions::Migration),
+            Box::new(m0022_create_summary_drafts::Migration),
+            Box::new(m0023_create_clue_drafts::Migration),
+            Box::new(m0024_enforce_single_published_summary_draft::Migration),
         ]
     }
 }
@@ -229,6 +235,36 @@ mod tests {
         ),
     ];
 
+    const SUMMARY_DRAFT_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/up/0022_create_summary_drafts.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/up/0022_create_summary_drafts.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/up/0022_create_summary_drafts.sql"),
+        ),
+    ];
+
+    const PUBLISHED_SUMMARY_DRAFT_CONSTRAINT_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/up/0024_enforce_single_published_summary_draft.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/up/0024_enforce_single_published_summary_draft.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/up/0024_enforce_single_published_summary_draft.sql"),
+        ),
+    ];
+
     #[tokio::test]
     async fn sqlite_migrations_support_up_down_up() {
         let database = Database::connect("sqlite::memory:")
@@ -244,6 +280,55 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[tokio::test]
+    async fn sqlite_published_summary_draft_constraint_deduplicates_and_enforces_one_per_case() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, Some(23))
+            .await
+            .expect("schema before published summary constraint should succeed");
+        insert_member_and_session(&database, "published-summary").await;
+        database
+            .execute_unprepared(
+                "INSERT INTO cases (id, case_code, status, created_at, updated_at) VALUES ('published-summary-case', 'AG-00000024', 'active', '2026-07-28T00:00:00.000Z', '2026-07-28T00:00:00.000Z'); INSERT INTO summary_drafts (id, case_id, status, content, source_scope_json, template_version, provider_model, publication_eligible, generated_by_user_id, reviewed_by_user_id, reviewed_at, review_reason, created_at, updated_at) VALUES ('published-summary-older', 'published-summary-case', 'published', 'Older controlled summary.', '{}', 'v1', NULL, 1, 'published-summary-user', NULL, NULL, NULL, '2026-07-28T00:00:00.000Z', '2026-07-28T00:00:00.000Z'), ('published-summary-newer', 'published-summary-case', 'published', 'Newer controlled summary.', '{}', 'v1', NULL, 1, 'published-summary-user', NULL, NULL, NULL, '2026-07-28T00:00:01.000Z', '2026-07-28T00:00:01.000Z')",
+            )
+            .await
+            .expect("legacy duplicate published summaries should be insertable before the constraint");
+
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("published summary constraint migration should succeed");
+        let published = database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT id FROM summary_drafts WHERE case_id = 'published-summary-case' AND status = 'published'",
+            ))
+            .await
+            .expect("published summary query should succeed")
+            .expect("one published summary should remain after migration");
+        assert_eq!(
+            published.try_get::<String>("", "id").unwrap(),
+            "published-summary-newer"
+        );
+        assert!(database
+            .execute_unprepared(
+                "INSERT INTO summary_drafts (id, case_id, status, content, source_scope_json, template_version, provider_model, publication_eligible, generated_by_user_id, reviewed_by_user_id, reviewed_at, review_reason, created_at, updated_at) VALUES ('published-summary-conflict', 'published-summary-case', 'published', 'Conflicting controlled summary.', '{}', 'v1', NULL, 1, 'published-summary-user', NULL, NULL, NULL, '2026-07-28T00:00:02.000Z', '2026-07-28T00:00:02.000Z')",
+            )
+            .await
+            .is_err());
+
+        Migrator::down(&database, Some(1))
+            .await
+            .expect("removing the published summary constraint should not discard data");
+        database
+            .execute_unprepared(
+                "INSERT INTO summary_drafts (id, case_id, status, content, source_scope_json, template_version, provider_model, publication_eligible, generated_by_user_id, reviewed_by_user_id, reviewed_at, review_reason, created_at, updated_at) VALUES ('published-summary-after-down', 'published-summary-case', 'published', 'Rollback verification summary.', '{}', 'v1', NULL, 1, 'published-summary-user', NULL, NULL, NULL, '2026-07-28T00:00:03.000Z', '2026-07-28T00:00:03.000Z')",
+            )
+            .await
+            .expect("rollback should remove only the constraint");
     }
 
     #[tokio::test]
@@ -322,9 +407,15 @@ mod tests {
             .await
             .expect("clue with a distinct report time should be stored");
 
-        // The current tail migration stores profile revisions, so roll it back
-        // before exercising the lifecycle rollback guard from migration 0019.
-        assert!(Migrator::down(&database, Some(3)).await.is_err());
+        // Roll back every migration after the lifecycle migration before
+        // exercising migration 0019's reported-at safety guard.
+        let migrations_after_lifecycle =
+            u32::try_from(Migrator::migrations().len() - 18).expect("migration count must fit u32");
+        assert!(
+            Migrator::down(&database, Some(migrations_after_lifecycle))
+                .await
+                .is_err()
+        );
         assert!(database
             .query_one(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
@@ -399,9 +490,15 @@ mod tests {
             .await
             .expect("simulated task location should reference the assignment");
 
-        // Migration 0021 is non-destructive here; the second rollback reaches
-        // the task migration whose safety guard must reject this fixture.
-        assert!(Migrator::down(&database, Some(2)).await.is_err());
+        // Roll back every migration after the task migration; its safety guard
+        // must reject this fixture.
+        let migrations_after_tasks =
+            u32::try_from(Migrator::migrations().len() - 19).expect("migration count must fit u32");
+        assert!(
+            Migrator::down(&database, Some(migrations_after_tasks))
+                .await
+                .is_err()
+        );
         database
             .execute_unprepared("DELETE FROM tasks WHERE id = 'task-1'")
             .await
@@ -696,6 +793,54 @@ mod tests {
                     "{name} must exclude learner"
                 );
                 assert!(!normalized.contains("'admin'"), "{name} must exclude admin");
+            }
+        }
+    }
+
+    #[test]
+    fn summary_drafts_keep_publication_eligibility_boolean_across_dialects() {
+        for (name, script) in SUMMARY_DRAFT_SCRIPTS {
+            let normalized = script.to_ascii_lowercase();
+            assert!(
+                normalized.contains("publication_eligible"),
+                "{name} summary drafts must persist publication eligibility"
+            );
+            if *name == "postgres" {
+                assert!(
+                    normalized.contains("publication_eligible boolean not null"),
+                    "postgres must use a native non-null boolean"
+                );
+            } else {
+                assert!(
+                    normalized.contains("check (publication_eligible in (0, 1))"),
+                    "{name} must constrain publication eligibility to 0 or 1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn published_summary_drafts_are_constrained_to_one_per_case_across_dialects() {
+        for (name, script) in PUBLISHED_SUMMARY_DRAFT_CONSTRAINT_SCRIPTS {
+            let normalized = script.to_ascii_lowercase();
+            assert!(
+                normalized.contains("update summary_drafts"),
+                "{name} must reconcile existing duplicate publications before adding the constraint"
+            );
+            assert!(
+                normalized.contains("idx_summary_drafts_one_published_per_case"),
+                "{name} must add a per-case published-summary uniqueness constraint"
+            );
+            if *name == "mysql" {
+                assert!(
+                    normalized.contains("if(status = 'published', case_id, null)"),
+                    "mysql must emulate the partial unique index with a functional key part"
+                );
+            } else {
+                assert!(
+                    normalized.contains("where status = 'published'"),
+                    "{name} must scope uniqueness to published summaries"
+                );
             }
         }
     }

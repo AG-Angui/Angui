@@ -6,9 +6,11 @@ import { CaseWorkspacePage } from './CaseWorkspacePage'
 const mocked = vi.hoisted(() => ({
   auth: { token: 'test-session' as string | null },
   getCase: vi.fn(),
+  getCasePublicProgress: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
   listCaseClues: vi.fn(),
+  listCasePois: vi.fn(),
   addCaseMember: vi.fn(),
   reviewClue: vi.fn(),
 }))
@@ -18,9 +20,11 @@ vi.mock('../auth/useAuth', () => ({
 }))
 vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
+  getCasePublicProgress: (...args: unknown[]) => mocked.getCasePublicProgress(...args),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
   listCaseClues: (...args: unknown[]) => mocked.listCaseClues(...args),
+  listCasePois: (...args: unknown[]) => mocked.listCasePois(...args),
   addCaseMember: (...args: unknown[]) => mocked.addCaseMember(...args),
   createCase: vi.fn(),
   createClue: vi.fn(),
@@ -114,6 +118,42 @@ describe('CaseWorkspacePage', () => {
     expect(screen.queryByText('过期请求')).not.toBeInTheDocument()
   })
 
+  it('discards a stale family public-progress response after switching cases', async () => {
+    vi.clearAllMocks()
+    const firstProgress = deferred<Record<string, unknown>>()
+    const secondProgress = deferred<Record<string, unknown>>()
+    mocked.listCases.mockResolvedValue([
+      { id: 'case-1', case_code: 'AG-1', status: 'active', access_role: 'family', display_name: 'Case one', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' },
+      { id: 'case-2', case_code: 'AG-2', status: 'active', access_role: 'family', display_name: 'Case two', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' },
+    ])
+    mocked.getCase.mockImplementation((_token: string, caseId: string) => Promise.resolve(detail(caseId, caseId === 'case-1' ? 'Case one' : 'Case two')))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.getCasePublicProgress.mockImplementation((_token: string, caseId: string) => (
+      caseId === 'case-1' ? firstProgress.promise : secondProgress.promise
+    ))
+
+    render(<CaseWorkspacePage mode="family" />)
+
+    await screen.findByRole('heading', { name: 'Case one' })
+    await waitFor(() => expect(mocked.getCasePublicProgress).toHaveBeenCalledWith('test-session', 'case-1'))
+    fireEvent.click(screen.getByText('Case two'))
+    await screen.findByRole('heading', { name: 'Case two' })
+    await waitFor(() => expect(mocked.getCasePublicProgress).toHaveBeenCalledWith('test-session', 'case-2'))
+
+    await act(async () => {
+      secondProgress.resolve({ case_id: 'case-2', status: 'active', generated_at: '2026-07-24T00:00:00Z', confirmed_progress: [{ clue_id: 'new', progress_type: 'confirmed_update', review_status: 'confirmed', updated_at: '2026-07-24T00:00:00Z' }], requested_family_information: [], safety_and_contact_reminders: [] })
+      await secondProgress.promise
+    })
+    expect(await screen.findByText('已确认一项案件进展。')).toBeInTheDocument()
+
+    await act(async () => {
+      firstProgress.reject(new Error('stale public progress failure'))
+      await firstProgress.promise.catch(() => undefined)
+    })
+    expect(screen.getByText('已确认一项案件进展。')).toBeInTheDocument()
+    expect(screen.queryByText('stale public progress failure')).not.toBeInTheDocument()
+  })
+
   it('lets an authorized commander invite the demo volunteer to an active case', async () => {
     mocked.listCases.mockResolvedValue([
       {
@@ -164,6 +204,24 @@ describe('CaseWorkspacePage', () => {
     expect(screen.queryByRole('button', { name: '提交地点' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '上传图片' })).not.toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: '案件状态' })).toBeDisabled()
+  })
+
+  it('clears nearby resource results when the selected category changes', async () => {
+    vi.clearAllMocks()
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: 'Commander case', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(detail('case-command', 'Commander case', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.listCaseClues.mockResolvedValue({ items: [], page: 1, page_size: 25, total: 0 })
+    mocked.listCasePois.mockResolvedValue({ items: [{ id: 'hospital-1', name: 'Fictional hospital', category: 'hospital', address: 'Fictional address', longitude: null, latitude: null }], source: 'fixed_demo_fallback', degradation_status: 'degraded', fallback_message: null })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: 'Commander case' })
+    fireEvent.click(screen.getByRole('button', { name: '查询' }))
+    expect(await screen.findByText('Fictional hospital')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('周边资源类别'), { target: { value: 'police' } })
+    expect(screen.queryByText('Fictional hospital')).not.toBeInTheDocument()
   })
 
   it('loads a filtered commander queue and requires confirmation before reviewing a clue', async () => {

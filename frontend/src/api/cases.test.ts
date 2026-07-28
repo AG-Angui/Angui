@@ -3,6 +3,7 @@ import {
   addCaseMember,
   createCase,
   createClue,
+  createSummaryDraft,
   getCase,
   listCaseClues,
   listCases,
@@ -111,6 +112,21 @@ describe('case API contract', () => {
       { source: 'volunteer', content: '模拟线索', occurred_at: null, location_text: null },
       { status: 'confirmed', reason: 'Reviewed source record' },
       { status: 'resolved' },
+    ])
+  })
+
+  it('preserves an explicit empty summary draft content so the server can reject it', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(201, { id: 'summary-1' }))
+      .mockResolvedValueOnce(jsonResponse(400, { error: { code: 'validation_error', message: 'content is required' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createSummaryDraft('test-session', 'case-1')
+    await expect(createSummaryDraft('test-session', 'case-1', '')).rejects.toMatchObject({ status: 400 })
+
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(String(requestOptions(call).body)))).toEqual([
+      {},
+      { content: '' },
     ])
   })
 })

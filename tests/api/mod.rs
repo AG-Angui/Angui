@@ -4,6 +4,7 @@ mod auth_me_get;
 mod authentication_guards;
 mod case_clues_get;
 mod case_clues_post;
+mod case_collaboration_get_post;
 mod case_detail_get;
 mod case_elder_profile_patch;
 mod case_map_view_get;

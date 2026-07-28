@@ -3,6 +3,31 @@ use std::sync::LazyLock;
 static OPENAPI: LazyLock<String> =
     LazyLock::new(|| include_str!("../../docs/openapi.yaml").replace("\r\n", "\n"));
 
+fn operation_block<'a>(openapi: &'a str, path: &str) -> Option<&'a str> {
+    let marker = format!("  {path}");
+    let (_, after_marker) = openapi.split_once(&marker)?;
+    let next_path = after_marker.find("\n  /");
+    let next_top_level = after_marker
+        .match_indices('\n')
+        .find(|(index, _)| {
+            after_marker
+                .as_bytes()
+                .get(*index + 1)
+                .is_some_and(|next| !next.is_ascii_whitespace())
+        })
+        .map(|(index, _)| index);
+    let end = [next_path, next_top_level]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(after_marker.len());
+    Some(&after_marker[..end])
+}
+
+fn operation(path: &str) -> &str {
+    operation_block(&OPENAPI, path).unwrap_or_else(|| panic!("OpenAPI path {path} must exist"))
+}
+
 fn schema(name: &str) -> &str {
     let marker = format!("\n    {name}:\n");
     let (_, after_marker) = OPENAPI
@@ -232,4 +257,92 @@ fn case_summary_openapi_contract_covers_role_filtered_deterministic_output() {
             "safety_reminders:",
         ],
     );
+}
+
+#[test]
+fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() {
+    for (path, operation_id, roles, schema_name) in [
+        (
+            "/api/cases/{case_id}/public-progress:\n",
+            "operationId: getCasePublicProgress",
+            "x-case-roles: [family]",
+            "#/components/schemas/CasePublicProgress",
+        ),
+        (
+            "/api/cases/{case_id}/clue-drafts:\n",
+            "operationId: createClueDrafts",
+            "x-case-roles: [family, commander, volunteer]",
+            "#/components/schemas/CreateClueDraftRequest",
+        ),
+        (
+            "/api/cases/{case_id}/pois:\n",
+            "operationId: listCasePois",
+            "x-case-roles: [commander, volunteer]",
+            "#/components/schemas/CasePois",
+        ),
+        (
+            "/api/cases/{case_id}/summary-drafts:\n",
+            "operationId: createSummaryDraft",
+            "x-case-roles: [commander]",
+            "#/components/schemas/SummaryDraft",
+        ),
+        (
+            "/api/cases/{case_id}/summary-drafts/{draft_id}/review:\n",
+            "operationId: reviewSummaryDraft",
+            "x-case-roles: [commander]",
+            "#/components/schemas/ReviewSummaryDraftRequest",
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [operation_id, roles, schema_name] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI operation {path} must declare {expected:?}"
+            );
+        }
+    }
+    assert_schema_contains(
+        "SummaryDraft",
+        &[
+            "enum: [draft, pending_review, published, rejected, withdrawn, superseded]",
+            "publication_eligible:",
+            "source_scope:",
+        ],
+    );
+    assert_schema_contains(
+        "CasePois",
+        &["maxItems: 10", "fixed_demo_fallback", "degraded"],
+    );
+    assert_schema_contains(
+        "ClueDraft",
+        &[
+            "raw_record_reference:",
+            "uncertainty_notice:",
+            "rule_based_fallback",
+        ],
+    );
+    let public_progress_item = schema("CasePublicProgressItem");
+    assert!(public_progress_item.contains("progress_type:"));
+    assert!(public_progress_item.contains("Raw clue text is never returned."));
+    assert!(!public_progress_item.contains("content:"));
+}
+
+#[test]
+fn operation_blocks_stop_before_later_paths_and_top_level_sections() {
+    let document = "openapi: 3.0.0\npaths:\n  /current:\n    get:\n      operationId: currentOperation\n  /later:\n    get:\n      operationId: laterOperation\ncomponents:\n  schemas:\n    LaterSchema:\n      type: object\n";
+
+    let current =
+        operation_block(document, "/current:\n").expect("current path should be extracted");
+    assert!(current.contains("currentOperation"));
+    assert!(!current.contains("laterOperation"));
+
+    let later = operation_block(document, "/later:\n").expect("later path should be extracted");
+    assert!(later.contains("laterOperation"));
+    assert!(!later.contains("LaterSchema"));
+
+    let final_document = "openapi: 3.0.0\npaths:\n  /final:\n    get:\n      operationId: finalOperation\ncomponents:\n  schemas:\n    FinalSchema:\n      type: object\n";
+    let final_operation = operation_block(final_document, "/final:\n")
+        .expect("final path should be extracted without a following path");
+    assert!(final_operation.contains("finalOperation"));
+    assert!(!final_operation.contains("FinalSchema"));
 }

@@ -13,12 +13,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addCaseMember,
   createCasePlace,
+  createClueDraft,
+  createSummaryDraft,
+  getCasePublicProgress,
+  listCasePois,
   createClue,
   getCase,
   getCaseResourceConfiguration,
   listCaseClues,
   listCases,
   reviewClue,
+  reviewSummaryDraft,
   updateCaseStatus,
   updateElderProfile,
   uploadCaseAttachment,
@@ -29,13 +34,17 @@ import type {
   CaseRole,
   CaseResourceConfiguration,
   CaseStatus,
+  CasePois,
+  CasePublicProgress,
   Clue,
+  ClueDraft,
   ClueReviewStatus,
   ClueSourceType,
   ClueStatus,
   CreateCasePlacePayload,
   LocationPrecision,
   PublicClueSourceType,
+  SummaryDraft,
   PlaceType,
   PlaceVisibility,
 } from '../api/cases'
@@ -412,6 +421,8 @@ function CaseDetailView({
         </div>
       </header>
 
+      <CaseCollaborationPanel detail={detail} token={token} />
+
       <section className="grid gap-x-8 gap-y-4 border-b border-slate-200 px-5 py-5 sm:grid-cols-2 sm:px-6 lg:grid-cols-3" aria-label="老人资料">
         <Info label="最后出现地点" value={detail.elder_profile.last_seen_location} icon={<MapPin size={16} />} />
         <Info label="最后出现时间" value={formatDate(detail.elder_profile.last_seen_at)} />
@@ -717,6 +728,128 @@ function CaseDetailView({
           </div>
       </section>
     </div>
+  )
+}
+
+function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: string | null }) {
+  const [publicProgress, setPublicProgress] = useState<CasePublicProgress | null>(null)
+  const [progressError, setProgressError] = useState('')
+  const [clueDraftText, setClueDraftText] = useState('')
+  const [clueDrafts, setClueDrafts] = useState<ClueDraft[]>([])
+  const [poiCategory, setPoiCategory] = useState('hospital')
+  const [pois, setPois] = useState<CasePois | null>(null)
+  const [summaryDraft, setSummaryDraft] = useState<SummaryDraft | null>(null)
+  const [reviewReason, setReviewReason] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+  const progressRequestVersion = useRef(0)
+  const isFamily = detail.access_role === 'family'
+  const canFindPois = detail.access_role === 'commander' || detail.access_role === 'volunteer'
+  const isCommander = detail.access_role === 'commander'
+
+  const loadPublicProgress = useCallback(async () => {
+    const requestVersion = progressRequestVersion.current + 1
+    progressRequestVersion.current = requestVersion
+    if (!token || !isFamily) {
+      setPublicProgress(null)
+      setProgressError('')
+      return
+    }
+    try {
+      setProgressError('')
+      const progress = await getCasePublicProgress(token, detail.id)
+      if (requestVersion !== progressRequestVersion.current) return
+      setPublicProgress(progress)
+    } catch (cause) {
+      if (requestVersion !== progressRequestVersion.current) return
+      setProgressError(messageFrom(cause))
+    }
+  }, [detail.id, isFamily, token])
+
+  useEffect(() => {
+    setPublicProgress(null)
+    setProgressError('')
+    setClueDraftText('')
+    setClueDrafts([])
+    setPois(null)
+    setSummaryDraft(null)
+    setReviewReason('')
+    setError('')
+    void loadPublicProgress()
+  }, [detail.id, loadPublicProgress])
+
+  async function run(key: string, action: () => Promise<void>) {
+    setBusy(key)
+    setError('')
+    try {
+      await action()
+    } catch (cause) {
+      setError(messageFrom(cause))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (!isFamily && !canFindPois && !isCommander) return null
+
+  return (
+    <section className="grid gap-5 border-b border-slate-200 bg-slate-50 px-5 py-5 sm:px-6 lg:grid-cols-2" aria-label="协作工具">
+      {isFamily && (
+        <div className="min-w-0">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="m-0 text-base font-bold text-slate-950">已核实公开进展</h3>
+            <Button size="sm" variant="ghost" isDisabled={busy !== ''} onPress={() => void loadPublicProgress()}>刷新</Button>
+          </div>
+          {progressError && <div className="mt-3"><Message tone="error">{progressError}</Message></div>}
+          {!progressError && !publicProgress && <p className="mt-3 text-sm text-slate-500">正在加载仅供家属查看的进展…</p>}
+          {publicProgress && <div className="mt-3 space-y-3">
+            <div className="rounded-md border border-emerald-200 bg-white p-3">
+              <h4 className="m-0 text-sm font-semibold text-slate-900">已确认信息</h4>
+              {publicProgress.confirmed_progress.length === 0 ? <p className="mb-0 mt-2 text-sm text-slate-500">暂时没有可公开的已确认信息。</p> : publicProgress.confirmed_progress.map((item) => <p key={item.clue_id} className="mb-0 mt-2 text-sm leading-6 text-slate-700">已确认一项案件进展。<span className="ml-2 text-xs text-slate-500">{formatDate(item.updated_at)}</span></p>)}
+            </div>
+            <div className="rounded-md border border-amber-200 bg-white p-3">
+              <h4 className="m-0 text-sm font-semibold text-slate-900">需要补充或核实</h4>
+              {publicProgress.requested_family_information.length === 0 ? <p className="mb-0 mt-2 text-sm text-slate-500">当前没有需要你补充的项目。</p> : publicProgress.requested_family_information.map((item) => <p key={item.clue_id} className="mb-0 mt-2 text-sm leading-6 text-slate-700">你提交的一项信息仍待补充或核实。<span className="ml-2 text-xs text-slate-500">{statusLabels[item.review_status] ?? item.review_status}</span></p>)}
+            </div>
+            <ul className="m-0 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-600">{publicProgress.safety_and_contact_reminders.map((reminder) => <li key={reminder}>{reminder}</li>)}</ul>
+          </div>}
+        </div>
+      )}
+
+      {canFindPois && (
+        <div className="min-w-0">
+          <h3 className="m-0 text-base font-bold text-slate-950">任务区域周边资源</h3>
+          <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">检索中心由服务端按案件任务或已确认地点确定；此处不会提交任意坐标。</p>
+          <div className="mt-3 flex gap-2">
+            <select aria-label="周边资源类别" className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm" value={poiCategory} onChange={(event) => { setPoiCategory(event.target.value); setPois(null) }}>
+              <option value="hospital">医院</option><option value="police">派出所</option><option value="transit">公交站</option><option value="market">市场</option><option value="community_service">社区服务中心</option>
+            </select>
+            <Button size="sm" variant="secondary" isDisabled={!token || busy === 'pois'} onPress={() => void run('pois', async () => { if (!token) return; setPois(await listCasePois(token, detail.id, poiCategory)) })}>查询</Button>
+          </div>
+          {pois && <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+            {pois.fallback_message && <p className="m-0 text-xs leading-5 text-amber-800">{pois.fallback_message}</p>}
+            <ul className="m-0 mt-2 space-y-2 p-0">{pois.items.map((item) => <li key={item.id} className="list-none text-sm text-slate-700"><strong className="text-slate-950">{item.name}</strong>{item.address && <span className="ml-2 text-xs text-slate-500">{item.address}</span>}</li>)}</ul>
+          </div>}
+        </div>
+      )}
+
+      <div className="min-w-0">
+        <h3 className="m-0 text-base font-bold text-slate-950">文本整理为待审核线索</h3>
+        <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">只生成可回看的草稿，不会直接创建已确认线索。</p>
+        <TextArea className="mt-3" value={clueDraftText} maxLength={4000} rows={3} placeholder="粘贴需要整理的受控文本" onChange={(event) => setClueDraftText(event.target.value)} fullWidth />
+        <div className="mt-2 flex justify-end"><Button size="sm" variant="secondary" isDisabled={!token || !clueDraftText.trim() || busy === 'clue-draft'} onPress={() => void run('clue-draft', async () => { if (!token) return; const created = await createClueDraft(token, detail.id, { text: clueDraftText, source_type: 'manual_report' }); setClueDrafts(created); setClueDraftText('') })}>生成待审核草稿</Button></div>
+        {clueDrafts.map((draft) => <div key={draft.id} className="mt-3 rounded-md border border-amber-200 bg-white p-3"><p className="m-0 whitespace-pre-wrap text-sm leading-6 text-slate-700">{draft.content}</p><p className="mb-0 mt-2 text-xs text-amber-800">{draft.uncertainty_notice}</p></div>)}
+      </div>
+
+      {isCommander && <div className="min-w-0">
+        <h3 className="m-0 text-base font-bold text-slate-950">案件摘要草稿审核</h3>
+        <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">只有服务端按已授权范围生成的摘要可发布；发布会替代该案件旧的已发布版本。</p>
+        <div className="mt-3"><Button size="sm" variant="secondary" isDisabled={!token || busy === 'summary'} onPress={() => void run('summary', async () => { if (!token) return; setSummaryDraft(await createSummaryDraft(token, detail.id)) })}>生成待审核摘要</Button></div>
+        {summaryDraft && <div className="mt-3 rounded-md border border-slate-200 bg-white p-3"><Chip size="sm" variant="soft"><Chip.Label>{statusLabels[summaryDraft.status] ?? summaryDraft.status}</Chip.Label></Chip><p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{summaryDraft.content}</p>{summaryDraft.status === 'pending_review' && <><Field label="审核理由" required><Input value={reviewReason} maxLength={1000} onChange={(event) => setReviewReason(event.target.value)} fullWidth /></Field><div className="mt-3 flex flex-wrap justify-end gap-2"><Button size="sm" variant="ghost" isDisabled={!token || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'reject', reason: reviewReason })) })}>驳回</Button><Button size="sm" variant="primary" isDisabled={!token || !summaryDraft.publication_eligible || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'publish', reason: reviewReason })) })}>审核发布</Button></div></>}</div>}
+      </div>}
+
+      {error && <div className="lg:col-span-2"><Message tone="error">{error}</Message></div>}
+    </section>
   )
 }
 

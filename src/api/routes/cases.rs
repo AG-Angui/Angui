@@ -6,9 +6,10 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse,
+        AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse, CasePoiQuery,
         CaseResourceConfigurationResponse, CreateCasePlaceRequest, CreateCaseRequest,
-        CreateClueRequest, CreateTaskRequest, TaskListQuery, UpdateCaseStatusRequest,
+        CreateClueDraftRequest, CreateClueRequest, CreateSummaryDraftRequest, CreateTaskRequest,
+        ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
         UpdateElderProfileRequest,
     },
     roles::CaseRole,
@@ -32,6 +33,20 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/tasks", web::post().to(create_task))
             .route("/{case_id}/map-view", web::get().to(get_map_view))
             .route("/{case_id}/summary", web::get().to(get_case_summary))
+            .route(
+                "/{case_id}/public-progress",
+                web::get().to(get_public_progress),
+            )
+            .route("/{case_id}/clue-drafts", web::post().to(create_clue_drafts))
+            .route("/{case_id}/pois", web::get().to(list_case_pois))
+            .route(
+                "/{case_id}/summary-drafts",
+                web::post().to(create_summary_draft),
+            )
+            .route(
+                "/{case_id}/summary-drafts/{draft_id}/review",
+                web::patch().to(review_summary_draft),
+            )
             .route("/{case_id}/places", web::get().to(list_places))
             .route("/{case_id}/places", web::post().to(create_place))
             .route(
@@ -318,6 +333,92 @@ async fn get_case_summary(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(
         crate::services::case_summary_service::get_case_summary(&state.db, &auth, &case_id).await?,
+    ))
+}
+
+async fn get_public_progress(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::get_public_progress(
+            &state.db, &auth, &case_id,
+        )
+        .await?,
+    ))
+}
+
+async fn create_clue_drafts(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+    request: web::Json<CreateClueDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        crate::services::case_collaboration_service::create_clue_drafts(
+            &state.db,
+            &auth,
+            &case_id,
+            request.into_inner(),
+            &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn list_case_pois(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+    query: web::Query<CasePoiQuery>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_case_pois(
+            &state.db,
+            &auth,
+            &case_id,
+            query.into_inner(),
+            &state.amap_service,
+        )
+        .await?,
+    ))
+}
+
+async fn create_summary_draft(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+    request: web::Json<CreateSummaryDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        crate::services::case_collaboration_service::create_summary_draft(
+            &state.db,
+            &auth,
+            &case_id,
+            request.into_inner(),
+            &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn review_summary_draft(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    path: web::Path<(String, String)>,
+    request: web::Json<ReviewSummaryDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, draft_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::review_summary_draft(
+            &state.db,
+            &auth,
+            &case_id,
+            &draft_id,
+            request.into_inner(),
+        )
+        .await?,
     ))
 }
 
