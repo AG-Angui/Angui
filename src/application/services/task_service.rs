@@ -20,7 +20,8 @@ use crate::{
     models::{
         AuthenticatedUser, CreateTaskRequest, SubmitTaskFeedbackRequest,
         SubmitTaskLocationReportRequest, TaskFeedbackReceipt, TaskListQuery, TaskListResponse,
-        TaskLocationReportReceipt, TaskResponse, UpdateTaskStatusRequest,
+        TaskLocationReportReceipt, TaskNavigationResponse, TaskResponse,
+        TaskSafetyBriefingResponse, UpdateTaskStatusRequest,
     },
     roles::{CaseRole, GlobalCapability},
     services::case_service::{require_case_role, write_audit},
@@ -302,6 +303,95 @@ pub async fn list_my_tasks(
             TaskResponse::new(task, assignment, false)
         })
         .collect())
+}
+
+pub async fn get_task_safety_briefing(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+) -> Result<TaskSafetyBriefingResponse, ApiError> {
+    let task = load_task_for_assignee_or_commander(db, auth, task_id).await?;
+    let mut notices = vec![task.safety_briefing.clone(), task.risk_notes.clone()];
+    notices.push(format!("区域提示：{}", task.area_text));
+    notices.push("夜间、恶劣天气或能见度不足时不要单独行动；情况不明时先联系指挥。".to_owned());
+    notices.push(match task.risk_level.as_str() {
+        "critical" | "high" => {
+            "高风险任务不得擅自进入受限区域、跨越危险地带或改变任务目标。".to_owned()
+        }
+        "medium" => "执行中保持联络，遇到阻碍先暂停并报告。".to_owned(),
+        _ => "保持任务边界，任何异常情况先暂停并报告。".to_owned(),
+    });
+    notices.push("当前为规则化安全提示；出发前请自行核实当地天气、道路与现场条件。".to_owned());
+
+    Ok(TaskSafetyBriefingResponse {
+        task_id: task.id,
+        risk_level: task.risk_level,
+        notices,
+        emergency_stop_message:
+            "立即停止行动并前往安全、公开地点；通过既有人工联系方式向指挥报告。".to_owned(),
+        source: "rule_based".to_owned(),
+        degradation_status: "rule_based_fallback".to_owned(),
+        updated_at: task.updated_at,
+    })
+}
+
+pub async fn get_task_navigation(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+) -> Result<TaskNavigationResponse, ApiError> {
+    let task = load_task_for_assignee_or_commander(db, auth, task_id).await?;
+    let coordinate_note = if task.latitude.is_some() && task.longitude.is_some() {
+        "任务点坐标仅在受限任务卡内可见；因当前任务坐标未声明坐标系，服务不会生成可能偏移的第三方导航链接。"
+    } else {
+        "该任务未配置坐标，请依据文字区域说明并与指挥确认集合点或路线。"
+    };
+
+    Ok(TaskNavigationResponse {
+        task_id: task.id,
+        area_text: task.area_text.clone(),
+        navigation_url: None,
+        route_summary: format!(
+            "前往任务区域：{}。{} 执行前阅读任务安全提示，导航不可用时继续使用文字任务卡并联系指挥。",
+            task.area_text, coordinate_note
+        ),
+        source: "task_area_text".to_owned(),
+        degradation_status: "text_fallback".to_owned(),
+        fallback_message: Some(
+            "自动导航当前不可用；请使用任务区域文字说明并联系指挥确认路线。".to_owned(),
+        ),
+        updated_at: task.updated_at,
+    })
+}
+
+async fn load_task_for_assignee_or_commander(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+) -> Result<tasks::Model, ApiError> {
+    let task = tasks::Entity::find_by_id(task_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let role = require_case_role(
+        db,
+        &auth.id,
+        &task.case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    if role == CaseRole::Commander {
+        return Ok(task);
+    }
+    let is_assignee = role == CaseRole::Volunteer
+        && task_assignments::Entity::find_by_id(task_id)
+            .one(db)
+            .await?
+            .is_some_and(|assignment| assignment.volunteer_user_id == auth.id);
+    if !is_assignee {
+        return Err(ApiError::NotFound("task was not found".to_owned()));
+    }
+    Ok(task)
 }
 
 pub async fn update_task_status(

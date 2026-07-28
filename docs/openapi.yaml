@@ -779,6 +779,60 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/tasks/{task_id}/safety-briefing:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    get:
+      tags: [Tasks]
+      operationId: getTaskSafetyBriefing
+      summary: Get rule-based task safety guidance
+      description: |
+        Only the assigned volunteer and case commander may read this guidance. It is a
+        rule-based aid, not a mandatory field command. Weather and live road conditions are
+        not asserted as current facts; the response always includes manual safety rules and an
+        emergency-stop message when external conditions are unavailable.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: case-restricted
+      responses:
+        "200":
+          description: Authorized task safety guidance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskSafetyBriefing" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/tasks/{task_id}/navigation:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    get:
+      tags: [Tasks]
+      operationId: getTaskNavigation
+      summary: Get an authorized task route summary
+      description: |
+        Only the assigned volunteer and case commander may read the route summary. The server
+        never forwards tokens or unrelated case data to third-party navigation providers. Until
+        task coordinates include an explicit coordinate-system contract, this endpoint returns a
+        text fallback instead of a potentially offset external navigation URL.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200":
+          description: Authorized task route summary or a text fallback
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskNavigation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/map-view:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -1405,7 +1459,7 @@ components:
 
     TaskStatusTransitionTarget:
       type: string
-      description: `pending_claim` and `assigned` are stored task states, not valid PATCH targets.
+      description: "`pending_claim` and `assigned` are stored task states, not valid PATCH targets."
       enum: [accepted, active, blocked, completed, cancelled]
 
     TaskRiskLevel:
@@ -2246,6 +2300,42 @@ components:
         clue_id: { type: string, format: uuid }
         status: { type: string, const: pending_review }
         submitted_at: { type: string, format: date-time }
+
+    TaskSafetyBriefing:
+      type: object
+      additionalProperties: false
+      required: [task_id, risk_level, notices, emergency_stop_message, source, degradation_status, updated_at]
+      properties:
+        task_id: { type: string, format: uuid }
+        risk_level: { $ref: "#/components/schemas/TaskRiskLevel" }
+        notices:
+          type: array
+          minItems: 1
+          items: { type: string }
+        emergency_stop_message: { type: string }
+        source: { type: string, const: rule_based }
+        degradation_status:
+          type: string
+          const: rule_based_fallback
+          description: Real-time external weather and road data are not asserted as current facts.
+        updated_at: { type: string, format: date-time }
+
+    TaskNavigation:
+      type: object
+      additionalProperties: false
+      required: [task_id, area_text, navigation_url, route_summary, source, degradation_status, fallback_message, updated_at]
+      properties:
+        task_id: { type: string, format: uuid }
+        area_text: { type: string }
+        navigation_url:
+          type: [string, "null"]
+          format: uri
+          description: Null until task coordinates carry an explicit coordinate-system contract.
+        route_summary: { type: string }
+        source: { type: string, const: task_area_text }
+        degradation_status: { type: string, const: text_fallback }
+        fallback_message: { type: [string, "null"] }
+        updated_at: { type: string, format: date-time }
 
     Task:
       type: object

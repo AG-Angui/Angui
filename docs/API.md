@@ -205,6 +205,10 @@ Example:
 
 `GET /api/cases/{case_id}/summary` 提供不依赖外部 AI 的确定性案件摘要。响应的 `generated_at` 和 `source_scope` 说明生成时间与当前角色可用的数据范围。只有人工审核为 `confirmed` 的线索才会进入 `last_confirmed_information` 与 `confirmed_clues`；`pending_review` 和 `needs_verification` 始终保留在 `pending_verification`，不会被表述为确认事实。指挥可见待核实事项、已排除方向、未完成任务形成的当前重点和全部任务状态；家属不接收任务或内部搜索方向；志愿者只接收本人任务的执行与安全信息。
 
+`POST /api/tasks/{task_id}/feedback` 仅允许该任务受领志愿者在任务和案件均为 `active` 时提交。服务端将反馈与可选的本人上传附件写成关联任务的 `pending_review` 线索，并写入审计；反馈不会确认线索、改变案件事实或推进任务状态。
+
+`GET /api/tasks/{task_id}/safety-briefing` 和 `GET /api/tasks/{task_id}/navigation` 仅允许该任务受领志愿者与案件指挥访问。安全提示是规则化的辅助信息，不是现场强制指令；即使实时天气等外部条件不可用，也会返回人工规则和紧急停止提示。导航接口只返回已授权任务区域的文字路线摘要；现有任务坐标没有坐标系声明时，服务端不会生成可能偏移的第三方导航链接。家属、其他志愿者和非成员不会获取这些内容。
+
 ## 公开进展、草稿与周边资源
 
 `GET /api/cases/{case_id}/public-progress` 仅对该案件的 `family` 成员开放。它仅返回已人工审核为 `confirmed` 的进展类别、请求者本人仍待补充/核实的项目类别、以及安全和联系提醒；它绝不返回任何原始线索正文、未核实的他人线索、内部搜索方向、任务与分配、志愿者位置、病史全文或成员详情。每项仅包含服务端生成的公开类别、审核状态和更新时间，客户端不得把其他案件详情替代为“公开进展”。

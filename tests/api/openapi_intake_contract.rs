@@ -346,3 +346,39 @@ fn operation_blocks_stop_before_later_paths_and_top_level_sections() {
     assert!(final_operation.contains("finalOperation"));
     assert!(!final_operation.contains("FinalSchema"));
 }
+
+#[test]
+fn task_safety_and_navigation_openapi_contract_preserves_authorized_fallbacks() {
+    for (path, operation_id, schema_name) in [
+        (
+            "/api/tasks/{task_id}/safety-briefing:\n",
+            "operationId: getTaskSafetyBriefing",
+            "#/components/schemas/TaskSafetyBriefing",
+        ),
+        (
+            "/api/tasks/{task_id}/navigation:\n",
+            "operationId: getTaskNavigation",
+            "#/components/schemas/TaskNavigation",
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [
+            operation_id,
+            "x-case-roles: [commander, volunteer]",
+            schema_name,
+        ] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI task operation {path} must declare {expected:?}"
+            );
+        }
+    }
+    assert_schema_contains(
+        "TaskSafetyBriefing",
+        &["rule_based_fallback", "emergency_stop_message:"],
+    );
+    assert_schema_contains(
+        "TaskNavigation",
+        &["text_fallback", "navigation_url:", "fallback_message:"],
+    );
+}
