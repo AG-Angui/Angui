@@ -833,8 +833,8 @@ mod tests {
             );
             if *name == "mysql" {
                 assert!(
-                    normalized.contains("generated always as"),
-                    "mysql must emulate the partial unique index with a generated column"
+                    normalized.contains("if(status = 'published', case_id, null)"),
+                    "mysql must emulate the partial unique index with a functional key part"
                 );
             } else {
                 assert!(

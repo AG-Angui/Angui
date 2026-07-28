@@ -9,9 +9,5 @@ JOIN summary_drafts AS newer
 SET draft.status = 'superseded'
 WHERE draft.status = 'published';
 -- statement-break
-ALTER TABLE summary_drafts
-    ADD COLUMN published_case_id VARCHAR(36)
-        GENERATED ALWAYS AS (CASE WHEN status = 'published' THEN case_id ELSE NULL END) STORED;
--- statement-break
 CREATE UNIQUE INDEX idx_summary_drafts_one_published_per_case
-    ON summary_drafts(published_case_id);
+    ON summary_drafts ((IF(status = 'published', case_id, NULL)));
