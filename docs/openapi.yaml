@@ -1459,7 +1459,7 @@ components:
 
     TaskStatusTransitionTarget:
       type: string
-      description: `pending_claim` and `assigned` are stored task states, not valid PATCH targets.
+      description: "`pending_claim` and `assigned` are stored task states, not valid PATCH targets."
       enum: [accepted, active, blocked, completed, cancelled]
 
     TaskRiskLevel:
