@@ -299,6 +299,21 @@ mod tests {
         ),
     ];
 
+    const LOCKED_USER_STATUS_DOWN_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/down/0026_remove_locked_user_status.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/down/0026_remove_locked_user_status.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/down/0026_remove_locked_user_status.sql"),
+        ),
+    ];
+
     #[tokio::test]
     async fn sqlite_migrations_support_up_down_up() {
         let database = Database::connect("sqlite::memory:")
@@ -951,16 +966,51 @@ mod tests {
 
     #[test]
     fn locked_user_status_is_constrained_across_dialects() {
-        for (name, script) in LOCKED_USER_STATUS_SCRIPTS {
-            let normalized = script.to_ascii_lowercase();
+        for ((name, up_script), (down_name, down_script)) in LOCKED_USER_STATUS_SCRIPTS
+            .iter()
+            .zip(LOCKED_USER_STATUS_DOWN_SCRIPTS)
+        {
+            assert_eq!(
+                name, down_name,
+                "up and down scripts must use the same dialect"
+            );
+            let up = up_script.to_ascii_lowercase();
+            let down = down_script.to_ascii_lowercase();
             assert!(
-                normalized.contains("locked"),
-                "{name} must permit locked users"
+                up.contains("check (status in ('active', 'disabled', 'locked'))"),
+                "{name} up migration must constrain users.status to active, disabled, and locked"
             );
             assert!(
-                normalized.contains("status"),
-                "{name} must constrain user status"
+                down.contains("check (status in ('active', 'disabled'))"),
+                "{name} down migration must restore the active/disabled users.status constraint"
             );
+            assert!(
+                !down.contains("'locked'"),
+                "{name} down migration must remove locked from the users.status constraint"
+            );
+            if *name == "sqlite" {
+                for (script_name, script, table_name) in [
+                    ("up", up.as_str(), "users_with_locked_status"),
+                    ("down", down.as_str(), "users_without_locked_status"),
+                ] {
+                    assert!(
+                        script.contains(&format!("create table {table_name}")),
+                        "sqlite {script_name} migration must rebuild users with its target status constraint"
+                    );
+                    assert!(
+                        script.contains("drop table users") && script.contains("rename to users"),
+                        "sqlite {script_name} migration must replace the users table"
+                    );
+                }
+            } else {
+                for (script_name, script) in [("up", up.as_str()), ("down", down.as_str())] {
+                    assert!(
+                        script.contains("alter table users")
+                            && script.contains("users_status_check"),
+                        "{name} {script_name} migration must replace the named users.status constraint"
+                    );
+                }
+            }
         }
     }
 
