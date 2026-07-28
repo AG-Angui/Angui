@@ -742,11 +742,14 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
   const [reviewReason, setReviewReason] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const progressRequestVersion = useRef(0)
   const isFamily = detail.access_role === 'family'
   const canFindPois = detail.access_role === 'commander' || detail.access_role === 'volunteer'
   const isCommander = detail.access_role === 'commander'
 
   const loadPublicProgress = useCallback(async () => {
+    const requestVersion = progressRequestVersion.current + 1
+    progressRequestVersion.current = requestVersion
     if (!token || !isFamily) {
       setPublicProgress(null)
       setProgressError('')
@@ -754,13 +757,18 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
     }
     try {
       setProgressError('')
-      setPublicProgress(await getCasePublicProgress(token, detail.id))
+      const progress = await getCasePublicProgress(token, detail.id)
+      if (requestVersion !== progressRequestVersion.current) return
+      setPublicProgress(progress)
     } catch (cause) {
+      if (requestVersion !== progressRequestVersion.current) return
       setProgressError(messageFrom(cause))
     }
   }, [detail.id, isFamily, token])
 
   useEffect(() => {
+    setPublicProgress(null)
+    setProgressError('')
     setClueDraftText('')
     setClueDrafts([])
     setPois(null)

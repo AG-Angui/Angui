@@ -6,6 +6,7 @@ import { CaseWorkspacePage } from './CaseWorkspacePage'
 const mocked = vi.hoisted(() => ({
   auth: { token: 'test-session' as string | null },
   getCase: vi.fn(),
+  getCasePublicProgress: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
   listCaseClues: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('../auth/useAuth', () => ({
 }))
 vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
+  getCasePublicProgress: (...args: unknown[]) => mocked.getCasePublicProgress(...args),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
   listCaseClues: (...args: unknown[]) => mocked.listCaseClues(...args),
@@ -112,6 +114,42 @@ describe('CaseWorkspacePage', () => {
     })
     expect(screen.getByRole('heading', { name: '最新案件详情' })).toBeInTheDocument()
     expect(screen.queryByText('过期请求')).not.toBeInTheDocument()
+  })
+
+  it('discards a stale family public-progress response after switching cases', async () => {
+    vi.clearAllMocks()
+    const firstProgress = deferred<Record<string, unknown>>()
+    const secondProgress = deferred<Record<string, unknown>>()
+    mocked.listCases.mockResolvedValue([
+      { id: 'case-1', case_code: 'AG-1', status: 'active', access_role: 'family', display_name: 'Case one', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' },
+      { id: 'case-2', case_code: 'AG-2', status: 'active', access_role: 'family', display_name: 'Case two', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' },
+    ])
+    mocked.getCase.mockImplementation((_token: string, caseId: string) => Promise.resolve(detail(caseId, caseId === 'case-1' ? 'Case one' : 'Case two')))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.getCasePublicProgress.mockImplementation((_token: string, caseId: string) => (
+      caseId === 'case-1' ? firstProgress.promise : secondProgress.promise
+    ))
+
+    render(<CaseWorkspacePage mode="family" />)
+
+    await screen.findByRole('heading', { name: 'Case one' })
+    await waitFor(() => expect(mocked.getCasePublicProgress).toHaveBeenCalledWith('test-session', 'case-1'))
+    fireEvent.click(screen.getByText('Case two'))
+    await screen.findByRole('heading', { name: 'Case two' })
+    await waitFor(() => expect(mocked.getCasePublicProgress).toHaveBeenCalledWith('test-session', 'case-2'))
+
+    await act(async () => {
+      secondProgress.resolve({ case_id: 'case-2', status: 'active', generated_at: '2026-07-24T00:00:00Z', confirmed_progress: [{ clue_id: 'new', content: 'new public progress', review_status: 'confirmed', updated_at: '2026-07-24T00:00:00Z' }], requested_family_information: [], safety_and_contact_reminders: [] })
+      await secondProgress.promise
+    })
+    expect(await screen.findByText('new public progress')).toBeInTheDocument()
+
+    await act(async () => {
+      firstProgress.resolve({ case_id: 'case-1', status: 'active', generated_at: '2026-07-24T00:00:00Z', confirmed_progress: [{ clue_id: 'old', content: 'stale public progress', review_status: 'confirmed', updated_at: '2026-07-24T00:00:00Z' }], requested_family_information: [], safety_and_contact_reminders: [] })
+      await firstProgress.promise
+    })
+    expect(screen.getByText('new public progress')).toBeInTheDocument()
+    expect(screen.queryByText('stale public progress')).not.toBeInTheDocument()
   })
 
   it('lets an authorized commander invite the demo volunteer to an active case', async () => {
