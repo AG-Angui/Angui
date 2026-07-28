@@ -1,6 +1,4 @@
-use actix_multipart::Multipart;
 use actix_web::{HttpResponse, http::header, web};
-use futures_util::StreamExt;
 
 use crate::{
     app_state::AppState,
@@ -46,6 +44,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route(
                 "/{case_id}/summary-drafts/{draft_id}/review",
                 web::patch().to(review_summary_draft),
+            )
+            .route(
+                "/{case_id}/archive-drafts",
+                web::post().to(create_archive_draft),
             )
             .route("/{case_id}/places", web::get().to(list_places))
             .route("/{case_id}/places", web::post().to(create_place))
@@ -120,42 +122,14 @@ async fn create_attachment(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
     case_id: web::Path<String>,
-    mut multipart: Multipart,
+    multipart: actix_multipart::Multipart,
 ) -> Result<HttpResponse, ApiError> {
-    let mut file: Option<(String, String, Vec<u8>)> = None;
-    while let Some(item) = multipart.next().await {
-        let mut field =
-            item.map_err(|_| ApiError::Validation("multipart upload is malformed".to_owned()))?;
-        if field.name() != Some("file") || file.is_some() {
-            return Err(ApiError::Validation(
-                "submit exactly one file field".to_owned(),
-            ));
-        }
-        let filename = field
-            .content_disposition()
-            .and_then(|value| value.get_filename())
-            .ok_or_else(|| ApiError::Validation("file name is required".to_owned()))?
-            .to_owned();
-        let content_type = field
-            .content_type()
-            .map(|value| value.essence_str().to_owned())
-            .ok_or_else(|| ApiError::Validation("file content type is required".to_owned()))?;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = field.next().await {
-            let chunk = chunk
-                .map_err(|_| ApiError::Validation("file upload could not be read".to_owned()))?;
-            if bytes.len().saturating_add(chunk.len()) > state.attachment_max_image_bytes {
-                return Err(ApiError::Validation(format!(
-                    "image must not exceed {} bytes",
-                    state.attachment_max_image_bytes
-                )));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        file = Some((filename, content_type, bytes));
-    }
     let (filename, content_type, bytes) =
-        file.ok_or_else(|| ApiError::Validation("file field is required".to_owned()))?;
+        crate::services::case_resource_service::read_single_image_upload(
+            multipart,
+            state.attachment_max_image_bytes,
+        )
+        .await?;
     let attachment = crate::services::case_resource_service::store_image_attachment(
         &state.db,
         &auth,
@@ -173,6 +147,18 @@ async fn create_attachment(
     )
     .await?;
     Ok(HttpResponse::Created().json(attachment))
+}
+
+async fn create_archive_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    let draft = crate::services::case_collaboration_service::create_archive_draft(
+        &state.db, &auth, &case_id,
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(draft))
 }
 
 async fn download_attachment(

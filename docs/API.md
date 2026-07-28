@@ -33,11 +33,13 @@
 | `GET` | `/api/cases/{case_id}/pois` | `200` | 按服务端授权中心查询有上限的周边资源，失败时明确降级 |
 | `POST` | `/api/cases/{case_id}/summary-drafts` | `201` | 指挥创建带来源范围和版本的内部摘要草稿 |
 | `PATCH` | `/api/cases/{case_id}/summary-drafts/{draft_id}/review` | `200` | 指挥提交、审核发布、驳回或撤回摘要草稿 |
+| `POST` | `/api/cases/{case_id}/archive-drafts` | `201` | 指挥为已结束案件创建受控内部归档草稿 |
 | `GET` | `/api/cases/{case_id}/places` | `200` | 获取按案件角色、审核状态和可见级别裁剪的地点 |
 | `POST` | `/api/cases/{case_id}/places` | `201` | 家属或指挥提交常去/关键地点，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/resource-configuration` | `200` | 获取当前案件可用的地点类型和图片限制 |
 | `POST` | `/api/cases/{case_id}/attachments` | `201` | 上传受控 JPEG/PNG 案件图片，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/attachments/{attachment_id}` | `200` | 按案件权限下载本人上传的图片，指挥可下载案件全部图片 |
+| `POST` | `/api/clues/{clue_id}/attachments` | `201` | 为具体线索上传待审核 JPEG/PNG 佐证图片 |
 | `POST` | `/api/cases/{case_id}/members` | `201` | 家属邀请指挥，或指挥添加案件成员 |
 | `PATCH` | `/api/clues/{clue_id}/review` | `200` | 人工审核线索 |
 
@@ -219,7 +221,11 @@ Example:
 
 `POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。生命周期包含 `draft`、`pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次提交、审核、发布或撤回都记录操作者、理由、时间和版本；发布会将该案件既有的已发布版本标为 `superseded`。只有服务端依据受控来源范围生成的 `pending_review` 草稿可发布；自由文本草稿仅限内部使用，审核阶段不可用请求内容覆盖草稿，从而避免把未审核线索、内部任务或健康字段发布给非必要角色。
 
+`POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available only after a case reaches `resolved` or `closed`. The server creates an internal `draft` from allowlisted status and count metadata for confirmed clues and completed tasks, persists its explicit `source_scope`, and marks `deidentification_status` as `manual_review_required`. It does not copy raw clue text, attachments, health notes, contacts, exact locations, routes, or task results. This endpoint does not publish, index, export, or print material; a separate authorized de-identification, review, and withdrawal workflow is required before any later reuse.
+
 `POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
+
+`POST /api/clues/{clue_id}/attachments` uses the same single-file JPEG/PNG validation, normalization, EXIF/GPS removal, byte limit, and protected storage policy. The attachment row, the clue-to-attachment link, and the audit event are committed together. A commander may add evidence to any clue in the case; family and volunteer members may only add evidence to clues they submitted. The new image remains `pending_review`, and ordinary attachment download rules still prevent family or volunteers from reading another member's internal evidence.
 
 以下限制均由启动配置统一控制，服务层和 multipart 读取层会使用同一份值：
 

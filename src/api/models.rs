@@ -820,6 +820,20 @@ pub struct SummaryDraftResponse {
     pub publication_eligible: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ArchiveDraftResponse {
+    pub id: String,
+    pub case_id: String,
+    pub status: String,
+    pub content: String,
+    pub source_scope: Vec<String>,
+    pub deidentification_status: String,
+    pub template_version: String,
+    pub provider_model: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CasePoiQuery {

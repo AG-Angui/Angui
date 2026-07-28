@@ -292,6 +292,12 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
             "x-case-roles: [commander]",
             "#/components/schemas/ReviewSummaryDraftRequest",
         ),
+        (
+            "/api/cases/{case_id}/archive-drafts:\n",
+            "operationId: createCaseArchiveDraft",
+            "x-case-roles: [commander]",
+            "#/components/schemas/ArchiveDraft",
+        ),
     ] {
         let operation = operation(path);
         for expected in [operation_id, roles, schema_name] {
@@ -321,10 +327,37 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
             "rule_based_fallback",
         ],
     );
+    assert_schema_contains(
+        "ArchiveDraft",
+        &[
+            "enum: [draft]",
+            "source_scope:",
+            "manual_review_required",
+            "Internal deterministic draft content containing no raw case materials.",
+        ],
+    );
     let public_progress_item = schema("CasePublicProgressItem");
     assert!(public_progress_item.contains("progress_type:"));
     assert!(public_progress_item.contains("Raw clue text is never returned."));
     assert!(!public_progress_item.contains("content:"));
+}
+
+#[test]
+fn clue_attachment_openapi_contract_keeps_evidence_case_restricted() {
+    let attachment_operation = operation("/api/clues/{clue_id}/attachments:\n");
+    for expected in [
+        "operationId: uploadClueAttachment",
+        "x-case-roles: [family, commander, volunteer]",
+        "x-data-classification: case-restricted",
+        "multipart/form-data:",
+        "#/components/schemas/CaseAttachment",
+        "re-encodes the image to remove EXIF/GPS metadata",
+    ] {
+        assert!(
+            attachment_operation.contains(expected),
+            "OpenAPI clue attachment operation must declare {expected:?}"
+        );
+    }
 }
 
 #[test]

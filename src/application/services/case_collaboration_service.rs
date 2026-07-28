@@ -1,25 +1,102 @@
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
 
 use crate::{
     ai_gateway::{AiCapability, AiPurpose, AiRequest, DataLevel, GatewayDecision},
     amap_service::{Coordinate, PoiSearch},
-    entities::{case_places, clue_drafts, summary_drafts},
+    entities::{archive_drafts, case_places, cases, clue_drafts, clues, summary_drafts, tasks},
     error::ApiError,
     models::{
-        AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse, CasePublicProgressItem,
-        CasePublicProgressResponse, ClueDraftResponse, CreateClueDraftRequest,
-        CreateSummaryDraftRequest, ReviewSummaryDraftRequest, SummaryDraftResponse,
+        ArchiveDraftResponse, AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse,
+        CasePublicProgressItem, CasePublicProgressResponse, ClueDraftResponse,
+        CreateClueDraftRequest, CreateSummaryDraftRequest, ReviewSummaryDraftRequest,
+        SummaryDraftResponse,
     },
     roles::CaseRole,
     services::{case_service, case_summary_service, task_service},
 };
 
 const DRAFT_TEMPLATE_VERSION: &str = "case-summary-rule-v1";
+const ARCHIVE_DRAFT_TEMPLATE_VERSION: &str = "case-archive-safe-metadata-v1";
+
+pub async fn create_archive_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<ArchiveDraftResponse, ApiError> {
+    let transaction = db.begin().await?;
+    case_service::require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander])
+        .await?;
+    let case = cases::Entity::find_by_id(case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if !matches!(case.status.as_str(), "resolved" | "closed") {
+        return Err(ApiError::Conflict(
+            "archive drafts can only be created for resolved or closed cases".to_owned(),
+        ));
+    }
+
+    let confirmed_clue_count = clues::Entity::find()
+        .filter(clues::Column::CaseId.eq(case_id))
+        .filter(clues::Column::Status.eq("confirmed"))
+        .count(&transaction)
+        .await?;
+    let completed_task_count = tasks::Entity::find()
+        .filter(tasks::Column::CaseId.eq(case_id))
+        .filter(tasks::Column::Status.eq("completed"))
+        .count(&transaction)
+        .await?;
+    let source_scope = vec![
+        "confirmed_clue_metadata".to_owned(),
+        "completed_task_metadata".to_owned(),
+    ];
+    let timestamp = now();
+    let model = archive_drafts::ActiveModel {
+        id: Set(case_service::new_id()),
+        case_id: Set(case_id.to_owned()),
+        status: Set("draft".to_owned()),
+        content: Set(deterministic_archive_draft_content(
+            &case.status,
+            confirmed_clue_count,
+            completed_task_count,
+        )),
+        source_scope_json: Set(
+            serde_json::to_string(&source_scope).map_err(|_| ApiError::Internal)?
+        ),
+        deidentification_status: Set("manual_review_required".to_owned()),
+        template_version: Set(ARCHIVE_DRAFT_TEMPLATE_VERSION.to_owned()),
+        provider_model: Set(None),
+        created_by_user_id: Set(auth.id.clone()),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+    case_service::write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "archive_draft.created",
+        "archive_draft",
+        model.id.clone(),
+        Some(json!({
+            "status": model.status,
+            "deidentification_status": model.deidentification_status,
+            "template_version": model.template_version,
+            "source_scope": source_scope,
+            "confirmed_clue_count": confirmed_clue_count,
+            "completed_task_count": completed_task_count,
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    archive_draft_response(model)
+}
 
 pub async fn get_public_progress(
     db: &DatabaseConnection,
@@ -397,6 +474,16 @@ fn deterministic_draft_content(summary: &crate::models::CaseSummaryResponse) -> 
         summary.safety_reminders.join(" ")
     )
 }
+
+fn deterministic_archive_draft_content(
+    case_status: &str,
+    confirmed_clue_count: u64,
+    completed_task_count: u64,
+) -> String {
+    format!(
+        "Internal archive draft. This record is not de-identified, publishable, indexable, exportable, or printable. Case status: {case_status}. Confirmed clue count: {confirmed_clue_count}. Completed task count: {completed_task_count}. Source scope is limited to counts and status metadata; it excludes raw clues, attachments, health notes, contacts, exact locations, routes, and task result text. Human de-identification and review are required before any separate reuse workflow."
+    )
+}
 fn required_text(label: &str, value: String, maximum: usize) -> Result<String, ApiError> {
     let value = value.trim().to_owned();
     if value.is_empty() || value.chars().count() > maximum {
@@ -428,6 +515,22 @@ fn response(model: summary_drafts::Model) -> Result<SummaryDraftResponse, ApiErr
         created_at: model.created_at,
         updated_at: model.updated_at,
         publication_eligible: model.publication_eligible,
+    })
+}
+
+fn archive_draft_response(model: archive_drafts::Model) -> Result<ArchiveDraftResponse, ApiError> {
+    Ok(ArchiveDraftResponse {
+        id: model.id,
+        case_id: model.case_id,
+        status: model.status,
+        content: model.content,
+        source_scope: serde_json::from_str(&model.source_scope_json)
+            .map_err(|_| ApiError::Internal)?,
+        deidentification_status: model.deidentification_status,
+        template_version: model.template_version,
+        provider_model: model.provider_model,
+        created_at: model.created_at,
+        updated_at: model.updated_at,
     })
 }
 

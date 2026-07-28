@@ -4,19 +4,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use actix_multipart::Multipart;
 use actix_web::web;
 use chrono::{SecondsFormat, Utc};
+use futures_util::StreamExt;
 use image::ImageFormat;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    entities::{case_attachments, case_places, cases},
+    entities::{
+        case_attachments, case_places, cases, clue_attachment_links, clue_attributions, clues,
+    },
     error::ApiError,
     models::{
         AuthenticatedUser, CaseAttachmentResponse, CasePlaceResponse, CreateCasePlaceRequest,
@@ -35,6 +39,44 @@ pub struct AttachmentStorage<'a> {
     pub directory: &'a Path,
     pub max_image_bytes: usize,
     pub max_attachments_per_case: u64,
+}
+
+pub async fn read_single_image_upload(
+    mut multipart: Multipart,
+    max_image_bytes: usize,
+) -> Result<(String, String, Vec<u8>), ApiError> {
+    let mut file: Option<(String, String, Vec<u8>)> = None;
+    while let Some(item) = multipart.next().await {
+        let mut field =
+            item.map_err(|_| ApiError::Validation("multipart upload is malformed".to_owned()))?;
+        if field.name() != Some("file") || file.is_some() {
+            return Err(ApiError::Validation(
+                "submit exactly one file field".to_owned(),
+            ));
+        }
+        let filename = field
+            .content_disposition()
+            .and_then(|value| value.get_filename())
+            .ok_or_else(|| ApiError::Validation("file name is required".to_owned()))?
+            .to_owned();
+        let content_type = field
+            .content_type()
+            .map(|value| value.essence_str().to_owned())
+            .ok_or_else(|| ApiError::Validation("file content type is required".to_owned()))?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.next().await {
+            let chunk = chunk
+                .map_err(|_| ApiError::Validation("file upload could not be read".to_owned()))?;
+            if bytes.len().saturating_add(chunk.len()) > max_image_bytes {
+                return Err(ApiError::Validation(format!(
+                    "image must not exceed {max_image_bytes} bytes"
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        file = Some((filename, content_type, bytes));
+    }
+    file.ok_or_else(|| ApiError::Validation("file field is required".to_owned()))
 }
 
 pub async fn create_place(
@@ -84,15 +126,8 @@ pub async fn store_image_attachment(
     upload: AttachmentUpload<'_>,
     storage: AttachmentStorage<'_>,
 ) -> Result<CaseAttachmentResponse, ApiError> {
-    let declared_content_type = upload.declared_content_type.to_owned();
-    let uploaded_bytes = upload.bytes.to_vec();
-    let max_image_bytes = storage.max_image_bytes;
-    let (content_type, extension, normalized) = web::block(move || {
-        normalize_image(&declared_content_type, &uploaded_bytes, max_image_bytes)
-    })
-    .await
-    .map_err(|_| ApiError::Internal)??;
-    let original_filename = safe_filename(upload.filename, extension)?;
+    let (content_type, original_filename, normalized) =
+        normalize_attachment_upload(upload, storage.max_image_bytes).await?;
     let transaction = db.begin().await?;
     let role = require_case_role(
         &transaction,
@@ -102,66 +137,70 @@ pub async fn store_image_attachment(
     )
     .await?;
     ensure_case_is_open(&transaction, case_id).await?;
-    let current_count = case_attachments::Entity::find()
-        .filter(case_attachments::Column::CaseId.eq(case_id))
-        .count(&transaction)
-        .await?;
-    if current_count >= storage.max_attachments_per_case {
-        return Err(ApiError::Validation(
-            "this case already has the maximum number of attachments".to_owned(),
-        ));
-    }
-    let id = new_id();
-    let storage_key = format!("{id}.{extension}");
-    let storage_path = storage.directory.join(&storage_key);
-    let storage_directory = storage.directory.to_path_buf();
-    let path_for_write = storage_path.clone();
-    let bytes_for_write = normalized.clone();
-    web::block(move || {
-        fs::create_dir_all(storage_directory)?;
-        fs::write(path_for_write, bytes_for_write)
-    })
-    .await
-    .map_err(|_| ApiError::Internal)?
-    .map_err(|_| ApiError::Internal)?;
-    let timestamp = now();
-    let model = case_attachments::ActiveModel {
-        id: Set(id),
-        case_id: Set(case_id.to_owned()),
-        storage_key: Set(storage_key),
-        original_filename: Set(original_filename),
-        content_type: Set(content_type),
-        byte_size: Set(normalized.len() as i64),
-        sha256: Set(hex::encode(Sha256::digest(&normalized))),
-        source: Set(role.to_string()),
-        review_status: Set("pending_review".to_owned()),
-        created_by_user_id: Set(auth.id.clone()),
-        created_at: Set(timestamp.clone()),
-        updated_at: Set(timestamp),
-    }
-    .insert(&transaction)
-    .await;
-    let model = match model {
-        Ok(model) => model,
-        Err(error) => {
-            remove_file_best_effort(storage_path.clone()).await;
-            return Err(ApiError::Database(error));
-        }
-    };
-    if let Err(error) = write_audit(
+    let (model, storage_path) = persist_image_attachment(
         &transaction,
-        Some(case_id.to_owned()),
         auth,
-        "case.attachment_submitted",
-        "case_attachment",
-        model.id.clone(),
-        Some(json!({ "review_status": "pending_review", "content_type": model.content_type })),
+        case_id,
+        role,
+        content_type,
+        original_filename,
+        normalized,
+        storage,
+        None,
     )
-    .await
-    {
-        remove_file_best_effort(storage_path.clone()).await;
-        return Err(error);
+    .await?;
+    if let Err(error) = transaction.commit().await {
+        remove_file_best_effort(storage_path).await;
+        return Err(ApiError::Database(error));
     }
+    Ok(attachment_response(model, &auth.id))
+}
+
+pub async fn store_image_attachment_for_clue(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    clue_id: &str,
+    upload: AttachmentUpload<'_>,
+    storage: AttachmentStorage<'_>,
+) -> Result<CaseAttachmentResponse, ApiError> {
+    let (content_type, original_filename, normalized) =
+        normalize_attachment_upload(upload, storage.max_image_bytes).await?;
+    let transaction = db.begin().await?;
+    let clue = clues::Entity::find_by_id(clue_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("clue was not found".to_owned()))?;
+    let role = require_case_role(
+        &transaction,
+        &auth.id,
+        &clue.case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    if role != CaseRole::Commander {
+        let is_submitter = clue_attributions::Entity::find_by_id(&clue.id)
+            .one(&transaction)
+            .await?
+            .and_then(|attribution| attribution.submitted_by_user_id)
+            .as_deref()
+            == Some(auth.id.as_str());
+        if !is_submitter {
+            return Err(ApiError::NotFound("clue was not found".to_owned()));
+        }
+    }
+    ensure_case_is_open(&transaction, &clue.case_id).await?;
+    let (model, storage_path) = persist_image_attachment(
+        &transaction,
+        auth,
+        &clue.case_id,
+        role,
+        content_type,
+        original_filename,
+        normalized,
+        storage,
+        Some(&clue.id),
+    )
+    .await?;
     if let Err(error) = transaction.commit().await {
         remove_file_best_effort(storage_path).await;
         return Err(ApiError::Database(error));
@@ -266,6 +305,137 @@ pub struct DownloadedAttachment {
     pub bytes: Vec<u8>,
     pub content_type: String,
     pub filename: String,
+}
+
+async fn normalize_attachment_upload(
+    upload: AttachmentUpload<'_>,
+    max_image_bytes: usize,
+) -> Result<(String, String, Vec<u8>), ApiError> {
+    let declared_content_type = upload.declared_content_type.to_owned();
+    let uploaded_bytes = upload.bytes.to_vec();
+    let (content_type, extension, normalized) = web::block(move || {
+        normalize_image(&declared_content_type, &uploaded_bytes, max_image_bytes)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)??;
+    Ok((
+        content_type,
+        safe_filename(upload.filename, extension)?,
+        normalized,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_image_attachment(
+    transaction: &DatabaseTransaction,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    role: CaseRole,
+    content_type: String,
+    original_filename: String,
+    normalized: Vec<u8>,
+    storage: AttachmentStorage<'_>,
+    clue_id: Option<&str>,
+) -> Result<(case_attachments::Model, PathBuf), ApiError> {
+    let current_count = case_attachments::Entity::find()
+        .filter(case_attachments::Column::CaseId.eq(case_id))
+        .count(transaction)
+        .await?;
+    if current_count >= storage.max_attachments_per_case {
+        return Err(ApiError::Validation(
+            "this case already has the maximum number of attachments".to_owned(),
+        ));
+    }
+
+    let extension = match content_type.as_str() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        _ => return Err(ApiError::Internal),
+    };
+    let id = new_id();
+    let storage_key = format!("{id}.{extension}");
+    let storage_path = storage.directory.join(&storage_key);
+    let storage_directory = storage.directory.to_path_buf();
+    let path_for_write = storage_path.clone();
+    let bytes_for_write = normalized.clone();
+    web::block(move || {
+        fs::create_dir_all(storage_directory)?;
+        fs::write(path_for_write, bytes_for_write)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(|_| ApiError::Internal)?;
+
+    let timestamp = now();
+    let model = case_attachments::ActiveModel {
+        id: Set(id),
+        case_id: Set(case_id.to_owned()),
+        storage_key: Set(storage_key),
+        original_filename: Set(original_filename),
+        content_type: Set(content_type),
+        byte_size: Set(normalized.len() as i64),
+        sha256: Set(hex::encode(Sha256::digest(&normalized))),
+        source: Set(role.to_string()),
+        review_status: Set("pending_review".to_owned()),
+        created_by_user_id: Set(auth.id.clone()),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
+    }
+    .insert(transaction)
+    .await;
+    let model = match model {
+        Ok(model) => model,
+        Err(error) => {
+            remove_file_best_effort(storage_path.clone()).await;
+            return Err(ApiError::Database(error));
+        }
+    };
+
+    let (action, entity_type, entity_id, metadata) = if let Some(clue_id) = clue_id {
+        let link = clue_attachment_links::ActiveModel {
+            clue_id: Set(clue_id.to_owned()),
+            attachment_id: Set(model.id.clone()),
+            created_at: Set(timestamp),
+        }
+        .insert(transaction)
+        .await;
+        if let Err(error) = link {
+            remove_file_best_effort(storage_path.clone()).await;
+            return Err(ApiError::Database(error));
+        }
+        (
+            "clue.attachment_submitted",
+            "clue_attachment",
+            model.id.clone(),
+            json!({
+                "clue_id": clue_id,
+                "review_status": "pending_review",
+                "content_type": model.content_type,
+            }),
+        )
+    } else {
+        (
+            "case.attachment_submitted",
+            "case_attachment",
+            model.id.clone(),
+            json!({ "review_status": "pending_review", "content_type": model.content_type }),
+        )
+    };
+    if let Err(error) = write_audit(
+        transaction,
+        Some(case_id.to_owned()),
+        auth,
+        action,
+        entity_type,
+        entity_id,
+        Some(metadata),
+    )
+    .await
+    {
+        remove_file_best_effort(storage_path.clone()).await;
+        return Err(error);
+    }
+    Ok((model, storage_path))
 }
 
 fn validate_place(
