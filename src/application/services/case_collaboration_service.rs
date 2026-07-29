@@ -1,4 +1,5 @@
 use chrono::{SecondsFormat, Utc};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel,
     PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
@@ -133,25 +134,53 @@ pub async fn deidentify_archive_draft(
     }
     let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let timestamp = now();
-    let mut active = existing.into_active_model();
-    active.deidentification_status = Set(if outcome == "confirm" {
+    let next_deidentification_status = if outcome == "confirm" {
         "deidentified"
     } else {
         "rejected"
-    }
-    .to_owned());
-    active.status = Set(if outcome == "confirm" {
+    };
+    let next_status = if outcome == "confirm" {
         "pending_review"
     } else {
         "rejected"
+    };
+    let update = archive_drafts::Entity::update_many()
+        .col_expr(archive_drafts::Column::Status, Expr::value(next_status))
+        .col_expr(
+            archive_drafts::Column::DeidentificationStatus,
+            Expr::value(next_deidentification_status),
+        )
+        .col_expr(
+            archive_drafts::Column::DeidentifiedByUserId,
+            Expr::value(Some(auth.id.clone())),
+        )
+        .col_expr(
+            archive_drafts::Column::DeidentifiedAt,
+            Expr::value(Some(timestamp.clone())),
+        )
+        .col_expr(
+            archive_drafts::Column::DeidentificationReason,
+            Expr::value(Some(reason.clone())),
+        )
+        .col_expr(archive_drafts::Column::Version, Expr::value(next_version))
+        .col_expr(archive_drafts::Column::UpdatedAt, Expr::value(timestamp))
+        .filter(archive_drafts::Column::Id.eq(draft_id))
+        .filter(archive_drafts::Column::Version.eq(existing.version))
+        .filter(archive_drafts::Column::Status.eq(&existing.status))
+        .filter(
+            archive_drafts::Column::DeidentificationStatus.eq(&existing.deidentification_status),
+        )
+        .exec(&transaction)
+        .await?;
+    if update.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "archive draft changed before de-identification could be recorded".to_owned(),
+        ));
     }
-    .to_owned());
-    active.deidentified_by_user_id = Set(Some(auth.id.clone()));
-    active.deidentified_at = Set(Some(timestamp.clone()));
-    active.deidentification_reason = Set(Some(reason.clone()));
-    active.version = Set(next_version);
-    active.updated_at = Set(timestamp);
-    let model = active.update(&transaction).await?;
+    let model = archive_drafts::Entity::find_by_id(draft_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::Internal)?;
     case_service::write_audit(
         &transaction,
         Some(model.case_id.clone()),
@@ -207,32 +236,63 @@ pub async fn review_archive_draft(
     }
     let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let timestamp = now();
-    let mut active = existing.into_active_model();
-    active.status = Set(match action.as_str() {
+    let next_status = match action.as_str() {
         "publish" => "published",
         "reject" => "rejected",
         "withdraw" => "withdrawn",
         _ => return Err(ApiError::Internal),
-    }
-    .to_owned());
-    active.reviewed_by_user_id = Set(Some(auth.id.clone()));
-    active.reviewed_at = Set(Some(timestamp.clone()));
-    active.review_reason = Set(Some(reason.clone()));
-    active.usage_scope = Set(if action == "publish" {
+    };
+    let next_usage_scope = if action == "publish" {
         "learning_resource"
     } else {
         "internal_archive"
-    }
-    .to_owned());
-    active.retention_status = Set(if action == "withdraw" {
+    };
+    let next_retention_status = if action == "withdraw" {
         "withdrawn"
     } else {
         "retained"
+    };
+    let update = archive_drafts::Entity::update_many()
+        .col_expr(archive_drafts::Column::Status, Expr::value(next_status))
+        .col_expr(
+            archive_drafts::Column::ReviewedByUserId,
+            Expr::value(Some(auth.id.clone())),
+        )
+        .col_expr(
+            archive_drafts::Column::ReviewedAt,
+            Expr::value(Some(timestamp.clone())),
+        )
+        .col_expr(
+            archive_drafts::Column::ReviewReason,
+            Expr::value(Some(reason.clone())),
+        )
+        .col_expr(
+            archive_drafts::Column::UsageScope,
+            Expr::value(next_usage_scope),
+        )
+        .col_expr(
+            archive_drafts::Column::RetentionStatus,
+            Expr::value(next_retention_status),
+        )
+        .col_expr(archive_drafts::Column::Version, Expr::value(next_version))
+        .col_expr(archive_drafts::Column::UpdatedAt, Expr::value(timestamp))
+        .filter(archive_drafts::Column::Id.eq(draft_id))
+        .filter(archive_drafts::Column::Version.eq(existing.version))
+        .filter(archive_drafts::Column::Status.eq(&existing.status))
+        .filter(
+            archive_drafts::Column::DeidentificationStatus.eq(&existing.deidentification_status),
+        )
+        .exec(&transaction)
+        .await?;
+    if update.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "archive draft changed before review could be recorded".to_owned(),
+        ));
     }
-    .to_owned());
-    active.version = Set(next_version);
-    active.updated_at = Set(timestamp);
-    let model = active.update(&transaction).await?;
+    let model = archive_drafts::Entity::find_by_id(draft_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::Internal)?;
     case_service::write_audit(
         &transaction,
         Some(model.case_id.clone()),
