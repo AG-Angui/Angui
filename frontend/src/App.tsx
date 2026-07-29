@@ -10,13 +10,16 @@ import { ProfilePage } from './pages/ProfilePage'
 
 function CaseRoleRoute({
   capability,
+  familyOnly,
   children,
 }: {
   capability?: 'commander' | 'volunteer'
+  familyOnly?: boolean
   children: ReactNode
 }) {
   const { user } = useAuth()
-  return user?.account_type === 'member' && (!capability || user.global_capabilities.includes(capability))
+  const isFamilyOnlyMember = user?.account_type === 'member' && user.global_capabilities.length === 0
+  return user?.account_type === 'member' && (!capability || user.global_capabilities.includes(capability)) && (!familyOnly || isFamilyOnlyMember)
     ? children
     : <Navigate to="/" replace />
 }
@@ -44,7 +47,7 @@ function App() {
         <Route
           path="family"
           element={
-            <CaseRoleRoute>
+            <CaseRoleRoute familyOnly>
               <CaseWorkspacePage mode="family" />
             </CaseRoleRoute>
           }

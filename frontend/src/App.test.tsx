@@ -60,13 +60,21 @@ describe('application role routing', () => {
     expect(screen.getByText('账号登录')).toBeInTheDocument()
   })
 
-  it('shows workspaces that match the operational account capabilities', async () => {
+  it('shows only operational workspaces that match the account capabilities', async () => {
     setAuth('member', ['commander', 'volunteer'])
     renderApp()
     await waitFor(() => expect(screen.getByText('行动总览')).toBeInTheDocument())
-    for (const workspace of ['家属端', '指挥端', '志愿者端']) {
+    for (const workspace of ['指挥端', '志愿者端']) {
       expect(screen.getByRole('link', { name: workspace })).toBeInTheDocument()
     }
+    expect(screen.queryByRole('link', { name: '家属端' })).not.toBeInTheDocument()
+  })
+
+  it('redirects a commander away from the family workspace', async () => {
+    setAuth('member', ['commander'])
+    renderApp('/family')
+    expect(await screen.findByText('行动总览')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '家属端' })).not.toBeInTheDocument()
   })
 
   it.each([
