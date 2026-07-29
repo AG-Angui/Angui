@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addCaseMember,
+  acceptCommandCase,
   createCasePlace,
   createClueDraft,
   createCaseTask,
@@ -27,6 +28,7 @@ import {
   getCaseResourceConfiguration,
   listCaseClues,
   listCases,
+  listCommandIntake,
   reviewClue,
   reviewSummaryDraft,
   updateCaseStatus,
@@ -215,6 +217,8 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
 
       {listError && cases.length > 0 && <Message tone="error">{listError}</Message>}
       {notice && <Message tone="success">{notice}</Message>}
+
+      {mode === 'commander' && <CommandIntakePanel token={token} onAccepted={async () => { await loadCases() }} />}
 
       {showCreate && canCreateCase && mode !== 'volunteer' && (
         <FamilyIntakeForm
@@ -888,8 +892,18 @@ function CaseSituationPanel({ detail, token }: { detail: CaseDetail; token: stri
           ))}
         </div>
       )}
+
     </section>
   )
+}
+
+function CommandIntakePanel({ token, onAccepted }: { token: string | null; onAccepted: () => Promise<void> }) {
+  const [items, setItems] = useState<import('../api/cases').CommandIntakeCase[]>([])
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+  const load = useCallback(async () => { if (!token) return; try { setError(''); setItems(await listCommandIntake(token)) } catch (cause) { setError(messageFrom(cause)) } }, [token])
+  useEffect(() => { void load() }, [load])
+  return <section className="mb-5 border border-slate-200 bg-white p-4" aria-label="待受理案件"><div className="flex items-center justify-between gap-3"><div><h2 className="m-0 text-base font-bold text-slate-950">待受理案件</h2><p className="mb-0 mt-1 text-xs text-slate-600">仅显示接案所需的最小信息；受理后才会获得完整指挥案情权限。</p></div><Button size="sm" variant="ghost" onPress={() => void load()}>刷新</Button></div>{error && <div className="mt-3"><Message tone="error">{error}</Message></div>}{items.length === 0 ? <p className="mb-0 mt-3 text-sm text-slate-500">当前没有待受理案件。</p> : <div className="mt-3 grid gap-3 sm:grid-cols-2">{items.map((item) => <article key={item.id} className="rounded-md border border-slate-200 p-3"><strong className="text-sm text-slate-950">{item.case_code}</strong><p className="mb-0 mt-1 text-xs text-slate-600">区域提示：{item.area_hint ?? '待补充'} · 创建于 {formatDate(item.created_at)}</p><Button className="mt-3" size="sm" variant="primary" isDisabled={busy === item.id} onPress={() => { if (!token) return; setBusy(item.id); acceptCommandCase(token, item.id).then(onAccepted).then(load).catch((cause) => setError(messageFrom(cause))).finally(() => setBusy('')) }}>受理案件</Button></article>)}</div>}</section>
 }
 
 function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: string | null }) {

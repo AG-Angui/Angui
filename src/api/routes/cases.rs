@@ -19,6 +19,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
         web::scope("/cases")
             .route("", web::get().to(list_cases))
             .route("", web::post().to(create_case))
+            .route("/command-intake", web::get().to(list_command_intake))
+            .route("/{case_id}/accept-command", web::post().to(accept_command))
             .route("/{case_id}", web::get().to(get_case))
             .route("/{case_id}/status", web::patch().to(update_case_status))
             .route(
@@ -63,6 +65,14 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/members", web::get().to(list_case_members))
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn list_command_intake(auth: AuthenticatedUser, state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(case_service::list_command_intake(&state.db, &auth).await?))
+}
+
+async fn accept_command(auth: AuthenticatedUser, state: web::Data<AppState>, case_id: web::Path<String>) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(case_service::accept_command_case(&state.db, &auth, &case_id).await?))
 }
 
 async fn list_case_members(

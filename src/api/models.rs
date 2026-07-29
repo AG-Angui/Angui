@@ -662,6 +662,15 @@ pub struct CaseMemberResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CommandIntakeCaseResponse {
+    pub id: String,
+    pub case_code: String,
+    pub created_at: String,
+    pub last_seen_at: Option<String>,
+    pub area_hint: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CaseListItem {
     pub id: String,
     pub case_code: String,

@@ -21,9 +21,11 @@
 | `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
 | `POST` | `/api/intake-sessions/{session_id}/confirm` | `201` | 家属确认画像并创建正式案件 |
 | `GET` | `/api/cases` | `200` | 按创建时间倒序列出案件 |
+| `GET` | `/api/cases/command-intake` | `200` | 指挥查看仅含最小接案信息的待受理队列 |
 | `POST` | `/api/cases` | `201` | 创建案件和老人画像 |
 | `GET` | `/api/cases/{case_id}` | `200` | 查询案件、老人画像和线索 |
 | `PATCH` | `/api/cases/{case_id}/status` | `200` | 人工更新案件状态 |
+| `POST` | `/api/cases/{case_id}/accept-command` | `200` | 指挥人工受理待受理案件并获得该案指挥权限 |
 | `GET` | `/api/cases/{case_id}/clues` | `200` | 获取角色裁剪、可分页的线索时间轴 |
 | `POST` | `/api/cases/{case_id}/clues` | `201` | 提交待审核线索 |
 | `GET` | `/api/cases/{case_id}/map-view` | `200` | 获取含文字地点回退的角色裁剪地图态势 |

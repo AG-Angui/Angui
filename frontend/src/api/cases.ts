@@ -217,6 +217,7 @@ export interface CaseMapItem {
   related_task_id: string | null
   updated_at: string
 }
+export interface CommandIntakeCase { id: string; case_code: string; created_at: string; last_seen_at: string | null; area_hint: string | null }
 export interface CaseMapView { items: CaseMapItem[] }
 export interface CaseSummaryClue { clue_id: string; content: string; occurred_at: string | null; location_text: string | null; review_status: string }
 export interface CaseSummary { case_id: string; access_role: CaseRole; generated_at: string; source_scope: string[]; last_confirmed_information: CaseSummaryClue | null; confirmed_clues: CaseSummaryClue[]; pending_verification: CaseSummaryClue[]; excluded_directions: CaseSummaryClue[]; current_focus: Array<{ label: string; detail: string }>; task_status: Array<{ task_id: string; title: string; status: string; due_at: string }>; safety_reminders: string[] }
@@ -263,6 +264,8 @@ export function createClue(
 export function getCasePublicProgress(token: string, caseId: string): Promise<CasePublicProgress> {
   return apiRequest<CasePublicProgress>(`/cases/${caseId}/public-progress`, {}, token)
 }
+export function listCommandIntake(token: string): Promise<CommandIntakeCase[]> { return apiRequest<CommandIntakeCase[]>('/cases/command-intake', {}, token) }
+export function acceptCommandCase(token: string, caseId: string): Promise<CaseDetail> { return apiRequest<CaseDetail>(`/cases/${caseId}/accept-command`, { method: 'POST' }, token) }
 
 export function getCaseMapView(token: string, caseId: string): Promise<CaseMapView> {
   return apiRequest<CaseMapView>(`/cases/${caseId}/map-view`, {}, token)
