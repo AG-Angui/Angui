@@ -288,6 +288,10 @@ export function updateTaskStatus(token: string, taskId: string, status: TaskStat
   return apiRequest<CaseTask>(`/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, token)
 }
 
+export function submitTaskFeedback(token: string, taskId: string, payload: { content: string; occurred_at: string | null; location_text: string | null; location_precision: LocationPrecision | null }): Promise<{ task_id: string; clue_id: string; status: 'pending_review'; submitted_at: string }> {
+  return apiRequest(`/tasks/${taskId}/feedback`, { method: 'POST', body: JSON.stringify(payload) }, token)
+}
+
 export function createClueDraft(token: string, caseId: string, payload: { text: string; source_type?: PublicClueSourceType; raw_record_reference?: string }): Promise<ClueDraft[]> {
   return apiRequest<ClueDraft[]>(`/cases/${caseId}/clue-drafts`, { method: 'POST', body: JSON.stringify(payload) }, token)
 }
