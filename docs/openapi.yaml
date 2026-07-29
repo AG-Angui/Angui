@@ -1152,6 +1152,28 @@ paths:
   /api/cases/{case_id}/members:
     parameters:
       - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: listCaseMembers
+      summary: List members available to the case commander
+      description: Returns only the current case's members to a commander of that case. It is used to review collaboration and manually select an already-authorized volunteer when creating a task; it does not search global accounts or disclose members of other cases.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: case-restricted
+      responses:
+        "200":
+          description: Case members with their current case role and global capabilities
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CaseMember" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Cases]
       operationId: addCaseMember

@@ -218,6 +218,10 @@ export interface CaseMapItem {
   updated_at: string
 }
 export interface CaseMapView { items: CaseMapItem[] }
+export type TaskStatus = 'assigned' | 'accepted' | 'active' | 'blocked' | 'completed' | 'cancelled'
+export interface CaseTask { id: string; case_id: string; source_clue_id: string | null; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string | null; risk_level: string; risk_notes: string; safety_briefing: string; expected_feedback: string; status: TaskStatus; result_summary: string | null; assigned_volunteer_user_id: string | null; assigned_at: string | null; created_at: string; updated_at: string }
+export interface TaskListPage { items: CaseTask[]; page: number; page_size: number; total: number }
+export interface CreateTaskPayload { source_clue_id: string; volunteer_user_id: string; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string; risk_level: 'low' | 'medium' | 'high'; risk_notes: string; safety_briefing: string; expected_feedback: string }
 
 export function listCases(token: string): Promise<CaseListItem[]> {
   return apiRequest<CaseListItem[]>('/cases', {}, token)
@@ -260,6 +264,22 @@ export function getCasePublicProgress(token: string, caseId: string): Promise<Ca
 
 export function getCaseMapView(token: string, caseId: string): Promise<CaseMapView> {
   return apiRequest<CaseMapView>(`/cases/${caseId}/map-view`, {}, token)
+}
+
+export function listCaseTasks(token: string, caseId: string): Promise<TaskListPage> {
+  return apiRequest<TaskListPage>(`/cases/${caseId}/tasks`, {}, token)
+}
+
+export function listCaseMembers(token: string, caseId: string): Promise<CaseMember[]> {
+  return apiRequest<CaseMember[]>(`/cases/${caseId}/members`, {}, token)
+}
+
+export function createCaseTask(token: string, caseId: string, payload: CreateTaskPayload): Promise<CaseTask> {
+  return apiRequest<CaseTask>(`/cases/${caseId}/tasks`, { method: 'POST', body: JSON.stringify(payload) }, token)
+}
+
+export function updateTaskStatus(token: string, taskId: string, status: TaskStatus): Promise<CaseTask> {
+  return apiRequest<CaseTask>(`/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, token)
 }
 
 export function createClueDraft(token: string, caseId: string, payload: { text: string; source_type?: PublicClueSourceType; raw_record_reference?: string }): Promise<ClueDraft[]> {

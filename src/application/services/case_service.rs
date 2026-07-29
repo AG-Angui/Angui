@@ -799,6 +799,36 @@ pub async fn add_case_member(
     })
 }
 
+pub async fn list_case_members(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<CaseMemberResponse>, ApiError> {
+    require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    let memberships = case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(case_id))
+        .order_by_asc(case_memberships::Column::Role)
+        .order_by_asc(case_memberships::Column::UserId)
+        .all(db)
+        .await?;
+    let mut members = Vec::with_capacity(memberships.len());
+    for membership in memberships {
+        let user = users::Entity::find_by_id(&membership.user_id)
+            .one(db)
+            .await?
+            .ok_or(ApiError::Internal)?;
+        members.push(CaseMemberResponse {
+            user_id: user.id.clone(),
+            email: user.email,
+            display_name: user.display_name,
+            account_type: account_type_from_database(&user.account_type)?,
+            global_capabilities: global_capabilities_for_user(db, &user.id).await?,
+            case_role: case_role_from_database(&membership.role)?,
+        });
+    }
+    Ok(members)
+}
+
 async fn load_case_detail(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,

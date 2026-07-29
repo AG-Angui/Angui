@@ -41,6 +41,7 @@
 | `GET` | `/api/cases/{case_id}/attachments/{attachment_id}` | `200` | 按案件权限下载本人上传的图片，指挥可下载案件全部图片 |
 | `POST` | `/api/clues/{clue_id}/attachments` | `201` | 为具体线索上传待审核 JPEG/PNG 佐证图片 |
 | `POST` | `/api/cases/{case_id}/members` | `201` | 家属邀请指挥，或指挥添加案件成员 |
+| `GET` | `/api/cases/{case_id}/members` | `200` | 指挥查看本案件成员，用于协作审查和人工选择已授权志愿者 |
 | `PATCH` | `/api/clues/{clue_id}/review` | `200` | 人工审核线索 |
 | `GET` | `/api/admin/audit-events` | `200` | 管理员分页查看经过脱敏的审计事件 |
 | `GET` | `/api/admin/users` | `200` | 管理员分页查看不含凭据的账号状态 |
@@ -209,6 +210,8 @@ Example:
 `GET /api/cases/{case_id}/places` 只对案件成员开放，非成员统一返回 `404`。服务端按案件角色裁剪数据：指挥可查看案件全部地点；家属可查看本人提交的地点，以及已确认且非内部的地点；志愿者仅可查看已确认的公开地点。未审核地点和内部搜索方向不会通过该接口暴露给非必要角色。
 
 `GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属申报的最后出现地点始终标为 `pending_review`，其 `display_name` 为 `null`，客户端必须按 `object_type` 本地化标签而不能呈现为确认进展。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
+
+`GET /api/cases/{case_id}/members` 仅对该案件的 `commander` 成员开放，返回当前案件成员的展示名、案件角色与已授予的全局能力。它只服务于案件协作审查和人工选择已经授权的志愿者，不提供全局账号搜索，也不会泄露其他案件的成员关系；家属、志愿者和非成员分别按案件权限得到拒绝或 `404`。
 
 `GET /api/cases/{case_id}/summary` 提供不依赖外部 AI 的确定性案件摘要。响应的 `generated_at` 和 `source_scope` 说明生成时间与当前角色可用的数据范围。只有人工审核为 `confirmed` 的线索才会进入 `last_confirmed_information` 与 `confirmed_clues`；`pending_review` 和 `needs_verification` 始终保留在 `pending_verification`，不会被表述为确认事实。指挥可见待核实事项、已排除方向、未完成任务形成的当前重点和全部任务状态；家属不接收任务或内部搜索方向；志愿者只接收本人任务的执行与安全信息。
 

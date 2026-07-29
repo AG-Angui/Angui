@@ -60,8 +60,19 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 "/{case_id}/attachments/{attachment_id}",
                 web::get().to(download_attachment),
             )
+            .route("/{case_id}/members", web::get().to(list_case_members))
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn list_case_members(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        case_service::list_case_members(&state.db, &auth, &case_id).await?,
+    ))
 }
 
 async fn get_resource_configuration(
