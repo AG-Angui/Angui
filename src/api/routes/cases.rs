@@ -70,9 +70,7 @@ async fn list_case_members(
     state: web::Data<AppState>,
     case_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(
-        case_service::list_case_members(&state.db, &auth, &case_id).await?,
-    ))
+    Ok(HttpResponse::Ok().json(case_service::list_case_members(&state.db, &auth, &case_id).await?))
 }
 
 async fn get_resource_configuration(
