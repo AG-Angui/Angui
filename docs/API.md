@@ -45,6 +45,8 @@
 | `GET` | `/api/admin/audit-events` | `200` | 管理员分页查看经过脱敏的审计事件 |
 | `GET` | `/api/admin/users` | `200` | 管理员分页查看不含凭据的账号状态 |
 | `PATCH` | `/api/admin/users/{user_id}/status` | `200` | 管理员启用、停用或锁定账号 |
+| `POST` | `/api/admin/archive-drafts/{draft_id}/deidentify` | `200` | 管理员记录归档草稿的人工脱敏确认或拒绝 |
+| `PATCH` | `/api/admin/archive-drafts/{draft_id}/review` | `200` | 管理员发布、拒绝或撤回已脱敏归档草稿 |
 
 除健康检查和登录外，所有接口都要求：
 
@@ -285,3 +287,11 @@ Example:
 `GET /api/admin/users` 只返回账号 ID、邮箱、展示名、账号类型、全局 capability、状态、创建时间和最近会话时间。密码哈希、Bearer token、token 哈希、会话 ID、画像及案件资料绝不会通过该接口返回。筛选和排序参数均为服务端白名单。
 
 `PATCH /api/admin/users/{user_id}/status` 只接受 `active`、`disabled` 或 `locked`，并要求提供审核理由。将账号设为 `disabled` 或 `locked` 时，服务端在同一事务中撤销其全部活跃会话，因此既有 token 立即失效；重新设为 `active` 不会恢复已撤销的旧会话，用户必须重新登录。为避免管理员误锁自己，管理员不能修改自己的账号状态。审计仅记录操作人、变更前后状态、撤销会话数和理由长度，不保存理由原文或凭据。
+
+## 归档脱敏与经验案例审核
+
+归档草稿始终从仅含状态和计数元数据的 `draft` 开始；原始聊天、完整身份、联系方式、病史、精确地点/轨迹、附件、线索正文和任务结果文本不进入草稿。`POST /api/admin/archive-drafts/{draft_id}/deidentify` 与 `PATCH /api/admin/archive-drafts/{draft_id}/review` 均仅对具有 `admin` capability 的账号开放，且不会因该 capability 自动获得源案件的读取权限。
+
+`POST /api/admin/archive-drafts/{draft_id}/deidentify` 只接受人工 `confirm` 或 `reject` 结果和长度受限的理由。它不接受替换文本、原始材料或“自动完全脱敏”的声明。确认会把草稿转为 `pending_review` 和 `deidentified`；拒绝会转为 `rejected`，不能发布。每次结果记录操作者、时间、版本和理由长度，审计不保存理由原文。
+
+`PATCH /api/admin/archive-drafts/{draft_id}/review` 只允许已确认脱敏的 `pending_review` 草稿 `publish` 或 `reject`，以及将 `published` 草稿 `withdraw`。发布仅把该受控版本标记为 `learning_resource`；当前不会创建知识问答/RAG 索引、导出、打印、公开读取或跨案件读取接口。撤回立即将用途恢复为 `internal_archive` 并标记 `withdrawn`，同时保留版本和审计历史；拒绝或撤回绝不修改或删除原案件。

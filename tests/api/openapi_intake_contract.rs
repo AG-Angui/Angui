@@ -330,9 +330,12 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
     assert_schema_contains(
         "ArchiveDraft",
         &[
-            "enum: [draft]",
+            "enum: [draft, pending_review, published, rejected, withdrawn]",
             "source_scope:",
-            "manual_review_required",
+            "enum: [manual_review_required, deidentified, rejected]",
+            "usage_scope:",
+            "retention_status:",
+            "version:",
             "Internal deterministic draft content containing no raw case materials.",
         ],
     );
@@ -340,6 +343,48 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
     assert!(public_progress_item.contains("progress_type:"));
     assert!(public_progress_item.contains("Raw clue text is never returned."));
     assert!(!public_progress_item.contains("content:"));
+}
+
+#[test]
+fn archive_review_openapi_contract_requires_admin_and_manual_deidentification() {
+    for (path, operation_id, schema_name, request_schema) in [
+        (
+            "/api/admin/archive-drafts/{draft_id}/deidentify:\n",
+            "operationId: deidentifyArchiveDraft",
+            "#/components/schemas/ArchiveDraft",
+            "#/components/schemas/DeidentifyArchiveDraftRequest",
+        ),
+        (
+            "/api/admin/archive-drafts/{draft_id}/review:\n",
+            "operationId: reviewArchiveDraft",
+            "#/components/schemas/ArchiveDraft",
+            "#/components/schemas/ReviewArchiveDraftRequest",
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [
+            operation_id,
+            "x-global-capabilities: [admin]",
+            "x-data-classification: restricted-admin",
+            schema_name,
+            request_schema,
+        ] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI operation {path} must declare {expected:?}"
+            );
+        }
+    }
+    assert_schema_contains(
+        "DeidentifyArchiveDraftRequest",
+        &["enum: [confirm, reject]", "reason:"],
+    );
+    assert_schema_contains(
+        "ReviewArchiveDraftRequest",
+        &["enum: [publish, reject, withdraw]", "reason:"],
+    );
+    let review_operation = operation("/api/admin/archive-drafts/{draft_id}/review:\n");
+    assert!(review_operation.contains("does not expose a RAG, export, print, public"));
 }
 
 #[test]
