@@ -339,6 +339,12 @@ function CaseDetailView({
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const isCommander = detail.access_role === 'commander'
+  const allowedMemberRoles: CaseRole[] = isCommander
+    ? ['family', 'commander', 'volunteer']
+    : ['family', 'commander']
+  const selectedMemberRole = allowedMemberRoles.includes(memberRole)
+    ? memberRole
+    : allowedMemberRoles[0]
   const canEditElderProfile = detail.access_role === 'family' || isCommander
   const canSubmitPlace = detail.access_role === 'family' || isCommander
   const placeTypes = resourceConfiguration.case_place_types
@@ -475,8 +481,7 @@ function CaseDetailView({
             onSubmit={(event) => {
               event.preventDefault()
               if (!token) return
-              const role = detail.access_role === 'family' ? 'commander' : memberRole
-              void run('member', () => addCaseMember(token, detail.id, memberEmail.trim(), role), '案件成员已添加').then((succeeded) => {
+              void run('member', () => addCaseMember(token, detail.id, memberEmail.trim(), selectedMemberRole), '案件成员已添加').then((succeeded) => {
                 if (succeeded) setMemberEmail('')
               })
             }}
@@ -484,16 +489,10 @@ function CaseDetailView({
             <h3 className="m-0 text-sm font-bold text-slate-950">添加成员</h3>
             <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
               <Input type="email" value={memberEmail} maxLength={320} onChange={(event) => setMemberEmail(event.target.value)} placeholder="成员邮箱" fullWidth required />
-              <select className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={detail.access_role === 'family' ? 'commander' : memberRole} onChange={(event) => setMemberRole(event.target.value as CaseRole)} disabled={detail.access_role === 'family'}>
-                {detail.access_role === 'family' ? (
-                  <option value="commander">指挥</option>
-                ) : (
-                  <>
-                    <option value="family">家属</option>
-                    <option value="commander">指挥</option>
-                    <option value="volunteer">志愿者</option>
-                  </>
-                )}
+              <select aria-label="成员角色" className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={selectedMemberRole} onChange={(event) => setMemberRole(event.target.value as CaseRole)}>
+                <option value="family">家属</option>
+                <option value="commander">指挥</option>
+                {isCommander && <option value="volunteer">志愿者</option>}
               </select>
               <Button type="submit" size="sm" variant="secondary" isDisabled={busy === 'member'} isIconOnly aria-label="添加案件成员"><UserPlus size={17} /></Button>
             </div>

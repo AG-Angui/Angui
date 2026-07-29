@@ -218,6 +218,41 @@ describe('CaseWorkspacePage', () => {
     ))
   })
 
+  it('lets a family member invite either a family member or commander, but not a volunteer', async () => {
+    mocked.listCases.mockResolvedValue([
+      {
+        id: 'case-family', case_code: 'AG-FAMILY', status: 'active', access_role: 'family', display_name: '家属案件',
+        last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z',
+      },
+    ])
+    mocked.getCase.mockResolvedValue(detail('case-family', '家属案件', 'family'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ['frequent'],
+    })
+    mocked.addCaseMember.mockResolvedValue({})
+
+    render(<CaseWorkspacePage mode="family" />)
+
+    await screen.findByRole('heading', { name: '家属案件' })
+    const roleSelect = screen.getByRole('combobox', { name: '成员角色' })
+    expect(screen.getByRole('option', { name: '家属' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '指挥' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: '志愿者' })).not.toBeInTheDocument()
+
+    fireEvent.change(roleSelect, { target: { value: 'family' } })
+    fireEvent.change(screen.getByPlaceholderText('成员邮箱'), { target: { value: 'family-member@demo.invalid' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加案件成员' }))
+
+    await waitFor(() => expect(mocked.addCaseMember).toHaveBeenCalledWith(
+      'test-session',
+      'case-family',
+      'family-member@demo.invalid',
+      'family',
+    ))
+  })
+
   it('does not expose closed-case controls that create supplementary information', async () => {
     mocked.listCases.mockResolvedValue([
       {
