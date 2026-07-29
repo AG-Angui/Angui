@@ -10,6 +10,8 @@ const mocked = vi.hoisted(() => ({
   getCasePublicProgress: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
+  listCommandIntake: vi.fn(),
+  acceptCommandCase: vi.fn(),
   listCaseClues: vi.fn(),
   listCasePois: vi.fn(),
   addCaseMember: vi.fn(),
@@ -25,6 +27,8 @@ vi.mock('../api/cases', () => ({
   getCasePublicProgress: (...args: unknown[]) => mocked.getCasePublicProgress(...args),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
+  listCommandIntake: (...args: unknown[]) => mocked.listCommandIntake(...args),
+  acceptCommandCase: (...args: unknown[]) => mocked.acceptCommandCase(...args),
   listCaseClues: (...args: unknown[]) => mocked.listCaseClues(...args),
   listCasePois: (...args: unknown[]) => mocked.listCasePois(...args),
   addCaseMember: (...args: unknown[]) => mocked.addCaseMember(...args),
@@ -78,6 +82,18 @@ function detail(
 }
 
 describe('CaseWorkspacePage', () => {
+  it('lets a commander accept a minimal pending case before viewing it', async () => {
+    mocked.listCases.mockResolvedValue([])
+    mocked.listCommandIntake.mockResolvedValue([{ id: 'pending-case', case_code: 'AG-PENDING', created_at: '2026-07-24T00:00:00Z', last_seen_at: null, area_hint: 'Fictional north gate' }])
+    mocked.acceptCommandCase.mockResolvedValue(detail('pending-case', 'Accepted case', 'commander'))
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    expect(await screen.findByText('AG-PENDING')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '受理案件' }))
+    await waitFor(() => expect(mocked.acceptCommandCase).toHaveBeenCalledWith('test-session', 'pending-case'))
+  })
+
   it('renders role-filtered map records as a usable text fallback', async () => {
     mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: 'Commander case', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
     mocked.getCase.mockResolvedValue(detail('case-command', 'Commander case', 'commander'))

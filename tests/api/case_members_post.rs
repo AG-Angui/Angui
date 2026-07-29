@@ -75,6 +75,17 @@ async fn post_case_members_applies_invitation_role_and_duplicate_rules() {
     )
     .await;
 
+    let family_member = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/members"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(serde_json::json!({ "email": ADMIN, "case_role": "family" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(family_member.status(), StatusCode::CREATED);
+
     let unrelated_case_id = context.create_case().await;
     let commander_token = context.token(COMMANDER).await;
     let unrelated_case = test::call_service(
@@ -87,6 +98,55 @@ async fn post_case_members_applies_invitation_role_and_duplicate_rules() {
     )
     .await;
     assert_error(unrelated_case, StatusCode::NOT_FOUND, "not_found").await;
+}
+
+#[actix_web::test]
+async fn commander_accepts_a_minimal_pending_case_without_global_case_visibility() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    let commander_token = context.token(COMMANDER).await;
+    let app = crate::init_api_app!(&context);
+
+    let queue = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/cases/command-intake")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(queue.status(), StatusCode::OK);
+    let queue_body: Value = test::read_body_json(queue).await;
+    let item = queue_body
+        .as_array()
+        .expect("queue should be an array")
+        .iter()
+        .find(|item| item["id"] == case_id)
+        .expect("new family case should be pending");
+    assert!(item.get("health_notes").is_none());
+    assert!(item.get("display_name").is_none());
+
+    let accepted = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/accept-command"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let accepted_body: Value = test::read_body_json(accepted).await;
+    assert_eq!(accepted_body["access_role"], "commander");
+
+    let duplicate = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/accept-command"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_error(duplicate, StatusCode::CONFLICT, "conflict").await;
 }
 
 #[actix_web::test]

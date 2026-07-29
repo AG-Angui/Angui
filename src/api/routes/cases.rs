@@ -67,12 +67,20 @@ pub fn configure(config: &mut web::ServiceConfig) {
     );
 }
 
-async fn list_command_intake(auth: AuthenticatedUser, state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
+async fn list_command_intake(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(case_service::list_command_intake(&state.db, &auth).await?))
 }
 
-async fn accept_command(auth: AuthenticatedUser, state: web::Data<AppState>, case_id: web::Path<String>) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(case_service::accept_command_case(&state.db, &auth, &case_id).await?))
+async fn accept_command(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(case_service::accept_command_case(&state.db, &auth, &case_id).await?))
 }
 
 async fn list_case_members(
