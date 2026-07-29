@@ -6,6 +6,7 @@ import { CaseWorkspacePage } from './CaseWorkspacePage'
 const mocked = vi.hoisted(() => ({
   auth: { token: 'test-session' as string | null },
   getCase: vi.fn(),
+  getCaseMapView: vi.fn(),
   getCasePublicProgress: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock('../auth/useAuth', () => ({
 }))
 vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
+  getCaseMapView: (...args: unknown[]) => mocked.getCaseMapView(...args),
   getCasePublicProgress: (...args: unknown[]) => mocked.getCasePublicProgress(...args),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
@@ -76,6 +78,23 @@ function detail(
 }
 
 describe('CaseWorkspacePage', () => {
+  it('renders role-filtered map records as a usable text fallback', async () => {
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: 'Commander case', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(detail('case-command', 'Commander case', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.getCaseMapView.mockResolvedValue({ items: [
+      { id: 'place-text', object_type: 'place', display_name: 'Fictional market', longitude: null, latitude: null, location_text: 'North gate, fictional park', location_precision: 'unknown', source: 'commander', occurred_at: null, reported_at: '2026-07-24T00:00:00Z', review_status: 'confirmed', related_task_id: null, updated_at: '2026-07-24T00:00:00Z' },
+    ] })
+    mocked.listCaseClues.mockResolvedValue({ items: [], page: 1, page_size: 25, total: 0 })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    expect(await screen.findByText('Fictional market')).toBeInTheDocument()
+    expect(screen.getByText('North gate, fictional park')).toBeInTheDocument()
+    expect(screen.getByText('仅文字地点')).toBeInTheDocument()
+    expect(mocked.getCaseMapView).toHaveBeenCalledWith('test-session', 'case-command')
+  })
+
   it('does not let an earlier detail request overwrite the most recently selected case', async () => {
     const firstRequest = deferred<CaseDetail>()
     const secondRequest = deferred<CaseDetail>()

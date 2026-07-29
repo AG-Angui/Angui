@@ -200,6 +200,24 @@ export interface ClueDraft { id: string; case_id: string; status: 'draft' | 'pen
 export interface SummaryDraft { id: string; case_id: string; status: 'draft' | 'pending_review' | 'published' | 'rejected' | 'withdrawn' | 'superseded'; content: string; source_scope: string[]; template_version: string; provider_model: string | null; generated_at: string; reviewed_at: string | null; review_reason: string | null; created_at: string; updated_at: string; publication_eligible: boolean }
 export interface CasePoi { id: string; name: string; category: string; address: string | null; longitude: number | null; latitude: number | null }
 export interface CasePois { items: CasePoi[]; source: string; degradation_status: string; fallback_message: string | null }
+export type CaseMapObjectType = 'last_seen' | 'place' | 'clue' | 'task'
+export type MapLocationPrecision = 'exact' | 'approximate' | 'unknown'
+export interface CaseMapItem {
+  id: string
+  object_type: CaseMapObjectType
+  display_name: string | null
+  longitude: number | null
+  latitude: number | null
+  location_text: string | null
+  location_precision: MapLocationPrecision
+  source: string
+  occurred_at: string | null
+  reported_at: string | null
+  review_status: string
+  related_task_id: string | null
+  updated_at: string
+}
+export interface CaseMapView { items: CaseMapItem[] }
 
 export function listCases(token: string): Promise<CaseListItem[]> {
   return apiRequest<CaseListItem[]>('/cases', {}, token)
@@ -238,6 +256,10 @@ export function createClue(
 
 export function getCasePublicProgress(token: string, caseId: string): Promise<CasePublicProgress> {
   return apiRequest<CasePublicProgress>(`/cases/${caseId}/public-progress`, {}, token)
+}
+
+export function getCaseMapView(token: string, caseId: string): Promise<CaseMapView> {
+  return apiRequest<CaseMapView>(`/cases/${caseId}/map-view`, {}, token)
 }
 
 export function createClueDraft(token: string, caseId: string, payload: { text: string; source_type?: PublicClueSourceType; raw_record_reference?: string }): Promise<ClueDraft[]> {

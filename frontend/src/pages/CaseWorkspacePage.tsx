@@ -14,6 +14,7 @@ import {
   addCaseMember,
   createCasePlace,
   createClueDraft,
+  getCaseMapView,
   createSummaryDraft,
   getCasePublicProgress,
   listCasePois,
@@ -35,6 +36,8 @@ import type {
   CaseResourceConfiguration,
   CaseStatus,
   CasePois,
+  CaseMapItem,
+  CaseMapView,
   CasePublicProgress,
   Clue,
   ClueDraft,
@@ -421,6 +424,7 @@ function CaseDetailView({
         </div>
       </header>
 
+      <CaseSituationPanel detail={detail} token={token} />
       <CaseCollaborationPanel detail={detail} token={token} />
 
       <section className="grid gap-x-8 gap-y-4 border-b border-slate-200 px-5 py-5 sm:grid-cols-2 sm:px-6 lg:grid-cols-3" aria-label="老人资料">
@@ -728,6 +732,108 @@ function CaseDetailView({
           </div>
       </section>
     </div>
+  )
+}
+
+const mapObjectLabels: Record<CaseMapItem['object_type'], string> = {
+  last_seen: '最后出现信息',
+  place: '补充地点',
+  clue: '已确认线索',
+  task: '任务区域',
+}
+
+const precisionLabels: Record<CaseMapItem['location_precision'], string> = {
+  exact: '精确位置',
+  approximate: '模糊地点',
+  unknown: '仅文字地点',
+}
+
+function CaseSituationPanel({ detail, token }: { detail: CaseDetail; token: string | null }) {
+  const [mapView, setMapView] = useState<CaseMapView | null>(null)
+  const [filter, setFilter] = useState<CaseMapItem['object_type'] | 'all'>('all')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
+  const requestVersion = useRef(0)
+
+  const loadMapView = useCallback(async () => {
+    const version = requestVersion.current + 1
+    requestVersion.current = version
+    if (!token) {
+      setMapView(null)
+      setError('')
+      setIsLoading(false)
+      return
+    }
+    setIsLoading(true)
+    setError('')
+    try {
+      const response = await getCaseMapView(token, detail.id)
+      if (version !== requestVersion.current) return
+      setMapView(response)
+    } catch (cause) {
+      if (version !== requestVersion.current) return
+      setMapView(null)
+      setError(messageFrom(cause))
+    } finally {
+      if (version === requestVersion.current) setIsLoading(false)
+    }
+  }, [detail.id, token])
+
+  useEffect(() => {
+    setFilter('all')
+    void loadMapView()
+    return () => { requestVersion.current += 1 }
+  }, [detail.id, loadMapView])
+
+  const items = useMemo(() => (
+    mapView?.items.filter((item) => filter === 'all' || item.object_type === filter) ?? []
+  ), [filter, mapView])
+  const coordinateCount = items.filter((item) => item.longitude !== null && item.latitude !== null).length
+
+  return (
+    <section className="border-b border-slate-200 bg-slate-50 px-5 py-5 sm:px-6" aria-label="地图态势与文字降级">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+        <div>
+          <h3 className="m-0 text-base font-bold text-slate-950">地图态势与文字降级</h3>
+          <p className="mb-0 mt-1 max-w-3xl text-xs leading-5 text-slate-600">仅展示服务端按当前案件角色返回的地点、已确认线索和任务区域。当前首轮使用可审查的文字态势；地图供应商不可用时，以下地点、精度和状态仍可使用。</p>
+        </div>
+        <Button size="sm" variant="ghost" isDisabled={!token || isLoading} onPress={() => void loadMapView()}>
+          <RefreshCw size={16} />刷新态势
+        </Button>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <label className="text-sm font-medium text-slate-700" htmlFor="map-object-filter">对象类型</label>
+        <select id="map-object-filter" aria-label="态势对象筛选" className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={filter} onChange={(event) => setFilter(event.target.value as CaseMapItem['object_type'] | 'all')}>
+          <option value="all">全部对象</option>
+          {Object.entries(mapObjectLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {mapView && <span className="text-xs text-slate-500">{items.length} 项可见，其中 {coordinateCount} 项具备已授权坐标。</span>}
+      </div>
+
+      {isLoading && <p className="mb-0 mt-4 text-sm text-slate-500" role="status">正在加载角色化态势…</p>}
+      {error && <div className="mt-4"><Message tone="error">地图态势暂不可用：{error}。请使用案件资料、任务说明和人工联系路径继续工作。</Message></div>}
+      {!isLoading && !error && mapView && items.length === 0 && <p className="mb-0 mt-4 text-sm text-slate-500">当前筛选下没有可显示的态势对象。无坐标记录也会在此以文字形式出现。</p>}
+      {!isLoading && !error && items.length > 0 && (
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {items.map((item) => (
+            <article key={item.id} className="rounded-md border border-slate-200 bg-white p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip size="sm" variant="soft"><Chip.Label>{mapObjectLabels[item.object_type]}</Chip.Label></Chip>
+                <Chip size="sm" variant="soft"><Chip.Label>{precisionLabels[item.location_precision]}</Chip.Label></Chip>
+                <Chip size="sm" variant="soft"><Chip.Label>{statusLabels[item.review_status] ?? item.review_status}</Chip.Label></Chip>
+              </div>
+              <h4 className="mb-0 mt-3 text-sm font-semibold text-slate-950">{item.display_name ?? mapObjectLabels[item.object_type]}</h4>
+              <p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{item.location_text ?? '未提供文字地点；请联系指挥确认。'}</p>
+              <dl className="mb-0 mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500">
+                <div><dt className="inline">来源：</dt><dd className="inline">{item.source}</dd></div>
+                <div><dt className="inline">事件/上报：</dt><dd className="inline">{formatDate(item.occurred_at ?? item.reported_at) ?? '待补充'}</dd></div>
+              </dl>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 
