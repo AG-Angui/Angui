@@ -23,6 +23,7 @@ async fn admin_endpoints_enforce_capability_redact_data_and_revoke_disabled_sess
     let context = TestContext::new().await;
     let case_id = context.create_case().await;
     let family = context.authenticated(FAMILY).await;
+    let admin = context.authenticated(ADMIN).await;
     let family_token = context.token(FAMILY).await;
     let admin_token = context.token(ADMIN).await;
     let app = crate::init_api_app!(&context);
@@ -148,6 +149,44 @@ async fn admin_endpoints_enforce_capability_redact_data_and_revoke_disabled_sess
     )
     .await;
     assert_error(invalid_status, StatusCode::BAD_REQUEST, "validation_error").await;
+
+    let empty_reason = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/admin/users/{}/status", family.id))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "status": "disabled", "reason": "   " }))
+            .to_request(),
+    )
+    .await;
+    assert_error(empty_reason, StatusCode::BAD_REQUEST, "validation_error").await;
+
+    let overlong_reason = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/admin/users/{}/status", family.id))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "status": "disabled", "reason": "x".repeat(1_001) }))
+            .to_request(),
+    )
+    .await;
+    assert_error(overlong_reason, StatusCode::BAD_REQUEST, "validation_error").await;
+
+    let self_status_change = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/admin/users/{}/status", admin.id))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "status": "disabled", "reason": "fictional self status change" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        self_status_change,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
 
     let disabled = test::call_service(
         &app,
