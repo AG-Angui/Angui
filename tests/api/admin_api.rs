@@ -6,7 +6,17 @@ use angui::entities::{audit_events, auth_sessions};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
-use crate::support::{ADMIN, FAMILY, TestContext, VOLUNTEER, assert_error};
+use crate::support::{ADMIN, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
+
+fn assert_user_items_redact_credentials(response: &Value) {
+    let items = response["items"]
+        .as_array()
+        .expect("admin user response items should be an array");
+    for item in items {
+        assert!(item.get("password_hash").is_none());
+        assert!(item.get("token_hash").is_none());
+    }
+}
 
 #[actix_web::test]
 async fn admin_endpoints_enforce_capability_redact_data_and_revoke_disabled_sessions() {
@@ -30,7 +40,7 @@ async fn admin_endpoints_enforce_capability_redact_data_and_revoke_disabled_sess
     let users = test::call_service(
         &app,
         test::TestRequest::get()
-            .uri("/api/admin/users?status=active&sort=email&order=asc&page=1&page_size=3")
+            .uri("/api/admin/users?status=active&sort=email&order=asc&page=1&page_size=100")
             .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
             .to_request(),
     )
@@ -38,20 +48,48 @@ async fn admin_endpoints_enforce_capability_redact_data_and_revoke_disabled_sess
     assert_eq!(users.status(), StatusCode::OK);
     let users: Value = test::read_body_json(users).await;
     assert_eq!(users["page"], 1);
-    assert_eq!(users["page_size"], 3);
+    assert_eq!(users["page_size"], 100);
     assert!(
         users["items"]
             .as_array()
-            .is_some_and(|items| !items.is_empty())
+            .is_some_and(|items| items.len() > 1),
+        "the active-user query should exercise redaction across multiple user entries"
     );
-    assert!(users.get("password_hash").is_none());
-    assert!(!users.to_string().contains("token_hash"));
+    assert_user_items_redact_credentials(&users);
     let family_entry = users["items"]
         .as_array()
         .and_then(|items| items.iter().find(|item| item["id"] == family.id))
         .expect("family user should be in the first page of demo accounts");
     assert_eq!(family_entry["status"], "active");
     assert!(family_entry["last_session_at"].is_string());
+
+    let learner_page = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/users?account_type=learner&page_size=100")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(learner_page.status(), StatusCode::OK);
+    let learner_page: Value = test::read_body_json(learner_page).await;
+    assert_eq!(learner_page["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(learner_page["items"][0]["email"], LEARNER);
+    assert_user_items_redact_credentials(&learner_page);
+
+    let locked_page = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/users?status=locked&page_size=100")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(locked_page.status(), StatusCode::OK);
+    let locked_page: Value = test::read_body_json(locked_page).await;
+    assert_eq!(locked_page["items"].as_array().map(Vec::len), Some(0));
+    assert_user_items_redact_credentials(&locked_page);
+
     assert!(
         audit_events::Entity::find()
             .filter(audit_events::Column::Action.eq("admin.users_listed"))
