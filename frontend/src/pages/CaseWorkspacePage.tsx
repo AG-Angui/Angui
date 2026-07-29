@@ -16,6 +16,7 @@ import {
   createClueDraft,
   createCaseTask,
   getCaseMapView,
+  getCaseSummary,
   createSummaryDraft,
   getCasePublicProgress,
   listCasePois,
@@ -42,6 +43,7 @@ import type {
   CasePois,
   CaseMapItem,
   CaseMapView,
+  CaseSummary,
   CaseMember,
   CaseTask,
   CreateTaskPayload,
@@ -890,6 +892,7 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
   const [poiCategory, setPoiCategory] = useState('hospital')
   const [pois, setPois] = useState<CasePois | null>(null)
   const [summaryDraft, setSummaryDraft] = useState<SummaryDraft | null>(null)
+  const [summary, setSummary] = useState<CaseSummary | null>(null)
   const [reviewReason, setReviewReason] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -917,6 +920,11 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
     }
   }, [detail.id, isFamily, token])
 
+  const loadSummary = useCallback(async () => {
+    if (!token || !isCommander) { setSummary(null); return }
+    try { setSummary(await getCaseSummary(token, detail.id)) } catch (cause) { setError(messageFrom(cause)) }
+  }, [detail.id, isCommander, token])
+
   useEffect(() => {
     setPublicProgress(null)
     setProgressError('')
@@ -924,10 +932,12 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
     setClueDrafts([])
     setPois(null)
     setSummaryDraft(null)
+    setSummary(null)
     setReviewReason('')
     setError('')
     void loadPublicProgress()
-  }, [detail.id, loadPublicProgress])
+    void loadSummary()
+  }, [detail.id, loadPublicProgress, loadSummary])
 
   async function run(key: string, action: () => Promise<void>) {
     setBusy(key)
@@ -993,6 +1003,10 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
       </div>
 
       {isCommander && <div className="min-w-0">
+        <div className="rounded-md border border-slate-200 bg-white p-3">
+          <div className="flex items-center justify-between gap-3"><h3 className="m-0 text-base font-bold text-slate-950">经授权案件摘要</h3><Button size="sm" variant="ghost" isDisabled={!token || busy !== ''} onPress={() => void loadSummary()}>刷新摘要</Button></div>
+          {!summary ? <p className="mb-0 mt-2 text-sm text-slate-500">正在加载服务端确定性摘要…</p> : <><p className="mb-0 mt-2 text-xs text-slate-500">生成于 {formatDate(summary.generated_at)} · 来源范围：{summary.source_scope.join('、')}</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><div><strong className="text-sm text-slate-900">最后确认信息</strong><p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{summary.last_confirmed_information?.content ?? '暂无已确认信息。'}</p></div><div><strong className="text-sm text-slate-900">待核实事项</strong><p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{summary.pending_verification.length === 0 ? '暂无。' : `${summary.pending_verification.length} 项仍需人工核实，未作为确认事实发布。`}</p></div></div>{summary.safety_reminders.length > 0 && <ul className="mb-0 mt-3 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-600">{summary.safety_reminders.map((item) => <li key={item}>{item}</li>)}</ul>}</>}
+        </div>
         <h3 className="m-0 text-base font-bold text-slate-950">案件摘要草稿审核</h3>
         <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">只有服务端按已授权范围生成的摘要可发布；发布会替代该案件旧的已发布版本。</p>
         <div className="mt-3"><Button size="sm" variant="secondary" isDisabled={!token || busy === 'summary'} onPress={() => void run('summary', async () => { if (!token) return; setSummaryDraft(await createSummaryDraft(token, detail.id)) })}>生成待审核摘要</Button></div>

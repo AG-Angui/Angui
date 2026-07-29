@@ -218,6 +218,8 @@ export interface CaseMapItem {
   updated_at: string
 }
 export interface CaseMapView { items: CaseMapItem[] }
+export interface CaseSummaryClue { clue_id: string; content: string; occurred_at: string | null; location_text: string | null; review_status: string }
+export interface CaseSummary { case_id: string; access_role: CaseRole; generated_at: string; source_scope: string[]; last_confirmed_information: CaseSummaryClue | null; confirmed_clues: CaseSummaryClue[]; pending_verification: CaseSummaryClue[]; excluded_directions: CaseSummaryClue[]; current_focus: Array<{ label: string; detail: string }>; task_status: Array<{ task_id: string; title: string; status: string; due_at: string }>; safety_reminders: string[] }
 export type TaskStatus = 'assigned' | 'accepted' | 'active' | 'blocked' | 'completed' | 'cancelled'
 export interface CaseTask { id: string; case_id: string; source_clue_id: string | null; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string | null; risk_level: string; risk_notes: string; safety_briefing: string; expected_feedback: string; status: TaskStatus; result_summary: string | null; assigned_volunteer_user_id: string | null; assigned_at: string | null; created_at: string; updated_at: string }
 export interface TaskListPage { items: CaseTask[]; page: number; page_size: number; total: number }
@@ -264,6 +266,10 @@ export function getCasePublicProgress(token: string, caseId: string): Promise<Ca
 
 export function getCaseMapView(token: string, caseId: string): Promise<CaseMapView> {
   return apiRequest<CaseMapView>(`/cases/${caseId}/map-view`, {}, token)
+}
+
+export function getCaseSummary(token: string, caseId: string): Promise<CaseSummary> {
+  return apiRequest<CaseSummary>(`/cases/${caseId}/summary`, {}, token)
 }
 
 export function listCaseTasks(token: string, caseId: string): Promise<TaskListPage> {
