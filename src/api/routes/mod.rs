@@ -1,3 +1,4 @@
+mod admin;
 mod auth;
 mod cases;
 mod clues;
@@ -44,6 +45,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .wrap(ApiSessionAuthentication)
             .service(health::get_health)
             .configure(auth::configure)
+            .configure(admin::configure)
             .configure(user_profiles::configure)
             .configure(cases::configure)
             .configure(intake_sessions::configure)

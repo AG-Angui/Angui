@@ -40,6 +40,9 @@ async fn every_protected_endpoint_rejects_missing_and_invalid_bearer_tokens() {
     assert_unauthorized!(app, get, "/api/users/me/profile");
     assert_unauthorized!(app, patch, "/api/users/me/profile");
     assert_unauthorized!(app, post, "/api/auth/logout");
+    assert_unauthorized!(app, get, "/api/admin/audit-events");
+    assert_unauthorized!(app, get, "/api/admin/users");
+    assert_unauthorized!(app, patch, "/api/admin/users/not-used/status");
     assert_unauthorized!(app, get, "/api/cases");
     assert_unauthorized!(app, post, "/api/cases");
     assert_unauthorized!(app, get, "/api/cases/not-used");

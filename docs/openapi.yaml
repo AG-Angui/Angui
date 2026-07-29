@@ -1269,6 +1269,80 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/admin/audit-events:
+    get:
+      tags: [Admin]
+      operationId: listAdminAuditEvents
+      summary: List sanitized audit events
+      description: Admin capability only. Supports bounded filtering by case, entity type, event action, and RFC 3339 time range. The response intentionally excludes metadata_json and all raw sensitive payloads. Every access is audited.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-audit
+      parameters:
+        - { name: case_id, in: query, schema: { type: string, format: uuid } }
+        - { name: entity_type, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: action, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: sort, in: query, schema: { type: string, enum: [created_at, action, entity_type], default: created_at } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+      responses:
+        "200": { description: Sanitized audit event page, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAuditEventPage" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      operationId: listAdminUsers
+      summary: List account status without credentials
+      description: Admin capability only. Returns account identity, account type, global capabilities, status, creation time, and last session time. Password hashes, session tokens, profiles, and case data are never returned. Every access is audited.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters:
+        - { name: account_type, in: query, schema: { type: string, enum: [member, learner] } }
+        - { name: status, in: query, schema: { type: string, enum: [active, disabled, locked] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: sort, in: query, schema: { type: string, enum: [created_at, email, last_session_at], default: created_at } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+      responses:
+        "200": { description: Sanitized account page, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUserPage" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/users/{user_id}/status:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Admin]
+      operationId: updateAdminUserStatus
+      summary: Enable, disable, or lock an account
+      description: Admin capability only. Only active, disabled, and locked are accepted. Disabling or locking revokes every active session in the same transaction. The audit records actor, previous and next status, revocation count, and reason length; it never stores the reason text or credentials.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateAdminUserStatusRequest" } } }
+      responses:
+        "200": { description: Updated sanitized account, content: { application/json: { schema: { $ref: "#/components/schemas/AdminUser" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2603,6 +2677,61 @@ components:
         provider_model: { type: [string, "null"], description: Always null for the rule-based draft generator. }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    UpdateAdminUserStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status: { type: string, enum: [active, disabled, locked] }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    AdminUser:
+      type: object
+      additionalProperties: false
+      required: [id, email, display_name, account_type, global_capabilities, status, created_at, last_session_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        account_type: { $ref: "#/components/schemas/AccountType" }
+        global_capabilities: { type: array, items: { $ref: "#/components/schemas/GlobalCapability" } }
+        status: { type: string, enum: [active, disabled, locked] }
+        created_at: { type: string, format: date-time }
+        last_session_at: { type: [string, "null"], format: date-time }
+
+    AdminUserPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AdminUser" } }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+
+    AdminAuditEvent:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, actor_user_id, action, entity_type, entity_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: [string, "null"], format: uuid }
+        actor_user_id: { type: string, format: uuid }
+        action: { type: string }
+        entity_type: { type: string }
+        entity_id: { type: string }
+        created_at: { type: string, format: date-time }
+
+    AdminAuditEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AdminAuditEvent" } }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
 
     CaseSummary:
       type: object

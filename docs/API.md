@@ -42,6 +42,9 @@
 | `POST` | `/api/clues/{clue_id}/attachments` | `201` | 为具体线索上传待审核 JPEG/PNG 佐证图片 |
 | `POST` | `/api/cases/{case_id}/members` | `201` | 家属邀请指挥，或指挥添加案件成员 |
 | `PATCH` | `/api/clues/{clue_id}/review` | `200` | 人工审核线索 |
+| `GET` | `/api/admin/audit-events` | `200` | 管理员分页查看经过脱敏的审计事件 |
+| `GET` | `/api/admin/users` | `200` | 管理员分页查看不含凭据的账号状态 |
+| `PATCH` | `/api/admin/users/{user_id}/status` | `200` | 管理员启用、停用或锁定账号 |
 
 除健康检查和登录外，所有接口都要求：
 
@@ -272,3 +275,13 @@ Example:
 - `auth.logout`
 
 审计 actor 来自认证用户 ID。登录失败不会把邮箱或密码写入审计元数据；密码和 Bearer 令牌禁止进入日志。账号初始化 CLI 每次更新演示账号密码时会撤销该账号的既有会话。
+
+## 管理员账号管理
+
+`admin` 是平台级 capability，只授权 `/api/admin/*` 下的管理员接口；它不会自动成为任何案件的成员，也不会绕过案件级权限检查。管理员接口不提供创建、角色或 capability 变更功能。
+
+`GET /api/admin/audit-events` 支持按案件 ID、实体类型、事件 action、RFC 3339 时间范围以及白名单排序分页查询。响应只包含审计事件标识、关联案件/实体、操作人、事件类别和时间，不返回 `metadata_json`、原始请求内容或任何敏感业务详情；每次访问本身也会被审计。
+
+`GET /api/admin/users` 只返回账号 ID、邮箱、展示名、账号类型、全局 capability、状态、创建时间和最近会话时间。密码哈希、Bearer token、token 哈希、会话 ID、画像及案件资料绝不会通过该接口返回。筛选和排序参数均为服务端白名单。
+
+`PATCH /api/admin/users/{user_id}/status` 只接受 `active`、`disabled` 或 `locked`，并要求提供审核理由。将账号设为 `disabled` 或 `locked` 时，服务端在同一事务中撤销其全部活跃会话，因此既有 token 立即失效；重新设为 `active` 不会恢复已撤销的旧会话，用户必须重新登录。为避免管理员误锁自己，管理员不能修改自己的账号状态。审计仅记录操作人、变更前后状态、撤销会话数和理由长度，不保存理由原文或凭据。

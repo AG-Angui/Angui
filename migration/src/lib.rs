@@ -25,6 +25,7 @@ mod m0022_create_summary_drafts;
 mod m0023_create_clue_drafts;
 mod m0024_enforce_single_published_summary_draft;
 mod m0025_create_archive_drafts;
+mod m0026_add_locked_user_status;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -59,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0023_create_clue_drafts::Migration),
             Box::new(m0024_enforce_single_published_summary_draft::Migration),
             Box::new(m0025_create_archive_drafts::Migration),
+            Box::new(m0026_add_locked_user_status::Migration),
         ]
     }
 }
@@ -282,6 +284,36 @@ mod tests {
         ),
     ];
 
+    const LOCKED_USER_STATUS_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/up/0026_add_locked_user_status.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/up/0026_add_locked_user_status.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/up/0026_add_locked_user_status.sql"),
+        ),
+    ];
+
+    const LOCKED_USER_STATUS_DOWN_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/down/0026_remove_locked_user_status.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/down/0026_remove_locked_user_status.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/down/0026_remove_locked_user_status.sql"),
+        ),
+    ];
+
     #[tokio::test]
     async fn sqlite_migrations_support_up_down_up() {
         let database = Database::connect("sqlite::memory:")
@@ -335,6 +367,44 @@ mod tests {
                 .expect("archive draft query should succeed")
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_locked_user_status_migration_enforces_and_preserves_locked_accounts() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, Some(25))
+            .await
+            .expect("schema before locked status migration should succeed");
+        insert_member_and_session(&database, "locked-account").await;
+        assert!(
+            database
+                .execute_unprepared(
+                    "UPDATE users SET status = 'locked' WHERE id = 'locked-account-user'",
+                )
+                .await
+                .is_err()
+        );
+
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("locked status migration should succeed");
+        database
+            .execute_unprepared(
+                "UPDATE users SET status = 'locked' WHERE id = 'locked-account-user'",
+            )
+            .await
+            .expect("locked status should be accepted after migration");
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        let locked = database
+            .query_one(Statement::from_string(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT 1 FROM users WHERE id = 'locked-account-user' AND status = 'locked'",
+            ))
+            .await
+            .expect("locked account query should succeed");
+        assert!(locked.is_some());
     }
 
     #[tokio::test]
@@ -890,6 +960,56 @@ mod tests {
                     normalized.contains(required),
                     "{name} archive draft schema must declare {required}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn locked_user_status_is_constrained_across_dialects() {
+        for ((name, up_script), (down_name, down_script)) in LOCKED_USER_STATUS_SCRIPTS
+            .iter()
+            .zip(LOCKED_USER_STATUS_DOWN_SCRIPTS)
+        {
+            assert_eq!(
+                name, down_name,
+                "up and down scripts must use the same dialect"
+            );
+            let up = up_script.to_ascii_lowercase();
+            let down = down_script.to_ascii_lowercase();
+            assert!(
+                up.contains("check (status in ('active', 'disabled', 'locked'))"),
+                "{name} up migration must constrain users.status to active, disabled, and locked"
+            );
+            assert!(
+                down.contains("check (status in ('active', 'disabled'))"),
+                "{name} down migration must restore the active/disabled users.status constraint"
+            );
+            assert!(
+                !down.contains("'locked'"),
+                "{name} down migration must remove locked from the users.status constraint"
+            );
+            if *name == "sqlite" {
+                for (script_name, script, table_name) in [
+                    ("up", up.as_str(), "users_with_locked_status"),
+                    ("down", down.as_str(), "users_without_locked_status"),
+                ] {
+                    assert!(
+                        script.contains(&format!("create table {table_name}")),
+                        "sqlite {script_name} migration must rebuild users with its target status constraint"
+                    );
+                    assert!(
+                        script.contains("drop table users") && script.contains("rename to users"),
+                        "sqlite {script_name} migration must replace the users table"
+                    );
+                }
+            } else {
+                for (script_name, script) in [("up", up.as_str()), ("down", down.as_str())] {
+                    assert!(
+                        script.contains("alter table users")
+                            && script.contains("users_status_check"),
+                        "{name} {script_name} migration must replace the named users.status constraint"
+                    );
+                }
             }
         }
     }
