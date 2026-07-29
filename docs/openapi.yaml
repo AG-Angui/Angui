@@ -1343,6 +1343,58 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/admin/archive-drafts/{draft_id}/deidentify:
+    parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Admin]
+      operationId: deidentifyArchiveDraft
+      summary: Record manual de-identification review
+      description: Admin capability only. This endpoint records a human confirmation or rejection of de-identification for a controlled archive draft. It never accepts replacement text, raw source material, or an automated de-identification claim. Confirmation moves the draft to pending_review; rejection prevents publication. Every outcome is audited without recording the reason text.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DeidentifyArchiveDraftRequest" } } }
+      responses:
+        "200": { description: Archive draft with its updated controlled lifecycle state, content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/archive-drafts/{draft_id}/review:
+    parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Admin]
+      operationId: reviewArchiveDraft
+      summary: Publish, reject, or withdraw a reviewed archive draft
+      description: Admin capability only. Publication is allowed only after recorded manual de-identification confirmation. Publishing only marks a controlled archive as a learning_resource; it does not expose a RAG, export, print, public, or cross-case read path. Withdrawal immediately removes that learning-resource designation while preserving the auditable version history.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReviewArchiveDraftRequest" } } }
+      responses:
+        "200": { description: Archive draft with its updated controlled lifecycle state, content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2665,18 +2717,39 @@ components:
     ArchiveDraft:
       type: object
       additionalProperties: false
-      required: [id, case_id, status, content, source_scope, deidentification_status, template_version, provider_model, created_at, updated_at]
+      required: [id, case_id, status, content, source_scope, deidentification_status, template_version, provider_model, version, usage_scope, retention_status, deidentified_at, reviewed_at, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
-        status: { type: string, enum: [draft] }
+        status: { type: string, enum: [draft, pending_review, published, rejected, withdrawn] }
         content: { type: string, description: Internal deterministic draft content containing no raw case materials. }
         source_scope: { type: array, items: { type: string, enum: [confirmed_clue_metadata, completed_task_metadata] } }
-        deidentification_status: { type: string, enum: [manual_review_required] }
+        deidentification_status: { type: string, enum: [manual_review_required, deidentified, rejected] }
         template_version: { type: string }
         provider_model: { type: [string, "null"], description: Always null for the rule-based draft generator. }
+        version: { type: integer, minimum: 1 }
+        usage_scope: { type: string, enum: [internal_archive, learning_resource] }
+        retention_status: { type: string, enum: [retained, withdrawn] }
+        deidentified_at: { type: [string, "null"], format: date-time }
+        reviewed_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    DeidentifyArchiveDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [outcome, reason]
+      properties:
+        outcome: { type: string, enum: [confirm, reject] }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    ReviewArchiveDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason]
+      properties:
+        action: { type: string, enum: [publish, reject, withdraw] }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
 
     UpdateAdminUserStatusRequest:
       type: object

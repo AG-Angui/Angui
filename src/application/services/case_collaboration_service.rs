@@ -13,10 +13,10 @@ use crate::{
     models::{
         ArchiveDraftResponse, AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse,
         CasePublicProgressItem, CasePublicProgressResponse, ClueDraftResponse,
-        CreateClueDraftRequest, CreateSummaryDraftRequest, ReviewSummaryDraftRequest,
-        SummaryDraftResponse,
+        CreateClueDraftRequest, CreateSummaryDraftRequest, DeidentifyArchiveDraftRequest,
+        ReviewArchiveDraftRequest, ReviewSummaryDraftRequest, SummaryDraftResponse,
     },
-    roles::CaseRole,
+    roles::{CaseRole, GlobalCapability},
     services::{case_service, case_summary_service, task_service},
 };
 
@@ -72,6 +72,15 @@ pub async fn create_archive_draft(
         template_version: Set(ARCHIVE_DRAFT_TEMPLATE_VERSION.to_owned()),
         provider_model: Set(None),
         created_by_user_id: Set(auth.id.clone()),
+        deidentified_by_user_id: Set(None),
+        deidentified_at: Set(None),
+        deidentification_reason: Set(None),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+        review_reason: Set(None),
+        version: Set(1),
+        usage_scope: Set("internal_archive".to_owned()),
+        retention_status: Set("retained".to_owned()),
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp),
     }
@@ -91,6 +100,153 @@ pub async fn create_archive_draft(
             "source_scope": source_scope,
             "confirmed_clue_count": confirmed_clue_count,
             "completed_task_count": completed_task_count,
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    archive_draft_response(model)
+}
+
+pub async fn deidentify_archive_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    draft_id: &str,
+    request: DeidentifyArchiveDraftRequest,
+) -> Result<ArchiveDraftResponse, ApiError> {
+    require_admin(auth)?;
+    let outcome = request.outcome.trim().to_lowercase();
+    if !matches!(outcome.as_str(), "confirm" | "reject") {
+        return Err(ApiError::Validation(
+            "outcome must be confirm or reject".to_owned(),
+        ));
+    }
+    let reason = required_text("reason", request.reason, 1_000)?;
+    let transaction = db.begin().await?;
+    let existing = archive_drafts::Entity::find_by_id(draft_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("archive draft was not found".to_owned()))?;
+    if existing.status != "draft" || existing.deidentification_status != "manual_review_required" {
+        return Err(ApiError::Conflict(
+            "archive draft is not awaiting de-identification review".to_owned(),
+        ));
+    }
+    let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
+    let timestamp = now();
+    let mut active = existing.into_active_model();
+    active.deidentification_status = Set(if outcome == "confirm" {
+        "deidentified"
+    } else {
+        "rejected"
+    }
+    .to_owned());
+    active.status = Set(if outcome == "confirm" {
+        "pending_review"
+    } else {
+        "rejected"
+    }
+    .to_owned());
+    active.deidentified_by_user_id = Set(Some(auth.id.clone()));
+    active.deidentified_at = Set(Some(timestamp.clone()));
+    active.deidentification_reason = Set(Some(reason.clone()));
+    active.version = Set(next_version);
+    active.updated_at = Set(timestamp);
+    let model = active.update(&transaction).await?;
+    case_service::write_audit(
+        &transaction,
+        Some(model.case_id.clone()),
+        auth,
+        "archive_draft.deidentification_reviewed",
+        "archive_draft",
+        model.id.clone(),
+        Some(json!({
+            "outcome": outcome,
+            "status": model.status,
+            "deidentification_status": model.deidentification_status,
+            "reason_length": reason.chars().count(),
+            "version": model.version,
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    archive_draft_response(model)
+}
+
+pub async fn review_archive_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    draft_id: &str,
+    request: ReviewArchiveDraftRequest,
+) -> Result<ArchiveDraftResponse, ApiError> {
+    require_admin(auth)?;
+    let action = request.action.trim().to_lowercase();
+    if !matches!(action.as_str(), "publish" | "reject" | "withdraw") {
+        return Err(ApiError::Validation(
+            "action must be publish, reject, or withdraw".to_owned(),
+        ));
+    }
+    let reason = required_text("reason", request.reason, 1_000)?;
+    let transaction = db.begin().await?;
+    let existing = archive_drafts::Entity::find_by_id(draft_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("archive draft was not found".to_owned()))?;
+    let transition_allowed = matches!(
+        (existing.status.as_str(), action.as_str()),
+        ("pending_review", "publish" | "reject") | ("published", "withdraw")
+    );
+    if !transition_allowed {
+        return Err(ApiError::Conflict(
+            "archive draft cannot transition from its current status".to_owned(),
+        ));
+    }
+    if action == "publish" && existing.deidentification_status != "deidentified" {
+        return Err(ApiError::Conflict(
+            "archive draft must have confirmed de-identification before publication".to_owned(),
+        ));
+    }
+    let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
+    let timestamp = now();
+    let mut active = existing.into_active_model();
+    active.status = Set(match action.as_str() {
+        "publish" => "published",
+        "reject" => "rejected",
+        "withdraw" => "withdrawn",
+        _ => return Err(ApiError::Internal),
+    }
+    .to_owned());
+    active.reviewed_by_user_id = Set(Some(auth.id.clone()));
+    active.reviewed_at = Set(Some(timestamp.clone()));
+    active.review_reason = Set(Some(reason.clone()));
+    active.usage_scope = Set(if action == "publish" {
+        "learning_resource"
+    } else {
+        "internal_archive"
+    }
+    .to_owned());
+    active.retention_status = Set(if action == "withdraw" {
+        "withdrawn"
+    } else {
+        "retained"
+    }
+    .to_owned());
+    active.version = Set(next_version);
+    active.updated_at = Set(timestamp);
+    let model = active.update(&transaction).await?;
+    case_service::write_audit(
+        &transaction,
+        Some(model.case_id.clone()),
+        auth,
+        "archive_draft.reviewed",
+        "archive_draft",
+        model.id.clone(),
+        Some(json!({
+            "action": action,
+            "status": model.status,
+            "usage_scope": model.usage_scope,
+            "retention_status": model.retention_status,
+            "reason_length": reason.chars().count(),
+            "version": model.version,
         })),
     )
     .await?;
@@ -529,9 +685,23 @@ fn archive_draft_response(model: archive_drafts::Model) -> Result<ArchiveDraftRe
         deidentification_status: model.deidentification_status,
         template_version: model.template_version,
         provider_model: model.provider_model,
+        version: model.version,
+        usage_scope: model.usage_scope,
+        retention_status: model.retention_status,
+        deidentified_at: model.deidentified_at,
+        reviewed_at: model.reviewed_at,
         created_at: model.created_at,
         updated_at: model.updated_at,
     })
+}
+
+fn require_admin(auth: &AuthenticatedUser) -> Result<(), ApiError> {
+    auth.global_capabilities
+        .contains(&GlobalCapability::Admin)
+        .then_some(())
+        .ok_or_else(|| {
+            ApiError::Forbidden("only administrators can perform this action".to_owned())
+        })
 }
 
 fn clue_draft_response(model: clue_drafts::Model) -> ClueDraftResponse {

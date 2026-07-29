@@ -1,0 +1,9 @@
+ALTER TABLE archive_drafts DROP CONSTRAINT IF EXISTS archive_drafts_status_check;
+-- statement-break
+ALTER TABLE archive_drafts DROP CONSTRAINT IF EXISTS archive_drafts_deidentification_status_check;
+-- statement-break
+ALTER TABLE archive_drafts ADD COLUMN deidentified_by_user_id VARCHAR(36), ADD COLUMN deidentified_at VARCHAR(40), ADD COLUMN deidentification_reason TEXT, ADD COLUMN reviewed_by_user_id VARCHAR(36), ADD COLUMN reviewed_at VARCHAR(40), ADD COLUMN review_reason TEXT, ADD COLUMN version INTEGER NOT NULL DEFAULT 1, ADD COLUMN usage_scope VARCHAR(32) NOT NULL DEFAULT 'internal_archive', ADD COLUMN retention_status VARCHAR(32) NOT NULL DEFAULT 'retained';
+-- statement-break
+ALTER TABLE archive_drafts ADD CONSTRAINT archive_drafts_status_check CHECK (status IN ('draft', 'pending_review', 'published', 'rejected', 'withdrawn')), ADD CONSTRAINT archive_drafts_deidentification_status_check CHECK (deidentification_status IN ('manual_review_required', 'deidentified', 'rejected')), ADD CONSTRAINT archive_drafts_version_check CHECK (version >= 1), ADD CONSTRAINT archive_drafts_usage_scope_check CHECK (usage_scope IN ('internal_archive', 'learning_resource')), ADD CONSTRAINT archive_drafts_retention_status_check CHECK (retention_status IN ('retained', 'withdrawn')), ADD CONSTRAINT archive_drafts_publication_state_check CHECK ((status <> 'published' OR (deidentification_status = 'deidentified' AND usage_scope = 'learning_resource' AND retention_status = 'retained')) AND (status <> 'withdrawn' OR (usage_scope = 'internal_archive' AND retention_status = 'withdrawn'))), ADD CONSTRAINT fk_archive_drafts_deidentifier FOREIGN KEY (deidentified_by_user_id) REFERENCES users(id) ON DELETE RESTRICT, ADD CONSTRAINT fk_archive_drafts_reviewer FOREIGN KEY (reviewed_by_user_id) REFERENCES users(id) ON DELETE RESTRICT;
+-- statement-break
+CREATE INDEX idx_archive_drafts_status ON archive_drafts(status, updated_at);

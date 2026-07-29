@@ -26,6 +26,7 @@ mod m0023_create_clue_drafts;
 mod m0024_enforce_single_published_summary_draft;
 mod m0025_create_archive_drafts;
 mod m0026_add_locked_user_status;
+mod m0027_add_archive_review_lifecycle;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -61,6 +62,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0024_enforce_single_published_summary_draft::Migration),
             Box::new(m0025_create_archive_drafts::Migration),
             Box::new(m0026_add_locked_user_status::Migration),
+            Box::new(m0027_add_archive_review_lifecycle::Migration),
         ]
     }
 }
@@ -284,6 +286,36 @@ mod tests {
         ),
     ];
 
+    const ARCHIVE_REVIEW_LIFECYCLE_UP_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/up/0027_add_archive_review_lifecycle.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/up/0027_add_archive_review_lifecycle.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/up/0027_add_archive_review_lifecycle.sql"),
+        ),
+    ];
+
+    const ARCHIVE_REVIEW_LIFECYCLE_DOWN_SCRIPTS: &[(&str, &str)] = &[
+        (
+            "sqlite",
+            include_str!("../sql/sqlite/down/0027_remove_archive_review_lifecycle.sql"),
+        ),
+        (
+            "postgres",
+            include_str!("../sql/postgres/down/0027_remove_archive_review_lifecycle.sql"),
+        ),
+        (
+            "mysql",
+            include_str!("../sql/mysql/down/0027_remove_archive_review_lifecycle.sql"),
+        ),
+    ];
+
     const LOCKED_USER_STATUS_SCRIPTS: &[(&str, &str)] = &[
         (
             "sqlite",
@@ -366,6 +398,54 @@ mod tests {
                 .await
                 .expect("archive draft query should succeed")
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_archive_review_lifecycle_preserves_drafts_and_refuses_reviewed_rollback() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, Some(26))
+            .await
+            .expect("schema before archive review lifecycle should succeed");
+        insert_member_and_session(&database, "archive-review").await;
+        database
+            .execute_unprepared(
+                "INSERT INTO cases (id, case_code, status, created_at, updated_at) VALUES ('archive-review-case', 'AG-00000027', 'resolved', '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z'); INSERT INTO archive_drafts (id, case_id, status, content, source_scope_json, deidentification_status, template_version, provider_model, created_by_user_id, created_at, updated_at) VALUES ('archive-review-draft', 'archive-review-case', 'draft', 'Internal test archive draft.', '[\"confirmed_clue_metadata\"]', 'manual_review_required', 'v1', NULL, 'archive-review-user', '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z')",
+            )
+            .await
+            .expect("pre-lifecycle archive draft should be stored");
+
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("archive review lifecycle migration should succeed");
+        assert!(
+            database
+                .execute_unprepared(
+                    "UPDATE archive_drafts SET status = 'published' WHERE id = 'archive-review-draft'",
+                )
+                .await
+                .is_err(),
+            "database constraints must reject publication before de-identification and controlled usage are recorded"
+        );
+        database
+            .execute_unprepared(
+                "UPDATE archive_drafts SET status = 'pending_review', deidentification_status = 'deidentified', deidentified_by_user_id = 'archive-review-user', deidentified_at = '2026-07-29T00:01:00.000Z', deidentification_reason = 'manual confirmation', version = 2 WHERE id = 'archive-review-draft'",
+            )
+            .await
+            .expect("review lifecycle fields should accept a de-identified draft");
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        assert!(
+            database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM archive_drafts WHERE id = 'archive-review-draft' AND status = 'pending_review' AND version = 2",
+                ))
+                .await
+                .expect("reviewed archive draft query should succeed")
+                .is_some(),
+            "a refused rollback must preserve reviewed archive draft data"
         );
     }
 
@@ -959,6 +1039,56 @@ mod tests {
                 assert!(
                     normalized.contains(required),
                     "{name} archive draft schema must declare {required}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn archive_review_lifecycle_is_constrained_and_safely_reversible_across_dialects() {
+        for ((name, up_script), (down_name, down_script)) in ARCHIVE_REVIEW_LIFECYCLE_UP_SCRIPTS
+            .iter()
+            .zip(ARCHIVE_REVIEW_LIFECYCLE_DOWN_SCRIPTS)
+        {
+            assert_eq!(
+                name, down_name,
+                "up and down scripts must use the same dialect"
+            );
+            let up = up_script.to_ascii_lowercase();
+            let down = down_script.to_ascii_lowercase();
+            for expected in [
+                "archive_drafts",
+                "pending_review",
+                "published",
+                "rejected",
+                "withdrawn",
+                "deidentified",
+                "learning_resource",
+                "deidentified_by_user_id",
+                "reviewed_by_user_id",
+                "version",
+            ] {
+                assert!(
+                    up.contains(expected),
+                    "{name} up migration must declare {expected}"
+                );
+            }
+            assert!(
+                down.contains("status in ('draft')")
+                    && down.contains("deidentification_status in ('manual_review_required')"),
+                "{name} down migration must restore the original archive draft lifecycle"
+            );
+            if *name == "sqlite" {
+                assert!(
+                    up.contains("create table archive_drafts_with_review_lifecycle")
+                        && down.contains("create table archive_drafts_without_review_lifecycle"),
+                    "sqlite must rebuild archive_drafts for both migration directions"
+                );
+            } else {
+                assert!(
+                    up.contains("alter table archive_drafts")
+                        && down.contains("alter table archive_drafts"),
+                    "{name} must alter the existing archive_drafts table in both directions"
                 );
             }
         }

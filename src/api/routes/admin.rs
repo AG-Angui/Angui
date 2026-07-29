@@ -4,7 +4,8 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AdminAuditEventQuery, AdminUserQuery, AuthenticatedUser, UpdateAdminUserStatusRequest,
+        AdminAuditEventQuery, AdminUserQuery, AuthenticatedUser, DeidentifyArchiveDraftRequest,
+        ReviewArchiveDraftRequest, UpdateAdminUserStatusRequest,
     },
     services::admin_service,
 };
@@ -17,6 +18,14 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route(
                 "/users/{user_id}/status",
                 web::patch().to(update_user_status),
+            )
+            .route(
+                "/archive-drafts/{draft_id}/deidentify",
+                web::post().to(deidentify_archive_draft),
+            )
+            .route(
+                "/archive-drafts/{draft_id}/review",
+                web::patch().to(review_archive_draft),
             ),
     );
 }
@@ -47,5 +56,39 @@ async fn update_user_status(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(
         admin_service::update_user_status(&state.db, &auth, &user_id, request.into_inner()).await?,
+    ))
+}
+
+async fn deidentify_archive_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    draft_id: web::Path<String>,
+    request: web::Json<DeidentifyArchiveDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::deidentify_archive_draft(
+            &state.db,
+            &auth,
+            &draft_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn review_archive_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    draft_id: web::Path<String>,
+    request: web::Json<ReviewArchiveDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::review_archive_draft(
+            &state.db,
+            &auth,
+            &draft_id,
+            request.into_inner(),
+        )
+        .await?,
     ))
 }

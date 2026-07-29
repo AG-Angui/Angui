@@ -109,6 +109,20 @@ pub struct UpdateAdminUserStatusRequest {
     pub reason: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeidentifyArchiveDraftRequest {
+    pub outcome: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewArchiveDraftRequest {
+    pub action: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AdminAuditEventResponse {
     pub id: String,
@@ -901,6 +915,11 @@ pub struct ArchiveDraftResponse {
     pub deidentification_status: String,
     pub template_version: String,
     pub provider_model: Option<String>,
+    pub version: i32,
+    pub usage_scope: String,
+    pub retention_status: String,
+    pub deidentified_at: Option<String>,
+    pub reviewed_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
