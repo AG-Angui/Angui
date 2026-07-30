@@ -6,9 +6,13 @@ import { CaseWorkspacePage } from './CaseWorkspacePage'
 const mocked = vi.hoisted(() => ({
   auth: { token: 'test-session' as string | null },
   getCase: vi.fn(),
+  getCaseMapView: vi.fn(),
   getCasePublicProgress: vi.fn(),
+  getLatestSummaryDraft: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listCases: vi.fn(),
+  listCommandIntake: vi.fn(),
+  acceptCommandCase: vi.fn(),
   listCaseClues: vi.fn(),
   listCasePois: vi.fn(),
   addCaseMember: vi.fn(),
@@ -20,9 +24,13 @@ vi.mock('../auth/useAuth', () => ({
 }))
 vi.mock('../api/cases', () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
+  getCaseMapView: (...args: unknown[]) => mocked.getCaseMapView(...args),
   getCasePublicProgress: (...args: unknown[]) => mocked.getCasePublicProgress(...args),
+  getLatestSummaryDraft: (...args: unknown[]) => mocked.getLatestSummaryDraft(...args),
   getCaseResourceConfiguration: (...args: unknown[]) => mocked.getCaseResourceConfiguration(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
+  listCommandIntake: (...args: unknown[]) => mocked.listCommandIntake(...args),
+  acceptCommandCase: (...args: unknown[]) => mocked.acceptCommandCase(...args),
   listCaseClues: (...args: unknown[]) => mocked.listCaseClues(...args),
   listCasePois: (...args: unknown[]) => mocked.listCasePois(...args),
   addCaseMember: (...args: unknown[]) => mocked.addCaseMember(...args),
@@ -76,6 +84,35 @@ function detail(
 }
 
 describe('CaseWorkspacePage', () => {
+  it('lets a commander accept a minimal pending case before viewing it', async () => {
+    mocked.listCases.mockResolvedValue([])
+    mocked.listCommandIntake.mockResolvedValue([{ id: 'pending-case', case_code: 'AG-PENDING', created_at: '2026-07-24T00:00:00Z', last_seen_at: null, area_hint: 'Fictional north gate', elder_age: 76 }])
+    mocked.acceptCommandCase.mockResolvedValue(detail('pending-case', 'Accepted case', 'commander'))
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    expect(await screen.findByText('AG-PENDING')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '受理案件' }))
+    await waitFor(() => expect(mocked.acceptCommandCase).toHaveBeenCalledWith('test-session', 'pending-case'))
+  })
+
+  it('renders role-filtered map records as a usable text fallback', async () => {
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: 'Commander case', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(detail('case-command', 'Commander case', 'commander'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.getCaseMapView.mockResolvedValue({ items: [
+      { id: 'place-text', object_type: 'place', display_name: 'Fictional market', longitude: null, latitude: null, location_text: 'North gate, fictional park', location_precision: 'unknown', source: 'commander', occurred_at: null, reported_at: '2026-07-24T00:00:00Z', review_status: 'confirmed', related_task_id: null, updated_at: '2026-07-24T00:00:00Z' },
+    ] })
+    mocked.listCaseClues.mockResolvedValue({ items: [], page: 1, page_size: 25, total: 0 })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    expect(await screen.findByText('Fictional market')).toBeInTheDocument()
+    expect(screen.getByText('North gate, fictional park')).toBeInTheDocument()
+    expect(screen.getByText('仅文字地点')).toBeInTheDocument()
+    expect(mocked.getCaseMapView).toHaveBeenCalledWith('test-session', 'case-command')
+  })
+
   it('does not let an earlier detail request overwrite the most recently selected case', async () => {
     const firstRequest = deferred<CaseDetail>()
     const secondRequest = deferred<CaseDetail>()
@@ -183,6 +220,41 @@ describe('CaseWorkspacePage', () => {
     ))
   })
 
+  it('lets a family member invite either a family member or commander, but not a volunteer', async () => {
+    mocked.listCases.mockResolvedValue([
+      {
+        id: 'case-family', case_code: 'AG-FAMILY', status: 'active', access_role: 'family', display_name: '家属案件',
+        last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z',
+      },
+    ])
+    mocked.getCase.mockResolvedValue(detail('case-family', '家属案件', 'family'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ['frequent'],
+    })
+    mocked.addCaseMember.mockResolvedValue({})
+
+    render(<CaseWorkspacePage mode="family" />)
+
+    await screen.findByRole('heading', { name: '家属案件' })
+    const roleSelect = screen.getByRole('combobox', { name: '成员角色' })
+    expect(screen.getByRole('option', { name: '家属' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '指挥' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: '志愿者' })).not.toBeInTheDocument()
+
+    fireEvent.change(roleSelect, { target: { value: 'family' } })
+    fireEvent.change(screen.getByPlaceholderText('成员邮箱'), { target: { value: 'family-member@demo.invalid' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加案件成员' }))
+
+    await waitFor(() => expect(mocked.addCaseMember).toHaveBeenCalledWith(
+      'test-session',
+      'case-family',
+      'family-member@demo.invalid',
+      'family',
+    ))
+  })
+
   it('does not expose closed-case controls that create supplementary information', async () => {
     mocked.listCases.mockResolvedValue([
       {
@@ -204,6 +276,26 @@ describe('CaseWorkspacePage', () => {
     expect(screen.queryByRole('button', { name: '提交地点' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '上传图片' })).not.toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: '案件状态' })).toBeDisabled()
+  })
+
+  it('does not expose clue submission for a resolved case', async () => {
+    mocked.listCases.mockResolvedValue([
+      {
+        id: 'case-resolved', case_code: 'AG-RESOLVED', status: 'resolved', access_role: 'commander', display_name: '已找到案件',
+        last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z',
+      },
+    ])
+    mocked.getCase.mockResolvedValue(detail('case-resolved', '已找到案件', 'commander', 'resolved'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ['frequent'],
+    })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: '已找到案件' })
+    expect(screen.queryByRole('button', { name: '提交线索' })).not.toBeInTheDocument()
   })
 
   it('clears nearby resource results when the selected category changes', async () => {

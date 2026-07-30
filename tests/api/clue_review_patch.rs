@@ -45,6 +45,19 @@ async fn patch_clue_review_requires_the_case_commander_and_publishes_review_stat
     assert!(body["reviewed_at"].is_string());
     assert!(body["confirmed_at"].is_string());
 
+    let pending_draft = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/summary-drafts"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(pending_draft.status(), StatusCode::OK);
+    let pending_draft: Value = test::read_body_json(pending_draft).await;
+    assert_eq!(pending_draft["status"], "pending_review");
+    assert_eq!(pending_draft["publication_eligible"], true);
+
     let audit = angui::entities::audit_events::Entity::find()
         .filter(angui::entities::audit_events::Column::EntityId.eq(&clue_id))
         .filter(angui::entities::audit_events::Column::Action.eq("clue.reviewed"))

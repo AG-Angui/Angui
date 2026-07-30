@@ -19,11 +19,12 @@ interface NavigationItem {
   icon: typeof LayoutDashboard
   end?: boolean
   capability?: 'commander' | 'volunteer'
+  familyOnly?: boolean
 }
 
 const navigation: NavigationItem[] = [
   { to: '/', label: '总览', icon: LayoutDashboard, end: true },
-  { to: '/family', label: '家属端', icon: HeartHandshake },
+  { to: '/family', label: '家属端', icon: HeartHandshake, familyOnly: true },
   { to: '/command', label: '指挥端', icon: RadioTower, capability: 'commander' },
   { to: '/volunteer', label: '志愿者端', icon: Navigation, capability: 'volunteer' },
   { to: '/profile', label: '个人资料', icon: UserRound },
@@ -45,7 +46,7 @@ export function AppShell() {
   const visibleNavigation = navigation.filter((item) => user && (
     item.to === '/'
     || item.to === '/profile'
-    || (user.account_type === 'member' && (!item.capability || user.global_capabilities.includes(item.capability)))
+    || (user.account_type === 'member' && (!item.capability || user.global_capabilities.includes(item.capability)) && (!item.familyOnly || user.global_capabilities.length === 0))
   ))
 
   return (

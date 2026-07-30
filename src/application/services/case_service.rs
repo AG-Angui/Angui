@@ -17,9 +17,9 @@ use crate::{
     error::ApiError,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseDetail, CaseListItem, CaseMemberResponse,
-        ClueResponse, ClueTimelineQuery, ClueTimelineResponse, CreateCaseRequest,
-        CreateClueRequest, ElderProfileResponse, ReviewClueRequest, UpdateCaseStatusRequest,
-        UpdateElderProfileRequest,
+        ClueResponse, ClueTimelineQuery, ClueTimelineResponse, CommandIntakeCaseResponse,
+        CreateCaseRequest, CreateClueRequest, ElderProfileResponse, ReviewClueRequest,
+        UpdateCaseStatusRequest, UpdateElderProfileRequest,
     },
     roles::{AccountType, CaseRole, GlobalCapability},
 };
@@ -113,6 +113,104 @@ pub async fn get_case(
 ) -> Result<CaseDetail, ApiError> {
     let membership = membership_for_case(db, &auth.id, case_id).await?;
     load_case_detail(db, auth, membership).await
+}
+
+pub async fn list_command_intake(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<CommandIntakeCaseResponse>, ApiError> {
+    if !auth
+        .global_capabilities
+        .contains(&GlobalCapability::Commander)
+    {
+        return Err(ApiError::Forbidden(
+            "commander capability is required".to_owned(),
+        ));
+    }
+    let rows = cases::Entity::find()
+        .filter(cases::Column::Status.eq("active"))
+        .find_also_related(elder_profiles::Entity)
+        .order_by_desc(cases::Column::CreatedAt)
+        .all(db)
+        .await?;
+    let accepted: std::collections::HashSet<String> = case_memberships::Entity::find()
+        .filter(case_memberships::Column::Role.eq("commander"))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|membership| membership.case_id)
+        .collect();
+    Ok(rows
+        .into_iter()
+        .filter(|(case_model, _)| !accepted.contains(&case_model.id))
+        .map(|(case_model, profile)| CommandIntakeCaseResponse {
+            id: case_model.id,
+            case_code: case_model.case_code,
+            created_at: case_model.created_at,
+            last_seen_at: profile.as_ref().and_then(|item| item.last_seen_at.clone()),
+            area_hint: profile
+                .as_ref()
+                .and_then(|item| item.last_seen_location.clone()),
+            elder_age: profile.and_then(|item| item.age),
+        })
+        .collect())
+}
+
+pub async fn accept_command_case(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<CaseDetail, ApiError> {
+    if !auth
+        .global_capabilities
+        .contains(&GlobalCapability::Commander)
+    {
+        return Err(ApiError::Forbidden(
+            "commander capability is required".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let case_model = cases::Entity::find_by_id(case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case_model.status != "active" {
+        return Err(ApiError::Conflict(
+            "only active cases can be accepted".to_owned(),
+        ));
+    }
+    if case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(case_id))
+        .filter(case_memberships::Column::Role.eq("commander"))
+        .one(&transaction)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(
+            "case has already been accepted by a commander".to_owned(),
+        ));
+    }
+    insert_membership(
+        &transaction,
+        case_id,
+        &auth.id,
+        CaseRole::Commander,
+        Some(&auth.id),
+        &now(),
+    )
+    .await?;
+    write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "case.commander_accepted",
+        "case",
+        case_id.to_owned(),
+        None,
+    )
+    .await?;
+    transaction.commit().await?;
+    get_case(db, auth, case_id).await
 }
 
 pub async fn create_case(
@@ -342,9 +440,9 @@ pub async fn create_clue(
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
 
-    if case_model.status == "closed" {
+    if case_model.status != "active" {
         return Err(ApiError::Conflict(
-            "new clues cannot be added to a closed case".to_owned(),
+            "new clues can only be added to active cases".to_owned(),
         ));
     }
 
@@ -726,9 +824,11 @@ pub async fn add_case_member(
         &[CaseRole::Family, CaseRole::Commander],
     )
     .await?;
-    if acting_case_role == CaseRole::Family && requested_case_role != CaseRole::Commander {
+    if acting_case_role == CaseRole::Family
+        && !matches!(requested_case_role, CaseRole::Family | CaseRole::Commander)
+    {
         return Err(ApiError::Forbidden(
-            "family members can only invite a commander".to_owned(),
+            "family members can only add a family member or commander".to_owned(),
         ));
     }
     let target = users::Entity::find()
@@ -797,6 +897,36 @@ pub async fn add_case_member(
         global_capabilities: target_global_capabilities,
         case_role: requested_case_role,
     })
+}
+
+pub async fn list_case_members(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<CaseMemberResponse>, ApiError> {
+    require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    let memberships = case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(case_id))
+        .order_by_asc(case_memberships::Column::Role)
+        .order_by_asc(case_memberships::Column::UserId)
+        .all(db)
+        .await?;
+    let mut members = Vec::with_capacity(memberships.len());
+    for membership in memberships {
+        let user = users::Entity::find_by_id(&membership.user_id)
+            .one(db)
+            .await?
+            .ok_or(ApiError::Internal)?;
+        members.push(CaseMemberResponse {
+            user_id: user.id.clone(),
+            email: user.email,
+            display_name: user.display_name,
+            account_type: account_type_from_database(&user.account_type)?,
+            global_capabilities: global_capabilities_for_user(db, &user.id).await?,
+            case_role: case_role_from_database(&membership.role)?,
+        });
+    }
+    Ok(members)
 }
 
 async fn load_case_detail(

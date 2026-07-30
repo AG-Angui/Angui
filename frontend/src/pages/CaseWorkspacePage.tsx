@@ -12,20 +12,29 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addCaseMember,
+  acceptCommandCase,
   createCasePlace,
   createClueDraft,
-  createSummaryDraft,
+  createCaseTask,
+  getCaseMapView,
+  getCaseSummary,
+  getLatestSummaryDraft,
   getCasePublicProgress,
   listCasePois,
+  listCaseMembers,
+  listCaseTasks,
   createClue,
   getCase,
   getCaseResourceConfiguration,
   listCaseClues,
   listCases,
+  listCommandIntake,
   reviewClue,
   reviewSummaryDraft,
   updateCaseStatus,
   updateElderProfile,
+  updateTaskStatus,
+  submitTaskFeedback,
   uploadCaseAttachment,
 } from '../api/cases'
 import type {
@@ -35,6 +44,12 @@ import type {
   CaseResourceConfiguration,
   CaseStatus,
   CasePois,
+  CaseMapItem,
+  CaseMapView,
+  CaseSummary,
+  CaseMember,
+  CaseTask,
+  CreateTaskPayload,
   CasePublicProgress,
   Clue,
   ClueDraft,
@@ -203,6 +218,8 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
       {listError && cases.length > 0 && <Message tone="error">{listError}</Message>}
       {notice && <Message tone="success">{notice}</Message>}
 
+      {mode === 'commander' && <CommandIntakePanel token={token} onAccepted={async () => { await loadCases() }} />}
+
       {showCreate && canCreateCase && mode !== 'volunteer' && (
         <FamilyIntakeForm
           onCancel={() => setShowCreate(false)}
@@ -322,6 +339,12 @@ function CaseDetailView({
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const isCommander = detail.access_role === 'commander'
+  const allowedMemberRoles: CaseRole[] = isCommander
+    ? ['family', 'commander', 'volunteer']
+    : ['family', 'commander']
+  const selectedMemberRole = allowedMemberRoles.includes(memberRole)
+    ? memberRole
+    : allowedMemberRoles[0]
   const canEditElderProfile = detail.access_role === 'family' || isCommander
   const canSubmitPlace = detail.access_role === 'family' || isCommander
   const placeTypes = resourceConfiguration.case_place_types
@@ -421,6 +444,8 @@ function CaseDetailView({
         </div>
       </header>
 
+      <TaskBoard detail={detail} token={token} />
+      <CaseSituationPanel detail={detail} token={token} />
       <CaseCollaborationPanel detail={detail} token={token} />
 
       <section className="grid gap-x-8 gap-y-4 border-b border-slate-200 px-5 py-5 sm:grid-cols-2 sm:px-6 lg:grid-cols-3" aria-label="老人资料">
@@ -456,8 +481,7 @@ function CaseDetailView({
             onSubmit={(event) => {
               event.preventDefault()
               if (!token) return
-              const role = detail.access_role === 'family' ? 'commander' : memberRole
-              void run('member', () => addCaseMember(token, detail.id, memberEmail.trim(), role), '案件成员已添加').then((succeeded) => {
+              void run('member', () => addCaseMember(token, detail.id, memberEmail.trim(), selectedMemberRole), '案件成员已添加').then((succeeded) => {
                 if (succeeded) setMemberEmail('')
               })
             }}
@@ -465,16 +489,10 @@ function CaseDetailView({
             <h3 className="m-0 text-sm font-bold text-slate-950">添加成员</h3>
             <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
               <Input type="email" value={memberEmail} maxLength={320} onChange={(event) => setMemberEmail(event.target.value)} placeholder="成员邮箱" fullWidth required />
-              <select className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={detail.access_role === 'family' ? 'commander' : memberRole} onChange={(event) => setMemberRole(event.target.value as CaseRole)} disabled={detail.access_role === 'family'}>
-                {detail.access_role === 'family' ? (
-                  <option value="commander">指挥</option>
-                ) : (
-                  <>
-                    <option value="family">家属</option>
-                    <option value="commander">指挥</option>
-                    <option value="volunteer">志愿者</option>
-                  </>
-                )}
+              <select aria-label="成员角色" className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={selectedMemberRole} onChange={(event) => setMemberRole(event.target.value as CaseRole)}>
+                <option value="family">家属</option>
+                <option value="commander">指挥</option>
+                {isCommander && <option value="volunteer">志愿者</option>}
               </select>
               <Button type="submit" size="sm" variant="secondary" isDisabled={busy === 'member'} isIconOnly aria-label="添加案件成员"><UserPlus size={17} /></Button>
             </div>
@@ -617,7 +635,7 @@ function CaseDetailView({
           </nav>
         )}
 
-        {detail.status !== 'closed' && (
+        {detail.status === 'active' && (
           <form
             className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]"
             onSubmit={(event) => {
@@ -731,6 +749,162 @@ function CaseDetailView({
   )
 }
 
+const taskStatusLabels: Record<string, string> = { assigned: '待领取', accepted: '已接受', active: '进行中', blocked: '受阻', completed: '已完成', cancelled: '已取消' }
+const emptyTask = (): CreateTaskPayload => ({ source_clue_id: '', volunteer_user_id: '', title: '', objective: '', area_text: '', latitude: null, longitude: null, due_at: '', background: '', risk_level: 'low', risk_notes: '', safety_briefing: '', expected_feedback: '' })
+
+function TaskBoard({ detail, token }: { detail: CaseDetail; token: string | null }) {
+  const [tasks, setTasks] = useState<CaseTask[]>([])
+  const [members, setMembers] = useState<CaseMember[]>([])
+  const [draft, setDraft] = useState<CreateTaskPayload>(emptyTask)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+  const [feedback, setFeedback] = useState<Record<string, string>>({})
+  const isCommander = detail.access_role === 'commander'
+  const load = useCallback(async () => {
+    if (!token) return
+    setLoading(true); setError('')
+    try {
+      const [page, nextMembers] = await Promise.all([listCaseTasks(token, detail.id), isCommander ? listCaseMembers(token, detail.id) : Promise.resolve([])])
+      setTasks(page.items); setMembers(nextMembers)
+    } catch (cause) { setError(messageFrom(cause)) } finally { setLoading(false) }
+  }, [detail.id, isCommander, token])
+  useEffect(() => { setDraft(emptyTask()); void load() }, [detail.id, load])
+  const volunteers = members.filter((member) => member.case_role === 'volunteer')
+  const confirmedClues = detail.clues.filter((clue) => clue.status === 'confirmed')
+  async function changeStatus(taskId: string, status: 'accepted' | 'active' | 'blocked' | 'completed' | 'cancelled') {
+    if (!token) return
+    setBusy(taskId); setError('')
+    try { await updateTaskStatus(token, taskId, status); await load() } catch (cause) { setError(messageFrom(cause)) } finally { setBusy('') }
+  }
+  async function sendFeedback(taskId: string) {
+    const content = feedback[taskId]?.trim()
+    if (!token || !content) return
+    setBusy(`feedback-${taskId}`); setError('')
+    try { await submitTaskFeedback(token, taskId, { content, occurred_at: null, location_text: null, location_precision: null }); setFeedback((current) => ({ ...current, [taskId]: '' })) } catch (cause) { setError(messageFrom(cause)) } finally { setBusy('') }
+  }
+  return (
+    <section className="border-b border-slate-200 px-5 py-5 sm:px-6" aria-label="任务看板">
+      <div className="flex items-start justify-between gap-3"><div><h3 className="m-0 text-base font-bold text-slate-950">任务看板</h3><p className="mb-0 mt-1 text-xs leading-5 text-slate-600">任务只由指挥人工创建和分配；状态、人员与失败结果均以服务端返回为准。</p></div><Button size="sm" variant="ghost" isDisabled={loading} onPress={() => void load()}><RefreshCw size={16} />刷新任务</Button></div>
+      {error && <div className="mt-3"><Message tone="error">{error}</Message></div>}
+      {loading ? <p className="mb-0 mt-3 text-sm text-slate-500">正在加载任务…</p> : tasks.length === 0 ? <p className="mb-0 mt-3 text-sm text-slate-500">当前没有你可查看的任务。</p> : <div className="mt-3 grid gap-3 lg:grid-cols-2">{tasks.map((task) => <article key={task.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center gap-2"><Chip size="sm" variant="soft"><Chip.Label>{taskStatusLabels[task.status]}</Chip.Label></Chip><Chip size="sm" variant="soft"><Chip.Label>{task.risk_level} 风险</Chip.Label></Chip></div><h4 className="mb-0 mt-3 text-sm font-semibold text-slate-950">{task.title}</h4><p className="mb-0 mt-1 text-sm text-slate-700">{task.objective}</p><p className="mb-0 mt-2 text-xs text-slate-500">区域：{task.area_text} · 截止：{formatDate(task.due_at) ?? '待补充'}</p><p className="mb-0 mt-1 text-xs text-slate-600">安全提示：{task.safety_briefing}</p>{detail.access_role === 'volunteer' && <><div className="mt-3 flex flex-wrap gap-2">{task.status === 'assigned' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'accepted')}>接受</Button>}{task.status === 'accepted' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'active')}>开始执行</Button>}{task.status === 'active' && <><Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'blocked')}>标记受阻</Button><Button size="sm" variant="primary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'completed')}>完成</Button></>}{task.status === 'blocked' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'active')}>继续执行</Button>}</div>{task.status === 'active' && <div className="mt-3"><TextArea aria-label={`${task.title} 任务反馈`} value={feedback[task.id] ?? ''} maxLength={4000} rows={2} placeholder="提交现场反馈；将进入人工审核，不会直接成为确认事实" onChange={(event) => setFeedback((current) => ({ ...current, [task.id]: event.target.value }))} fullWidth /><div className="mt-2 flex justify-end"><Button size="sm" variant="secondary" isDisabled={!feedback[task.id]?.trim() || busy === `feedback-${task.id}`} onPress={() => void sendFeedback(task.id)}>提交待审核反馈</Button></div></div>}</>}{isCommander && !['completed', 'cancelled'].includes(task.status) && <div className="mt-3"><Button size="sm" variant="ghost" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'cancelled')}>取消任务</Button></div>}</article>)}</div>}
+      {isCommander && detail.status !== 'closed' && <form className="mt-5 grid gap-3 border-t border-slate-200 pt-5 lg:grid-cols-2" onSubmit={(event) => { event.preventDefault(); if (!token) return; setBusy('create'); setError(''); createCaseTask(token, detail.id, draft).then(async () => { setDraft(emptyTask()); await load() }).catch((cause) => setError(messageFrom(cause))).finally(() => setBusy('')) }}><h4 className="m-0 text-sm font-semibold text-slate-950 lg:col-span-2">人工创建并分配任务</h4><Field label="关联的已确认线索" required><select required className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={draft.source_clue_id} onChange={(event) => setDraft({ ...draft, source_clue_id: event.target.value })}><option value="">请选择</option>{confirmedClues.map((clue) => <option key={clue.id} value={clue.id}>{clue.content.slice(0, 80)}</option>)}</select></Field><Field label="志愿者" required><select required className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={draft.volunteer_user_id} onChange={(event) => setDraft({ ...draft, volunteer_user_id: event.target.value })}><option value="">请选择</option>{volunteers.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}</select></Field><Field label="任务标题" required><Input required value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} fullWidth /></Field><Field label="任务区域" required><Input required value={draft.area_text} maxLength={500} onChange={(event) => setDraft({ ...draft, area_text: event.target.value })} fullWidth /></Field><Field label="目标" required><TextArea required value={draft.objective} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, objective: event.target.value })} fullWidth /></Field><Field label="截止时间" required><Input required type="datetime-local" value={draft.due_at} onChange={(event) => setDraft({ ...draft, due_at: event.target.value ? new Date(event.target.value).toISOString() : '' })} fullWidth /></Field><Field label="背景说明" required><TextArea required value={draft.background} maxLength={10000} rows={2} onChange={(event) => setDraft({ ...draft, background: event.target.value })} fullWidth /></Field><Field label="风险说明与安全提示" required><TextArea required value={draft.risk_notes} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, risk_notes: event.target.value, safety_briefing: draft.safety_briefing || event.target.value })} fullWidth /></Field><Field label="预期反馈" required><TextArea required value={draft.expected_feedback} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, expected_feedback: event.target.value })} fullWidth /></Field><div className="flex items-end"><Button type="submit" size="sm" variant="primary" isDisabled={busy === 'create' || confirmedClues.length === 0 || volunteers.length === 0}>创建并分配</Button></div></form>}
+    </section>
+  )
+}
+
+const mapObjectLabels: Record<CaseMapItem['object_type'], string> = {
+  last_seen: '最后出现信息',
+  place: '补充地点',
+  clue: '已确认线索',
+  task: '任务区域',
+}
+
+const precisionLabels: Record<CaseMapItem['location_precision'], string> = {
+  exact: '精确位置',
+  approximate: '模糊地点',
+  unknown: '仅文字地点',
+}
+
+function CaseSituationPanel({ detail, token }: { detail: CaseDetail; token: string | null }) {
+  const [mapView, setMapView] = useState<CaseMapView | null>(null)
+  const [filter, setFilter] = useState<CaseMapItem['object_type'] | 'all'>('all')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
+  const requestVersion = useRef(0)
+
+  const loadMapView = useCallback(async () => {
+    const version = requestVersion.current + 1
+    requestVersion.current = version
+    if (!token) {
+      setMapView(null)
+      setError('')
+      setIsLoading(false)
+      return
+    }
+    setIsLoading(true)
+    setError('')
+    try {
+      const response = await getCaseMapView(token, detail.id)
+      if (version !== requestVersion.current) return
+      setMapView(response)
+    } catch (cause) {
+      if (version !== requestVersion.current) return
+      setMapView(null)
+      setError(messageFrom(cause))
+    } finally {
+      if (version === requestVersion.current) setIsLoading(false)
+    }
+  }, [detail.id, token])
+
+  useEffect(() => {
+    setFilter('all')
+    void loadMapView()
+    return () => { requestVersion.current += 1 }
+  }, [detail.id, loadMapView])
+
+  const items = useMemo(() => (
+    mapView?.items.filter((item) => filter === 'all' || item.object_type === filter) ?? []
+  ), [filter, mapView])
+  const coordinateCount = items.filter((item) => item.longitude !== null && item.latitude !== null).length
+
+  return (
+    <section className="border-b border-slate-200 bg-slate-50 px-5 py-5 sm:px-6" aria-label="地图态势与文字降级">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+        <div>
+          <h3 className="m-0 text-base font-bold text-slate-950">地图态势与文字降级</h3>
+          <p className="mb-0 mt-1 max-w-3xl text-xs leading-5 text-slate-600">仅展示服务端按当前案件角色返回的地点、已确认线索和任务区域。当前首轮使用可审查的文字态势；地图供应商不可用时，以下地点、精度和状态仍可使用。</p>
+        </div>
+        <Button size="sm" variant="ghost" isDisabled={!token || isLoading} onPress={() => void loadMapView()}>
+          <RefreshCw size={16} />刷新态势
+        </Button>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <label className="text-sm font-medium text-slate-700" htmlFor="map-object-filter">对象类型</label>
+        <select id="map-object-filter" aria-label="态势对象筛选" className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={filter} onChange={(event) => setFilter(event.target.value as CaseMapItem['object_type'] | 'all')}>
+          <option value="all">全部对象</option>
+          {Object.entries(mapObjectLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {mapView && <span className="text-xs text-slate-500">{items.length} 项可见，其中 {coordinateCount} 项具备已授权坐标。</span>}
+      </div>
+
+      {isLoading && <p className="mb-0 mt-4 text-sm text-slate-500" role="status">正在加载角色化态势…</p>}
+      {error && <div className="mt-4"><Message tone="error">地图态势暂不可用：{error}。请使用案件资料、任务说明和人工联系路径继续工作。</Message></div>}
+      {!isLoading && !error && mapView && items.length === 0 && <p className="mb-0 mt-4 text-sm text-slate-500">当前筛选下没有可显示的态势对象。无坐标记录也会在此以文字形式出现。</p>}
+      {!isLoading && !error && items.length > 0 && (
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {items.map((item) => (
+            <article key={item.id} className="rounded-md border border-slate-200 bg-white p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip size="sm" variant="soft"><Chip.Label>{mapObjectLabels[item.object_type]}</Chip.Label></Chip>
+                <Chip size="sm" variant="soft"><Chip.Label>{precisionLabels[item.location_precision]}</Chip.Label></Chip>
+                <Chip size="sm" variant="soft"><Chip.Label>{statusLabels[item.review_status] ?? item.review_status}</Chip.Label></Chip>
+              </div>
+              <h4 className="mb-0 mt-3 text-sm font-semibold text-slate-950">{item.display_name ?? mapObjectLabels[item.object_type]}</h4>
+              <p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{item.location_text ?? '未提供文字地点；请联系指挥确认。'}</p>
+              <dl className="mb-0 mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500">
+                <div><dt className="inline">来源：</dt><dd className="inline">{item.source}</dd></div>
+                <div><dt className="inline">事件/上报：</dt><dd className="inline">{formatDate(item.occurred_at ?? item.reported_at) ?? '待补充'}</dd></div>
+              </dl>
+            </article>
+          ))}
+        </div>
+      )}
+
+    </section>
+  )
+}
+
+function CommandIntakePanel({ token, onAccepted }: { token: string | null; onAccepted: () => Promise<void> }) {
+  const [items, setItems] = useState<import('../api/cases').CommandIntakeCase[]>([])
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+  const load = useCallback(async () => { if (!token) return; try { setError(''); setItems(await listCommandIntake(token)) } catch (cause) { setError(messageFrom(cause)) } }, [token])
+  useEffect(() => { void load() }, [load])
+  return <section className="mb-5 border border-slate-200 bg-white p-4" aria-label="待受理案件"><div className="flex items-center justify-between gap-3"><div><h2 className="m-0 text-base font-bold text-slate-950">待受理案件</h2><p className="mb-0 mt-1 text-xs text-slate-600">仅显示接案所需的最小信息；受理后才会获得完整指挥案情权限。</p></div><Button size="sm" variant="ghost" onPress={() => void load()}>刷新</Button></div>{error && <div className="mt-3"><Message tone="error">{error}</Message></div>}{items.length === 0 ? <p className="mb-0 mt-3 text-sm text-slate-500">当前没有待受理案件。</p> : <div className="mt-3 grid gap-3 sm:grid-cols-2">{items.map((item) => <article key={item.id} className="rounded-md border border-slate-200 p-3"><strong className="text-sm text-slate-950">{item.case_code}</strong><dl className="mb-0 mt-2 grid gap-1 text-xs text-slate-600"><div><dt className="inline font-medium text-slate-700">地区：</dt><dd className="inline">{item.area_hint ?? '待补充'}</dd></div><div><dt className="inline font-medium text-slate-700">走失时间：</dt><dd className="inline">{formatDate(item.last_seen_at)}</dd></div><div><dt className="inline font-medium text-slate-700">老人年龄：</dt><dd className="inline">{item.elder_age == null ? '待补充' : `${item.elder_age} 岁`}</dd></div></dl><Button className="mt-3" size="sm" variant="primary" isDisabled={busy === item.id} onPress={() => { if (!token) return; setBusy(item.id); acceptCommandCase(token, item.id).then(onAccepted).then(load).catch((cause) => setError(messageFrom(cause))).finally(() => setBusy('')) }}>受理案件</Button></article>)}</div>}</section>
+}
+
 function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: string | null }) {
   const [publicProgress, setPublicProgress] = useState<CasePublicProgress | null>(null)
   const [progressError, setProgressError] = useState('')
@@ -739,6 +913,7 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
   const [poiCategory, setPoiCategory] = useState('hospital')
   const [pois, setPois] = useState<CasePois | null>(null)
   const [summaryDraft, setSummaryDraft] = useState<SummaryDraft | null>(null)
+  const [summary, setSummary] = useState<CaseSummary | null>(null)
   const [reviewReason, setReviewReason] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -766,6 +941,18 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
     }
   }, [detail.id, isFamily, token])
 
+  const loadSummary = useCallback(async () => {
+    if (!token || !isCommander) { setSummary(null); return }
+    try {
+      const [loadedSummary, latestDraft] = await Promise.all([
+        getCaseSummary(token, detail.id),
+        getLatestSummaryDraft(token, detail.id),
+      ])
+      setSummary(loadedSummary)
+      setSummaryDraft(latestDraft)
+    } catch (cause) { setError(messageFrom(cause)) }
+  }, [detail.id, isCommander, token])
+
   useEffect(() => {
     setPublicProgress(null)
     setProgressError('')
@@ -773,10 +960,12 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
     setClueDrafts([])
     setPois(null)
     setSummaryDraft(null)
+    setSummary(null)
     setReviewReason('')
     setError('')
     void loadPublicProgress()
-  }, [detail.id, loadPublicProgress])
+    void loadSummary()
+  }, [detail.id, loadPublicProgress, loadSummary])
 
   async function run(key: string, action: () => Promise<void>) {
     setBusy(key)
@@ -842,10 +1031,13 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
       </div>
 
       {isCommander && <div className="min-w-0">
+        <div className="rounded-md border border-slate-200 bg-white p-3">
+          <div className="flex items-center justify-between gap-3"><h3 className="m-0 text-base font-bold text-slate-950">经授权案件摘要</h3><Button size="sm" variant="ghost" isDisabled={!token || busy !== ''} onPress={() => void loadSummary()}>刷新摘要</Button></div>
+          {!summary ? <p className="mb-0 mt-2 text-sm text-slate-500">正在加载服务端确定性摘要…</p> : <><p className="mb-0 mt-2 text-xs text-slate-500">生成于 {formatDate(summary.generated_at)} · 来源范围：{summary.source_scope.join('、')}</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><div><strong className="text-sm text-slate-900">最后确认信息</strong><p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{summary.last_confirmed_information?.content ?? '暂无已确认信息。'}</p></div><div><strong className="text-sm text-slate-900">待核实事项</strong><p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{summary.pending_verification.length === 0 ? '暂无。' : `${summary.pending_verification.length} 项仍需人工核实，未作为确认事实发布。`}</p></div></div>{summary.safety_reminders.length > 0 && <ul className="mb-0 mt-3 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-600">{summary.safety_reminders.map((item) => <li key={item}>{item}</li>)}</ul>}</>}
+        </div>
         <h3 className="m-0 text-base font-bold text-slate-950">案件摘要草稿审核</h3>
-        <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">只有服务端按已授权范围生成的摘要可发布；发布会替代该案件旧的已发布版本。</p>
-        <div className="mt-3"><Button size="sm" variant="secondary" isDisabled={!token || busy === 'summary'} onPress={() => void run('summary', async () => { if (!token) return; setSummaryDraft(await createSummaryDraft(token, detail.id)) })}>生成待审核摘要</Button></div>
-        {summaryDraft && <div className="mt-3 rounded-md border border-slate-200 bg-white p-3"><Chip size="sm" variant="soft"><Chip.Label>{statusLabels[summaryDraft.status] ?? summaryDraft.status}</Chip.Label></Chip><p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{summaryDraft.content}</p>{summaryDraft.status === 'pending_review' && <><Field label="审核理由" required><Input value={reviewReason} maxLength={1000} onChange={(event) => setReviewReason(event.target.value)} fullWidth /></Field><div className="mt-3 flex flex-wrap justify-end gap-2"><Button size="sm" variant="ghost" isDisabled={!token || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'reject', reason: reviewReason })) })}>驳回</Button><Button size="sm" variant="primary" isDisabled={!token || !summaryDraft.publication_eligible || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'publish', reason: reviewReason })) })}>审核发布</Button></div></>}</div>}
+        <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">线索完成人工审核后，系统会依据已授权来源范围自动生成待审核摘要；发布会替代该案件旧的已发布版本。</p>
+        {!summaryDraft ? <p className="mb-0 mt-3 text-sm text-slate-500">暂无待审核摘要。审核一条线索后，系统会自动生成。</p> : <div className="mt-3 rounded-md border border-slate-200 bg-white p-3"><Chip size="sm" variant="soft"><Chip.Label>{statusLabels[summaryDraft.status] ?? summaryDraft.status}</Chip.Label></Chip>{summaryDraft.provider_model == null && <p className="mb-0 mt-2 text-xs text-amber-800">当前使用受控规则降级摘要；仍须人工审核后才能发布。</p>}<p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{summaryDraft.content}</p>{summaryDraft.status === 'pending_review' && <><Field label="审核理由" required><Input value={reviewReason} maxLength={1000} onChange={(event) => setReviewReason(event.target.value)} fullWidth /></Field><div className="mt-3 flex flex-wrap justify-end gap-2"><Button size="sm" variant="ghost" isDisabled={!token || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'reject', reason: reviewReason })) })}>驳回</Button><Button size="sm" variant="primary" isDisabled={!token || !summaryDraft.publication_eligible || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'publish', reason: reviewReason })) })}>审核发布</Button></div></>}</div>}
       </div>}
 
       {error && <div className="lg:col-span-2"><Message tone="error">{error}</Message></div>}

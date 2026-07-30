@@ -464,6 +464,41 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/cases/command-intake:
+    get:
+      tags: [Cases]
+      operationId: listCommandIntake
+      summary: List minimal pending cases for commander acceptance
+      description: Only accounts with the commander capability may read this queue. It returns active cases that have no commander membership, with a case code, a text area hint, last-seen time, and elder age only; it never exposes names, health notes, contacts, raw clues, tasks, attachments, or exact coordinates.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [commander]
+      x-data-classification: case-restricted
+      responses:
+        "200": { description: Minimal pending-command queue, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CommandIntakeCase" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/cases/{case_id}/accept-command:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    post:
+      tags: [Cases]
+      operationId: acceptCommandCase
+      summary: Accept a pending case as its commander
+      description: A commander-capable account explicitly accepts one active case that has no commander membership. The server creates the case-scoped commander membership and audit event atomically; after acceptance, the normal role-filtered case response is returned. A second acceptance returns conflict.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [commander]
+      x-data-classification: case-restricted
+      responses:
+        "200": { description: Accepted commander case detail, content: { application/json: { schema: { $ref: "#/components/schemas/CaseDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/cases/{case_id}/elder-profile:
     parameters: [{ $ref: "#/components/parameters/CaseId" }]
     patch:
@@ -944,11 +979,25 @@ paths:
 
   /api/cases/{case_id}/summary-drafts:
     parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: getLatestSummaryDraft
+      summary: Get the latest pending automated summary draft
+      description: Commander only. A pending-review draft is created automatically after a commander completes a clue review. The response is null when there is no draft awaiting review. A deterministic, source-scoped fallback is used when AI generation is unavailable, and it is still subject to the same human review before publication.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: case-restricted
+      responses:
+        "200": { description: Latest pending-review summary draft or null, content: { application/json: { schema: { oneOf: [{ $ref: "#/components/schemas/SummaryDraft" }, { type: "null" }] } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Cases]
       operationId: createSummaryDraft
       summary: Create a commander-only summary draft
-      description: Server-generated drafts are built from the commander's authorized summary scope and start in pending_review. Free-form commander drafts remain internal and are not publication eligible.
+      description: Internal re-generation endpoint. Ordinary summary drafts are created automatically after a commander completes a clue review. Server-generated drafts are built from the commander's authorized summary scope and start in pending_review; when all AI providers are unavailable, a deterministic source-scoped fallback is generated instead. Free-form commander drafts remain internal and are not publication eligible.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
@@ -1152,6 +1201,28 @@ paths:
   /api/cases/{case_id}/members:
     parameters:
       - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: listCaseMembers
+      summary: List members available to the case commander
+      description: Returns only the current case's members to a commander of that case. It is used to review collaboration and manually select an already-authorized volunteer when creating a task; it does not search global accounts or disclose members of other cases.
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: case-restricted
+      responses:
+        "200":
+          description: Case members with their current case role and global capabilities
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CaseMember" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Cases]
       operationId: addCaseMember
@@ -1487,7 +1558,7 @@ components:
           example:
             error:
               code: conflict
-              message: new clues cannot be added to a closed case
+              message: new clues can only be added to active cases
     RateLimited:
       description: 当前进程记录的登录失败次数已超过限制
       content:
@@ -2138,6 +2209,18 @@ components:
             $ref: "#/components/schemas/GlobalCapability"
         case_role:
           $ref: "#/components/schemas/CaseRole"
+
+    CommandIntakeCase:
+      type: object
+      additionalProperties: false
+      required: [id, case_code, created_at, last_seen_at, area_hint, elder_age]
+      properties:
+        id: { type: string, format: uuid }
+        case_code: { type: string }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: [string, "null"], format: date-time }
+        area_hint: { type: [string, "null"], description: Minimal text-only area hint for accepting the case. }
+        elder_age: { type: [integer, "null"], format: int16, minimum: 0, maximum: 130, description: Elder age, without any identifying profile fields. }
 
     CaseListItem:
       type: object

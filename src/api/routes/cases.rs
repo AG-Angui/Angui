@@ -19,6 +19,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
         web::scope("/cases")
             .route("", web::get().to(list_cases))
             .route("", web::post().to(create_case))
+            .route("/command-intake", web::get().to(list_command_intake))
+            .route("/{case_id}/accept-command", web::post().to(accept_command))
             .route("/{case_id}", web::get().to(get_case))
             .route("/{case_id}/status", web::patch().to(update_case_status))
             .route(
@@ -37,6 +39,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
             )
             .route("/{case_id}/clue-drafts", web::post().to(create_clue_drafts))
             .route("/{case_id}/pois", web::get().to(list_case_pois))
+            .route(
+                "/{case_id}/summary-drafts",
+                web::get().to(get_latest_summary_draft),
+            )
             .route(
                 "/{case_id}/summary-drafts",
                 web::post().to(create_summary_draft),
@@ -60,8 +66,33 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 "/{case_id}/attachments/{attachment_id}",
                 web::get().to(download_attachment),
             )
+            .route("/{case_id}/members", web::get().to(list_case_members))
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn list_command_intake(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(case_service::list_command_intake(&state.db, &auth).await?))
+}
+
+async fn accept_command(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(case_service::accept_command_case(&state.db, &auth, &case_id).await?))
+}
+
+async fn list_case_members(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(case_service::list_case_members(&state.db, &auth, &case_id).await?))
 }
 
 async fn get_resource_configuration(
@@ -384,6 +415,19 @@ async fn create_summary_draft(
             &case_id,
             request.into_inner(),
             &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn get_latest_summary_draft(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::get_latest_summary_draft(
+            &state.db, &auth, &case_id,
         )
         .await?,
     ))

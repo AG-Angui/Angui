@@ -5,6 +5,7 @@ import {
   createClue,
   createSummaryDraft,
   getCase,
+  getCaseMapView,
   listCaseClues,
   listCases,
   reviewClue,
@@ -33,6 +34,15 @@ describe('case API contract', () => {
     await getCase('test-session', 'case-1')
 
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/cases', '/api/cases/case-1'])
+  })
+
+  it('uses the role-filtered map-view endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getCaseMapView('test-session', 'case-1')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/cases/case-1/map-view')
   })
 
   it('passes queue filters and pagination to the documented clue timeline endpoint', async () => {

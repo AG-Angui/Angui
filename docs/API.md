@@ -21,9 +21,11 @@
 | `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
 | `POST` | `/api/intake-sessions/{session_id}/confirm` | `201` | 家属确认画像并创建正式案件 |
 | `GET` | `/api/cases` | `200` | 按创建时间倒序列出案件 |
+| `GET` | `/api/cases/command-intake` | `200` | 指挥查看仅含最小接案信息的待受理队列 |
 | `POST` | `/api/cases` | `201` | 创建案件和老人画像 |
 | `GET` | `/api/cases/{case_id}` | `200` | 查询案件、老人画像和线索 |
 | `PATCH` | `/api/cases/{case_id}/status` | `200` | 人工更新案件状态 |
+| `POST` | `/api/cases/{case_id}/accept-command` | `200` | 指挥人工受理待受理案件并获得该案指挥权限 |
 | `GET` | `/api/cases/{case_id}/clues` | `200` | 获取角色裁剪、可分页的线索时间轴 |
 | `POST` | `/api/cases/{case_id}/clues` | `201` | 提交待审核线索 |
 | `GET` | `/api/cases/{case_id}/map-view` | `200` | 获取含文字地点回退的角色裁剪地图态势 |
@@ -41,6 +43,7 @@
 | `GET` | `/api/cases/{case_id}/attachments/{attachment_id}` | `200` | 按案件权限下载本人上传的图片，指挥可下载案件全部图片 |
 | `POST` | `/api/clues/{clue_id}/attachments` | `201` | 为具体线索上传待审核 JPEG/PNG 佐证图片 |
 | `POST` | `/api/cases/{case_id}/members` | `201` | 家属邀请指挥，或指挥添加案件成员 |
+| `GET` | `/api/cases/{case_id}/members` | `200` | 指挥查看本案件成员，用于协作审查和人工选择已授权志愿者 |
 | `PATCH` | `/api/clues/{clue_id}/review` | `200` | 人工审核线索 |
 | `GET` | `/api/admin/audit-events` | `200` | 管理员分页查看经过脱敏的审计事件 |
 | `GET` | `/api/admin/users` | `200` | 管理员分页查看不含凭据的账号状态 |
@@ -210,6 +213,12 @@ Example:
 
 `GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属申报的最后出现地点始终标为 `pending_review`，其 `display_name` 为 `null`，客户端必须按 `object_type` 本地化标签而不能呈现为确认进展。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
 
+`GET /api/cases/command-intake` 是指挥能力账号的待受理队列。它只返回尚无案件指挥、状态为 `active` 的案件编号、创建时间、最后出现时间、文字区域提示和老人年龄；不会返回姓名、病史、联系方式、原始线索、任务、附件、成员或精确坐标。`POST /api/cases/{case_id}/accept-command` 由指挥明确受理一项仍待受理的案件；服务端在同一事务中建立 `commander` 成员关系并写入 `case.commander_accepted` 审计事件，之后才返回完整的指挥角色裁剪案情。已有指挥受理的案件返回 `409`。
+
+案件 `family` 成员可以添加另一名已注册的 `family` 成员或具备相应全局能力的 `commander`，但不能添加或调度 `volunteer`。该规则不替代指挥受理流程；家属不需要知晓或输入指挥账号来使案件进入待受理队列。
+
+`GET /api/cases/{case_id}/members` 仅对该案件的 `commander` 成员开放，返回当前案件成员的展示名、案件角色与已授予的全局能力。它只服务于案件协作审查和人工选择已经授权的志愿者，不提供全局账号搜索，也不会泄露其他案件的成员关系；家属、志愿者和非成员分别按案件权限得到拒绝或 `404`。
+
 `GET /api/cases/{case_id}/summary` 提供不依赖外部 AI 的确定性案件摘要。响应的 `generated_at` 和 `source_scope` 说明生成时间与当前角色可用的数据范围。只有人工审核为 `confirmed` 的线索才会进入 `last_confirmed_information` 与 `confirmed_clues`；`pending_review` 和 `needs_verification` 始终保留在 `pending_verification`，不会被表述为确认事实。指挥可见待核实事项、已排除方向、未完成任务形成的当前重点和全部任务状态；家属不接收任务或内部搜索方向；志愿者只接收本人任务的执行与安全信息。
 
 `POST /api/tasks/{task_id}/feedback` 仅允许该任务受领志愿者在任务和案件均为 `active` 时提交。服务端将反馈与可选的本人上传附件写成关联任务的 `pending_review` 线索，并写入审计；反馈不会确认线索、改变案件事实或推进任务状态。
@@ -224,7 +233,7 @@ Example:
 
 `GET /api/cases/{case_id}/pois` 只允许 `commander` 和 `volunteer`，且客户端只能选择医院、派出所、公交站、市场或社区服务中心等白名单类别。中心坐标只能由服务端从当前角色可见的任务点或指挥已确认地点选取；单次查询固定为 3 km、单页、最多 10 项。高德 Web 服务的 key 仅保存在服务端；HTTP 或业务状态失败时，响应将标记为 `degraded` 并给出固定的虚构非坐标回退结果，绝不泄露 key、上游 URL 或案件中心坐标。
 
-`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。生命周期包含 `draft`、`pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次提交、审核、发布或撤回都记录操作者、理由、时间和版本；发布会将该案件既有的已发布版本标为 `superseded`。只有服务端依据受控来源范围生成的 `pending_review` 草稿可发布；自由文本草稿仅限内部使用，审核阶段不可用请求内容覆盖草稿，从而避免把未审核线索、内部任务或健康字段发布给非必要角色。
+`GET /api/cases/{case_id}/summary-drafts`、`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。指挥完成一条线索的人工审核后，服务端会自动创建一份 `pending_review` 摘要草稿；页面只显示最新待审核草稿，指挥只需发布或驳回。`POST` 保留为内部重生成能力，而不是普通页面入口。生命周期包含 `draft`、`pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次提交、审核、发布或撤回都记录操作者、理由、时间和版本；发布会将该案件既有的已发布版本标为 `superseded`。当前 AI 网关只完成提供方合规路由和协议请求构造，尚未执行外部模型推理，因此摘要一律使用同一受控来源范围的确定性降级草稿；未来实际推理的所有提供方失效时也沿用该降级路径。降级不会阻塞线索审核，草稿仍必须人工审核后才能发布，且不会被标记为某个 AI 模型的输出。只有服务端依据受控来源范围生成的 `pending_review` 草稿可发布；自由文本草稿仅限内部使用，审核阶段不可用请求内容覆盖草稿，从而避免把未审核线索、内部任务或健康字段发布给非必要角色。
 
 `POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available only after a case reaches `resolved` or `closed`. The server creates an internal `draft` from allowlisted status and count metadata for confirmed clues and completed tasks, persists its explicit `source_scope`, and marks `deidentification_status` as `manual_review_required`. It does not copy raw clue text, attachments, health notes, contacts, exact locations, routes, or task results. This endpoint does not publish, index, export, or print material; a separate authorized de-identification, review, and withdrawal workflow is required before any later reuse.
 
@@ -259,7 +268,7 @@ Example:
 - `401 unauthorized`：没有会话、令牌无效、会话过期或已撤销。
 - `403 forbidden`：用户是案件成员，但当前角色不能执行该动作。
 - `404 not_found`：案件或线索不存在。
-- `409 conflict`：状态转换冲突，或向已关闭案件添加线索。
+- `409 conflict`：状态转换冲突，或向非进行中案件添加线索。
 - `429 rate_limited`：登录失败次数超过当前进程限制。
 - `500 database_error`：数据库操作失败；响应不会返回内部 SQL。
 

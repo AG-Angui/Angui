@@ -200,6 +200,31 @@ export interface ClueDraft { id: string; case_id: string; status: 'draft' | 'pen
 export interface SummaryDraft { id: string; case_id: string; status: 'draft' | 'pending_review' | 'published' | 'rejected' | 'withdrawn' | 'superseded'; content: string; source_scope: string[]; template_version: string; provider_model: string | null; generated_at: string; reviewed_at: string | null; review_reason: string | null; created_at: string; updated_at: string; publication_eligible: boolean }
 export interface CasePoi { id: string; name: string; category: string; address: string | null; longitude: number | null; latitude: number | null }
 export interface CasePois { items: CasePoi[]; source: string; degradation_status: string; fallback_message: string | null }
+export type CaseMapObjectType = 'last_seen' | 'place' | 'clue' | 'task'
+export type MapLocationPrecision = 'exact' | 'approximate' | 'unknown'
+export interface CaseMapItem {
+  id: string
+  object_type: CaseMapObjectType
+  display_name: string | null
+  longitude: number | null
+  latitude: number | null
+  location_text: string | null
+  location_precision: MapLocationPrecision
+  source: string
+  occurred_at: string | null
+  reported_at: string | null
+  review_status: string
+  related_task_id: string | null
+  updated_at: string
+}
+export interface CommandIntakeCase { id: string; case_code: string; created_at: string; last_seen_at: string | null; area_hint: string | null; elder_age: number | null }
+export interface CaseMapView { items: CaseMapItem[] }
+export interface CaseSummaryClue { clue_id: string; content: string; occurred_at: string | null; location_text: string | null; review_status: string }
+export interface CaseSummary { case_id: string; access_role: CaseRole; generated_at: string; source_scope: string[]; last_confirmed_information: CaseSummaryClue | null; confirmed_clues: CaseSummaryClue[]; pending_verification: CaseSummaryClue[]; excluded_directions: CaseSummaryClue[]; current_focus: Array<{ label: string; detail: string }>; task_status: Array<{ task_id: string; title: string; status: string; due_at: string }>; safety_reminders: string[] }
+export type TaskStatus = 'assigned' | 'accepted' | 'active' | 'blocked' | 'completed' | 'cancelled'
+export interface CaseTask { id: string; case_id: string; source_clue_id: string | null; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string | null; risk_level: string; risk_notes: string; safety_briefing: string; expected_feedback: string; status: TaskStatus; result_summary: string | null; assigned_volunteer_user_id: string | null; assigned_at: string | null; created_at: string; updated_at: string }
+export interface TaskListPage { items: CaseTask[]; page: number; page_size: number; total: number }
+export interface CreateTaskPayload { source_clue_id: string; volunteer_user_id: string; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string; risk_level: 'low' | 'medium' | 'high'; risk_notes: string; safety_briefing: string; expected_feedback: string }
 
 export function listCases(token: string): Promise<CaseListItem[]> {
   return apiRequest<CaseListItem[]>('/cases', {}, token)
@@ -238,6 +263,40 @@ export function createClue(
 
 export function getCasePublicProgress(token: string, caseId: string): Promise<CasePublicProgress> {
   return apiRequest<CasePublicProgress>(`/cases/${caseId}/public-progress`, {}, token)
+}
+export function listCommandIntake(token: string): Promise<CommandIntakeCase[]> { return apiRequest<CommandIntakeCase[]>('/cases/command-intake', {}, token) }
+export function acceptCommandCase(token: string, caseId: string): Promise<CaseDetail> { return apiRequest<CaseDetail>(`/cases/${caseId}/accept-command`, { method: 'POST' }, token) }
+
+export function getCaseMapView(token: string, caseId: string): Promise<CaseMapView> {
+  return apiRequest<CaseMapView>(`/cases/${caseId}/map-view`, {}, token)
+}
+
+export function getCaseSummary(token: string, caseId: string): Promise<CaseSummary> {
+  return apiRequest<CaseSummary>(`/cases/${caseId}/summary`, {}, token)
+}
+
+export function getLatestSummaryDraft(token: string, caseId: string): Promise<SummaryDraft | null> {
+  return apiRequest<SummaryDraft | null>(`/cases/${caseId}/summary-drafts`, {}, token)
+}
+
+export function listCaseTasks(token: string, caseId: string): Promise<TaskListPage> {
+  return apiRequest<TaskListPage>(`/cases/${caseId}/tasks`, {}, token)
+}
+
+export function listCaseMembers(token: string, caseId: string): Promise<CaseMember[]> {
+  return apiRequest<CaseMember[]>(`/cases/${caseId}/members`, {}, token)
+}
+
+export function createCaseTask(token: string, caseId: string, payload: CreateTaskPayload): Promise<CaseTask> {
+  return apiRequest<CaseTask>(`/cases/${caseId}/tasks`, { method: 'POST', body: JSON.stringify(payload) }, token)
+}
+
+export function updateTaskStatus(token: string, taskId: string, status: TaskStatus): Promise<CaseTask> {
+  return apiRequest<CaseTask>(`/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, token)
+}
+
+export function submitTaskFeedback(token: string, taskId: string, payload: { content: string; occurred_at: string | null; location_text: string | null; location_precision: LocationPrecision | null }): Promise<{ task_id: string; clue_id: string; status: 'pending_review'; submitted_at: string }> {
+  return apiRequest(`/tasks/${taskId}/feedback`, { method: 'POST', body: JSON.stringify(payload) }, token)
 }
 
 export function createClueDraft(token: string, caseId: string, payload: { text: string; source_type?: PublicClueSourceType; raw_record_reference?: string }): Promise<ClueDraft[]> {

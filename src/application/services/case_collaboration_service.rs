@@ -447,7 +447,7 @@ pub async fn create_summary_draft(
     auth: &AuthenticatedUser,
     case_id: &str,
     request: CreateSummaryDraftRequest,
-    gateway: &crate::ai_gateway::AiGateway,
+    _gateway: &crate::ai_gateway::AiGateway,
 ) -> Result<SummaryDraftResponse, ApiError> {
     case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
     let summary = case_summary_service::get_case_summary(db, auth, case_id).await?;
@@ -459,22 +459,6 @@ pub async fn create_summary_draft(
             "pending_review",
         ),
     };
-    let ai_request = AiRequest {
-        capability: AiCapability::CaseSummary,
-        data_level: DataLevel::Internal,
-        purpose: AiPurpose::CaseSummaryDraft,
-        data_region: "CN".to_owned(),
-        system_instruction: None,
-        input: content.clone(),
-        requested_output_tokens: 800,
-        template_version: DRAFT_TEMPLATE_VERSION.to_owned(),
-        input_scope_reference: "commander_case_summary".to_owned(),
-        redaction_policy_version: "summary-draft-v1".to_owned(),
-    };
-    let provider_model = match gateway.route(&ai_request) {
-        GatewayDecision::Routed(route) => Some(route.model),
-        GatewayDecision::Degraded { .. } => None,
-    };
     let timestamp = now();
     let scope = serde_json::to_string(&summary.source_scope).map_err(|_| ApiError::Internal)?;
     let transaction = db.begin().await?;
@@ -485,7 +469,10 @@ pub async fn create_summary_draft(
         content: Set(content),
         source_scope_json: Set(scope),
         template_version: Set(DRAFT_TEMPLATE_VERSION.to_owned()),
-        provider_model: Set(provider_model),
+        // The gateway currently validates and routes provider requests but does
+        // not execute external inference. Never attribute this deterministic
+        // fallback to a model until a transport returns a validated response.
+        provider_model: Set(None),
         publication_eligible: Set(publication_eligible),
         generated_by_user_id: Set(auth.id.clone()),
         reviewed_by_user_id: Set(None),
@@ -508,6 +495,22 @@ pub async fn create_summary_draft(
     .await?;
     transaction.commit().await?;
     response(model)
+}
+
+pub async fn get_latest_summary_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Option<SummaryDraftResponse>, ApiError> {
+    case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    summary_drafts::Entity::find()
+        .filter(summary_drafts::Column::CaseId.eq(case_id))
+        .filter(summary_drafts::Column::Status.eq("pending_review"))
+        .order_by_desc(summary_drafts::Column::CreatedAt)
+        .one(db)
+        .await?
+        .map(response)
+        .transpose()
 }
 
 pub async fn review_summary_draft(
