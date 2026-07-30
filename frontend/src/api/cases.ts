@@ -310,20 +310,28 @@ export function getTaskSafetyBriefing(token: string, taskId: string): Promise<Ta
   return apiRequest<TaskSafetyBriefing>(`/tasks/${taskId}/safety-briefing`, {}, token)
 }
 
-const pendingTaskWriteKeys = new Map<string, string>()
+const IDEMPOTENCY_KEY_TTL_MS = 10 * 60 * 1000
+const pendingTaskWriteKeys = new Map<string, { value: string; expiresAt: number }>()
 
 function idempotencyKeyFor(operation: string, taskId: string) {
   const key = `${operation}:${taskId}`
   const existing = pendingTaskWriteKeys.get(key)
-  if (existing) return [key, existing] as const
+  if (existing && existing.expiresAt > Date.now()) return [key, existing.value] as const
+  pendingTaskWriteKeys.delete(key)
   const created = crypto.randomUUID()
-  pendingTaskWriteKeys.set(key, created)
+  pendingTaskWriteKeys.set(key, { value: created, expiresAt: Date.now() + IDEMPOTENCY_KEY_TTL_MS })
   return [key, created] as const
 }
 
 function withTaskWriteIdempotency<T>(operation: string, taskId: string, request: (idempotencyKey: string) => Promise<T>): Promise<T> {
   const [key, idempotencyKey] = idempotencyKeyFor(operation, taskId)
-  return request(idempotencyKey).then((result) => { pendingTaskWriteKeys.delete(key); return result })
+  return request(idempotencyKey).then(
+    (result) => { pendingTaskWriteKeys.delete(key); return result },
+    (cause: unknown) => {
+      if (!(cause instanceof ApiClientError) || cause.status === 0 || cause.status >= 500) pendingTaskWriteKeys.delete(key)
+      throw cause
+    },
+  )
 }
 
 export function submitTaskLocationReport(token: string, taskId: string, payload: { source: 'simulated_demo'; latitude: number; longitude: number; accuracy_meters: number; captured_at: string }): Promise<TaskLocationReportReceipt> {

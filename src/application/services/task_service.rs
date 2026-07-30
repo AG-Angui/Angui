@@ -552,7 +552,9 @@ pub async fn submit_location_report(
             &request_fingerprint,
         )
         .await?
-        .ok_or(ApiError::Internal)?;
+        .ok_or_else(|| {
+            ApiError::Conflict("a concurrent request is using this Idempotency-Key".to_owned())
+        })?;
         transaction.commit().await?;
         return Ok(receipt);
     }
@@ -699,7 +701,9 @@ pub async fn submit_task_feedback(
             &request_fingerprint,
         )
         .await?
-        .ok_or(ApiError::Internal)?;
+        .ok_or_else(|| {
+            ApiError::Conflict("a concurrent request is using this Idempotency-Key".to_owned())
+        })?;
         transaction.commit().await?;
         return Ok(receipt);
     }
