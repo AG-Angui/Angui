@@ -27,6 +27,7 @@ mod m0024_enforce_single_published_summary_draft;
 mod m0025_create_archive_drafts;
 mod m0026_add_locked_user_status;
 mod m0027_add_archive_review_lifecycle;
+mod m0028_create_task_operation_idempotency;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -63,6 +64,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0025_create_archive_drafts::Migration),
             Box::new(m0026_add_locked_user_status::Migration),
             Box::new(m0027_add_archive_review_lifecycle::Migration),
+            Box::new(m0028_create_task_operation_idempotency::Migration),
         ]
     }
 }

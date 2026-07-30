@@ -77,6 +77,7 @@ macro_rules! submit_location_report {
             test::TestRequest::post()
                 .uri(&format!("/api/tasks/{}/location-reports", $task_id))
                 .insert_header((header::AUTHORIZATION, format!("Bearer {}", $token)))
+                .insert_header(("Idempotency-Key", uuid::Uuid::new_v4().to_string()))
                 .set_json($body)
                 .to_request(),
         )
@@ -91,6 +92,7 @@ macro_rules! submit_task_feedback {
             test::TestRequest::post()
                 .uri(&format!("/api/tasks/{}/feedback", $task_id))
                 .insert_header((header::AUTHORIZATION, format!("Bearer {}", $token)))
+                .insert_header(("Idempotency-Key", uuid::Uuid::new_v4().to_string()))
                 .set_json($body)
                 .to_request(),
         )

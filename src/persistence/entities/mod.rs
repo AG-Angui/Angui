@@ -19,6 +19,7 @@ pub mod intake_sessions;
 pub mod summary_drafts;
 pub mod task_assignments;
 pub mod task_location_reports;
+pub mod task_operation_idempotency;
 pub mod tasks;
 pub mod user_global_capabilities;
 pub mod user_profiles;

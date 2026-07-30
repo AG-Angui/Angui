@@ -231,6 +231,8 @@ paths:
         - bearerAuth: []
       x-account-types: [member]
       x-data-classification: sensitive
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -337,6 +339,8 @@ paths:
         - bearerAuth: []
       x-account-types: [member, learner]
       x-data-classification: case-restricted
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: 当前用户可访问的案件列表
@@ -1496,6 +1500,14 @@ components:
       in: path
       required: true
       description: Case task UUID. Non-members and non-assigned volunteers receive not found.
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID generated once per logical write. Retrying with the same key returns the first receipt without repeating writes or audit events.
       schema:
         type: string
         format: uuid

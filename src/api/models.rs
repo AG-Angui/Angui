@@ -958,7 +958,7 @@ pub struct CasePoiItem {
     pub latitude: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TaskLocationReportReceipt {
     pub id: String,
     pub source: String,
@@ -967,7 +967,7 @@ pub struct TaskLocationReportReceipt {
     pub created_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TaskFeedbackReceipt {
     pub task_id: String,
     pub clue_id: String,

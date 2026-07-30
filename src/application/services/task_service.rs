@@ -4,17 +4,18 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    TransactionTrait, TryInsertResult,
 };
 use serde_json::json;
 
 use crate::{
     entities::{
         case_attachments, case_memberships, cases, clue_attachment_links, clue_attributions, clues,
-        task_assignments, task_location_reports, tasks, user_global_capabilities, users,
+        task_assignments, task_location_reports, task_operation_idempotency, tasks,
+        user_global_capabilities, users,
     },
     error::ApiError,
     models::{
@@ -44,6 +45,8 @@ const MAX_LOCATION_REPORT_FUTURE_SKEW: Duration = Duration::minutes(5);
 const LOCATION_REPORT_RETENTION: Duration = Duration::hours(24);
 const LOCATION_REPORT_PURGE_INTERVAL: StdDuration = StdDuration::from_secs(60);
 const CLUE_LOCATION_PRECISIONS: &[&str] = &["exact", "approximate", "unknown"];
+const LOCATION_REPORT_OPERATION: &str = "location_report";
+const TASK_FEEDBACK_OPERATION: &str = "task_feedback";
 
 pub fn start_location_report_retention_purger(db: DatabaseConnection) {
     actix_web::rt::spawn(async move {
@@ -484,6 +487,7 @@ pub async fn submit_location_report(
     auth: &AuthenticatedUser,
     task_id: &str,
     request: SubmitTaskLocationReportRequest,
+    idempotency_key: &str,
 ) -> Result<TaskLocationReportReceipt, ApiError> {
     let request = ValidatedLocationReportRequest::try_from(request)?;
     let transaction = db.begin().await?;
@@ -508,6 +512,39 @@ pub async fn submit_location_report(
         })?;
     if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
         return Err(ApiError::NotFound("task was not found".to_owned()));
+    }
+    if let Some(receipt) = existing_idempotent_receipt::<TaskLocationReportReceipt>(
+        &transaction,
+        task_id,
+        &auth.id,
+        LOCATION_REPORT_OPERATION,
+        idempotency_key,
+    )
+    .await?
+    {
+        transaction.commit().await?;
+        return Ok(receipt);
+    }
+    if !claim_idempotency_key(
+        &transaction,
+        task_id,
+        &auth.id,
+        LOCATION_REPORT_OPERATION,
+        idempotency_key,
+    )
+    .await?
+    {
+        let receipt = existing_idempotent_receipt::<TaskLocationReportReceipt>(
+            &transaction,
+            task_id,
+            &auth.id,
+            LOCATION_REPORT_OPERATION,
+            idempotency_key,
+        )
+        .await?
+        .ok_or(ApiError::Internal)?;
+        transaction.commit().await?;
+        return Ok(receipt);
     }
     if task.status != "active" {
         return Err(ApiError::Conflict(
@@ -561,15 +598,25 @@ pub async fn submit_location_report(
         })),
     )
     .await?;
-    transaction.commit().await?;
-
-    Ok(TaskLocationReportReceipt {
+    let receipt = TaskLocationReportReceipt {
         id: report.id,
         source: report.source,
         captured_at: report.captured_at,
         retention_expires_at: report.retention_expires_at,
         created_at: report.created_at,
-    })
+    };
+    persist_idempotent_receipt(
+        &transaction,
+        task_id,
+        &auth.id,
+        LOCATION_REPORT_OPERATION,
+        idempotency_key,
+        &receipt,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(receipt)
 }
 
 pub async fn submit_task_feedback(
@@ -577,6 +624,7 @@ pub async fn submit_task_feedback(
     auth: &AuthenticatedUser,
     task_id: &str,
     request: SubmitTaskFeedbackRequest,
+    idempotency_key: &str,
 ) -> Result<TaskFeedbackReceipt, ApiError> {
     let request = ValidatedTaskFeedbackRequest::try_from(request)?;
     let transaction = db.begin().await?;
@@ -601,6 +649,39 @@ pub async fn submit_task_feedback(
         })?;
     if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
         return Err(ApiError::NotFound("task was not found".to_owned()));
+    }
+    if let Some(receipt) = existing_idempotent_receipt::<TaskFeedbackReceipt>(
+        &transaction,
+        task_id,
+        &auth.id,
+        TASK_FEEDBACK_OPERATION,
+        idempotency_key,
+    )
+    .await?
+    {
+        transaction.commit().await?;
+        return Ok(receipt);
+    }
+    if !claim_idempotency_key(
+        &transaction,
+        task_id,
+        &auth.id,
+        TASK_FEEDBACK_OPERATION,
+        idempotency_key,
+    )
+    .await?
+    {
+        let receipt = existing_idempotent_receipt::<TaskFeedbackReceipt>(
+            &transaction,
+            task_id,
+            &auth.id,
+            TASK_FEEDBACK_OPERATION,
+            idempotency_key,
+        )
+        .await?
+        .ok_or(ApiError::Internal)?;
+        transaction.commit().await?;
+        return Ok(receipt);
     }
     if task.status != "active" {
         return Err(ApiError::Conflict(
@@ -715,14 +796,105 @@ pub async fn submit_task_feedback(
         })),
     )
     .await?;
-    transaction.commit().await?;
-
-    Ok(TaskFeedbackReceipt {
+    let receipt = TaskFeedbackReceipt {
         task_id: task_id.to_owned(),
         clue_id: clue.id,
         status: clue.status,
         submitted_at: timestamp,
-    })
+    };
+    persist_idempotent_receipt(
+        &transaction,
+        task_id,
+        &auth.id,
+        TASK_FEEDBACK_OPERATION,
+        idempotency_key,
+        &receipt,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(receipt)
+}
+
+async fn existing_idempotent_receipt<T: serde::de::DeserializeOwned>(
+    transaction: &sea_orm::DatabaseTransaction,
+    task_id: &str,
+    volunteer_user_id: &str,
+    operation: &str,
+    idempotency_key: &str,
+) -> Result<Option<T>, ApiError> {
+    let Some(record) = task_operation_idempotency::Entity::find()
+        .filter(task_operation_idempotency::Column::TaskId.eq(task_id))
+        .filter(task_operation_idempotency::Column::VolunteerUserId.eq(volunteer_user_id))
+        .filter(task_operation_idempotency::Column::Operation.eq(operation))
+        .filter(task_operation_idempotency::Column::IdempotencyKey.eq(idempotency_key))
+        .one(transaction)
+        .await?
+    else {
+        return Ok(None);
+    };
+    serde_json::from_str(&record.response_json)
+        .map(Some)
+        .map_err(|_| ApiError::Internal)
+}
+
+async fn claim_idempotency_key(
+    transaction: &sea_orm::DatabaseTransaction,
+    task_id: &str,
+    volunteer_user_id: &str,
+    operation: &str,
+    idempotency_key: &str,
+) -> Result<bool, ApiError> {
+    let conflict_target = OnConflict::columns([
+        task_operation_idempotency::Column::TaskId,
+        task_operation_idempotency::Column::VolunteerUserId,
+        task_operation_idempotency::Column::Operation,
+        task_operation_idempotency::Column::IdempotencyKey,
+    ])
+    .do_nothing()
+    .to_owned();
+    let result = task_operation_idempotency::Entity::insert_many([
+        task_operation_idempotency::ActiveModel {
+            id: Set(crate::services::case_service::new_id()),
+            task_id: Set(task_id.to_owned()),
+            volunteer_user_id: Set(volunteer_user_id.to_owned()),
+            operation: Set(operation.to_owned()),
+            idempotency_key: Set(idempotency_key.to_owned()),
+            response_json: Set("{}".to_owned()),
+            created_at: Set(now()),
+        },
+    ])
+    .on_conflict(conflict_target)
+    .do_nothing()
+    .exec(transaction)
+    .await?;
+    Ok(matches!(result, TryInsertResult::Inserted(_)))
+}
+
+async fn persist_idempotent_receipt<T: serde::Serialize>(
+    transaction: &sea_orm::DatabaseTransaction,
+    task_id: &str,
+    volunteer_user_id: &str,
+    operation: &str,
+    idempotency_key: &str,
+    receipt: &T,
+) -> Result<(), ApiError> {
+    let response_json = serde_json::to_string(receipt).map_err(|_| ApiError::Internal)?;
+    let update = task_operation_idempotency::Entity::update_many()
+        .col_expr(
+            task_operation_idempotency::Column::ResponseJson,
+            Expr::value(response_json),
+        )
+        .filter(task_operation_idempotency::Column::TaskId.eq(task_id))
+        .filter(task_operation_idempotency::Column::VolunteerUserId.eq(volunteer_user_id))
+        .filter(task_operation_idempotency::Column::Operation.eq(operation))
+        .filter(task_operation_idempotency::Column::IdempotencyKey.eq(idempotency_key))
+        .exec(transaction)
+        .await?;
+    if update.rows_affected != 1 {
+        return Err(ApiError::Internal);
+    }
+    Ok(())
 }
 
 async fn assignments_for_tasks(

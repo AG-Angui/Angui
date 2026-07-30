@@ -310,12 +310,28 @@ export function getTaskSafetyBriefing(token: string, taskId: string): Promise<Ta
   return apiRequest<TaskSafetyBriefing>(`/tasks/${taskId}/safety-briefing`, {}, token)
 }
 
+const pendingTaskWriteKeys = new Map<string, string>()
+
+function idempotencyKeyFor(operation: string, taskId: string) {
+  const key = `${operation}:${taskId}`
+  const existing = pendingTaskWriteKeys.get(key)
+  if (existing) return [key, existing] as const
+  const created = crypto.randomUUID()
+  pendingTaskWriteKeys.set(key, created)
+  return [key, created] as const
+}
+
+function withTaskWriteIdempotency<T>(operation: string, taskId: string, request: (idempotencyKey: string) => Promise<T>): Promise<T> {
+  const [key, idempotencyKey] = idempotencyKeyFor(operation, taskId)
+  return request(idempotencyKey).then((result) => { pendingTaskWriteKeys.delete(key); return result })
+}
+
 export function submitTaskLocationReport(token: string, taskId: string, payload: { source: 'simulated_demo'; latitude: number; longitude: number; accuracy_meters: number; captured_at: string }): Promise<TaskLocationReportReceipt> {
-  return apiRequest<TaskLocationReportReceipt>(`/tasks/${taskId}/location-reports`, { method: 'POST', body: JSON.stringify(payload) }, token)
+  return withTaskWriteIdempotency('location-report', taskId, (idempotencyKey) => apiRequest<TaskLocationReportReceipt>(`/tasks/${taskId}/location-reports`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ ...payload, source: 'simulated' }) }, token))
 }
 
 export function submitTaskFeedback(token: string, taskId: string, payload: { content: string; occurred_at: string | null; location_text: string | null; location_precision: LocationPrecision | null }): Promise<{ task_id: string; clue_id: string; status: 'pending_review'; submitted_at: string }> {
-  return apiRequest(`/tasks/${taskId}/feedback`, { method: 'POST', body: JSON.stringify(payload) }, token)
+  return withTaskWriteIdempotency('task-feedback', taskId, (idempotencyKey) => apiRequest(`/tasks/${taskId}/feedback`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload) }, token))
 }
 
 export function createClueDraft(token: string, caseId: string, payload: { text: string; source_type?: PublicClueSourceType; raw_record_reference?: string }): Promise<ClueDraft[]> {

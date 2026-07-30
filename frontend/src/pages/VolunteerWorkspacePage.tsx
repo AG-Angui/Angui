@@ -19,6 +19,7 @@ const statusLabels: Record<TaskStatus, string> = {
 
 function messageFrom(cause: unknown) { return cause instanceof Error ? cause.message : '操作暂时无法完成，请稍后重试。' }
 function localNow() { return new Date().toISOString() }
+type Failure = { message: string; retry: (() => void) | null }
 
 export function VolunteerWorkspacePage() {
   const { token } = useAuth()
@@ -30,22 +31,22 @@ export function VolunteerWorkspacePage() {
   const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(new Set())
   const pendingTaskIdsRef = useRef(new Set<string>())
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [failure, setFailure] = useState<Failure | null>(null)
   const [notice, setNotice] = useState('')
-  const [retryAction, setRetryAction] = useState<(() => void) | null>(null)
+  const setError = (message: string) => setFailure({ message, retry: null })
 
   const load = useCallback(async () => {
     if (!token) return
-    setLoading(true); setError(''); setRetryAction(null)
-    try { setTasks(await listMyTasks(token)) } catch (cause) { setError(messageFrom(cause)); setRetryAction(() => () => void load()) } finally { setLoading(false) }
+    setLoading(true); setFailure(null)
+    try { setTasks(await listMyTasks(token)) } catch (cause) { setFailure({ message: messageFrom(cause), retry: () => void load() }) } finally { setLoading(false) }
   }, [token])
   useEffect(() => { void load() }, [load])
 
   async function run(taskId: string, action: () => Promise<void>, success: string) {
     if (pendingTaskIdsRef.current.has(taskId)) return
     pendingTaskIdsRef.current.add(taskId)
-    setPendingTaskIds(new Set(pendingTaskIdsRef.current)); setError(''); setNotice(''); setRetryAction(null)
-    try { await action(); setNotice(success) } catch (cause) { setError(messageFrom(cause)); setRetryAction(() => () => void run(taskId, action, success)) } finally {
+    setPendingTaskIds(new Set(pendingTaskIdsRef.current)); setFailure(null); setNotice('')
+    try { await action(); setNotice(success) } catch (cause) { setFailure({ message: messageFrom(cause), retry: () => void run(taskId, action, success) }) } finally {
       pendingTaskIdsRef.current.delete(taskId)
       setPendingTaskIds(new Set(pendingTaskIdsRef.current))
     }
@@ -68,7 +69,7 @@ export function VolunteerWorkspacePage() {
   return <main className="mx-auto w-full max-w-5xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
     <header className="mb-7 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end"><div><span className="mb-1 block text-xs font-semibold text-slate-500">志愿者执行</span><h1 className="m-0 text-2xl font-bold text-slate-950 lg:text-3xl">我的任务</h1></div><Button size="sm" variant="ghost" isDisabled={loading} onPress={() => void load()}><RefreshCw size={16} />刷新</Button></header>
     {notice && <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
-    {error && !loading && <div className="mb-4"><ErrorState message={error} onRetry={() => retryAction ? retryAction() : void load()} /></div>}
+    {failure && !loading && <div className="mb-4"><ErrorState message={failure.message} onRetry={failure.retry ?? undefined} /></div>}
     {loading ? <LoadingState label="正在加载分配给你的任务" /> : tasks.length === 0 ? <EmptyState icon={Compass} title="当前没有分配给你的任务" description="任务被指挥分配并授权后，会显示在这里。" /> : <section className="grid gap-4" aria-label="我的任务列表">{tasks.map((task) => {
       const active = task.status === 'active'
       const taskLocation = location[task.id] ?? { latitude: '', longitude: '', accuracy: '50' }
