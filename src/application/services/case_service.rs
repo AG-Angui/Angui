@@ -440,9 +440,9 @@ pub async fn create_clue(
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
 
-    if case_model.status == "closed" {
+    if case_model.status != "active" {
         return Err(ApiError::Conflict(
-            "new clues cannot be added to a closed case".to_owned(),
+            "new clues can only be added to active cases".to_owned(),
         ));
     }
 

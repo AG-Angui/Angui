@@ -1558,7 +1558,7 @@ components:
           example:
             error:
               code: conflict
-              message: new clues cannot be added to a closed case
+              message: new clues can only be added to active cases
     RateLimited:
       description: 当前进程记录的登录失败次数已超过限制
       content:

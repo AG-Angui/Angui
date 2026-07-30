@@ -49,7 +49,7 @@ async fn post_case_clues_creates_pending_review_clues_for_case_members() {
 }
 
 #[actix_web::test]
-async fn post_case_clues_hides_non_member_cases_and_rejects_closed_cases() {
+async fn post_case_clues_hides_non_member_cases_and_rejects_non_active_cases() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;
     let volunteer_token = context.token(VOLUNTEER).await;
@@ -79,6 +79,31 @@ async fn post_case_clues_hides_non_member_cases_and_rejects_closed_cases() {
     )
     .await;
     assert_error(closed, StatusCode::CONFLICT, "conflict").await;
+
+    let resolved_case_id = context.create_case().await;
+    context
+        .add_member(&resolved_case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    angui::services::case_service::update_case_status(
+        &context.database,
+        &context.authenticated(COMMANDER).await,
+        &resolved_case_id,
+        angui::models::UpdateCaseStatusRequest {
+            status: "resolved".to_owned(),
+        },
+    )
+    .await
+    .expect("fixture case should resolve");
+    let resolved = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{resolved_case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(create_clue_json())
+            .to_request(),
+    )
+    .await;
+    assert_error(resolved, StatusCode::CONFLICT, "conflict").await;
 }
 
 #[actix_web::test]

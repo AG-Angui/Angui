@@ -635,7 +635,7 @@ function CaseDetailView({
           </nav>
         )}
 
-        {detail.status !== 'closed' && (
+        {detail.status === 'active' && (
           <form
             className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]"
             onSubmit={(event) => {

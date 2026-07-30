@@ -278,6 +278,26 @@ describe('CaseWorkspacePage', () => {
     expect(screen.getByRole('combobox', { name: '案件状态' })).toBeDisabled()
   })
 
+  it('does not expose clue submission for a resolved case', async () => {
+    mocked.listCases.mockResolvedValue([
+      {
+        id: 'case-resolved', case_code: 'AG-RESOLVED', status: 'resolved', access_role: 'commander', display_name: '已找到案件',
+        last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z',
+      },
+    ])
+    mocked.getCase.mockResolvedValue(detail('case-resolved', '已找到案件', 'commander', 'resolved'))
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ['frequent'],
+    })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: '已找到案件' })
+    expect(screen.queryByRole('button', { name: '提交线索' })).not.toBeInTheDocument()
+  })
+
   it('clears nearby resource results when the selected category changes', async () => {
     vi.clearAllMocks()
     mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: 'Commander case', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
