@@ -388,7 +388,9 @@ async fn load_task_for_assignee_or_commander(
         return Ok(task);
     }
     let is_assignee = role == CaseRole::Volunteer
-        && task_assignments::Entity::find_by_id(task_id)
+        && task_assignments::Entity::find()
+            .filter(task_assignments::Column::TaskId.eq(task_id))
+            .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
             .one(db)
             .await?
             .is_some_and(|assignment| assignment.volunteer_user_id == auth.id);
@@ -420,7 +422,9 @@ pub async fn update_task_status(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let assignment = task_assignments::Entity::find_by_id(task_id)
+    let assignment = task_assignments::Entity::find()
+        .filter(task_assignments::Column::TaskId.eq(task_id))
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
         .one(&transaction)
         .await?
         .ok_or_else(|| {
@@ -509,7 +513,9 @@ pub async fn submit_location_report(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let assignment = task_assignments::Entity::find_by_id(task_id)
+    let assignment = task_assignments::Entity::find()
+        .filter(task_assignments::Column::TaskId.eq(task_id))
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
         .one(&transaction)
         .await?
         .ok_or_else(|| {
@@ -658,7 +664,9 @@ pub async fn submit_task_feedback(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let assignment = task_assignments::Entity::find_by_id(task_id)
+    let assignment = task_assignments::Entity::find()
+        .filter(task_assignments::Column::TaskId.eq(task_id))
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
         .one(&transaction)
         .await?
         .ok_or_else(|| {

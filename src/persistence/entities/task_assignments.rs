@@ -5,6 +5,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub task_id: String,
+    #[sea_orm(primary_key, auto_increment = false)]
     pub volunteer_user_id: String,
     pub assigned_by_user_id: String,
     pub assigned_at: String,

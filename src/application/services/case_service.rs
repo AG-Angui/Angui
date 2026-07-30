@@ -970,9 +970,17 @@ async fn load_case_detail(
         })
         .collect();
 
-    let mut profile_response: ElderProfileResponse = profile.into();
-    if case_role == CaseRole::Volunteer {
-        profile_response.health_notes = None;
+    let profile_response: ElderProfileResponse = profile.into();
+    let family_members = case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(&membership.case_id))
+        .filter(case_memberships::Column::Role.eq(CaseRole::Family.to_string()))
+        .all(db)
+        .await?;
+    let mut family_contact_emails = Vec::with_capacity(family_members.len());
+    for member in family_members {
+        if let Some(user) = users::Entity::find_by_id(member.user_id).one(db).await? {
+            family_contact_emails.push(user.email);
+        }
     }
 
     let (places, attachments) = futures_util::try_join!(
@@ -997,6 +1005,7 @@ async fn load_case_detail(
         places,
         attachments,
         case_role,
+        family_contact_emails,
     ))
 }
 

@@ -690,6 +690,7 @@ pub struct CaseDetail {
     pub case_code: String,
     pub status: String,
     pub access_role: CaseRole,
+    pub family_contact_emails: Vec<String>,
     pub elder_profile: ElderProfileResponse,
     pub clues: Vec<ClueResponse>,
     pub places: Vec<CasePlaceResponse>,
@@ -1135,12 +1136,14 @@ impl CaseDetail {
         places: Vec<CasePlaceResponse>,
         attachments: Vec<CaseAttachmentResponse>,
         access_role: CaseRole,
+        family_contact_emails: Vec<String>,
     ) -> Self {
         Self {
             id: case_model.id,
             case_code: case_model.case_code,
             status: case_model.status,
             access_role,
+            family_contact_emails,
             elder_profile,
             clues,
             places,
