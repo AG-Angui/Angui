@@ -84,7 +84,7 @@ function detail(
 describe('CaseWorkspacePage', () => {
   it('lets a commander accept a minimal pending case before viewing it', async () => {
     mocked.listCases.mockResolvedValue([])
-    mocked.listCommandIntake.mockResolvedValue([{ id: 'pending-case', case_code: 'AG-PENDING', created_at: '2026-07-24T00:00:00Z', last_seen_at: null, area_hint: 'Fictional north gate' }])
+    mocked.listCommandIntake.mockResolvedValue([{ id: 'pending-case', case_code: 'AG-PENDING', created_at: '2026-07-24T00:00:00Z', last_seen_at: null, area_hint: 'Fictional north gate', elder_age: 76 }])
     mocked.acceptCommandCase.mockResolvedValue(detail('pending-case', 'Accepted case', 'commander'))
 
     render(<CaseWorkspacePage mode="commander" />)

@@ -213,7 +213,7 @@ Example:
 
 `GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属申报的最后出现地点始终标为 `pending_review`，其 `display_name` 为 `null`，客户端必须按 `object_type` 本地化标签而不能呈现为确认进展。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
 
-`GET /api/cases/command-intake` 是指挥能力账号的待受理队列。它只返回尚无案件指挥、状态为 `active` 的案件编号、创建时间、最后出现时间和文字区域提示；不会返回姓名、病史、联系方式、原始线索、任务、附件、成员或精确坐标。`POST /api/cases/{case_id}/accept-command` 由指挥明确受理一项仍待受理的案件；服务端在同一事务中建立 `commander` 成员关系并写入 `case.commander_accepted` 审计事件，之后才返回完整的指挥角色裁剪案情。已有指挥受理的案件返回 `409`。
+`GET /api/cases/command-intake` 是指挥能力账号的待受理队列。它只返回尚无案件指挥、状态为 `active` 的案件编号、创建时间、最后出现时间、文字区域提示和老人年龄；不会返回姓名、病史、联系方式、原始线索、任务、附件、成员或精确坐标。`POST /api/cases/{case_id}/accept-command` 由指挥明确受理一项仍待受理的案件；服务端在同一事务中建立 `commander` 成员关系并写入 `case.commander_accepted` 审计事件，之后才返回完整的指挥角色裁剪案情。已有指挥受理的案件返回 `409`。
 
 案件 `family` 成员可以添加另一名已注册的 `family` 成员或具备相应全局能力的 `commander`，但不能添加或调度 `volunteer`。该规则不替代指挥受理流程；家属不需要知晓或输入指挥账号来使案件进入待受理队列。
 

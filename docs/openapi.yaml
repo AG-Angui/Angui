@@ -469,7 +469,7 @@ paths:
       tags: [Cases]
       operationId: listCommandIntake
       summary: List minimal pending cases for commander acceptance
-      description: Only accounts with the commander capability may read this queue. It returns active cases that have no commander membership, with a case code, timestamps, and a text area hint only; it never exposes health notes, contacts, raw clues, tasks, attachments, or exact coordinates.
+      description: Only accounts with the commander capability may read this queue. It returns active cases that have no commander membership, with a case code, a text area hint, last-seen time, and elder age only; it never exposes names, health notes, contacts, raw clues, tasks, attachments, or exact coordinates.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-global-capabilities: [commander]
@@ -2199,13 +2199,14 @@ components:
     CommandIntakeCase:
       type: object
       additionalProperties: false
-      required: [id, case_code, created_at, last_seen_at, area_hint]
+      required: [id, case_code, created_at, last_seen_at, area_hint, elder_age]
       properties:
         id: { type: string, format: uuid }
         case_code: { type: string }
         created_at: { type: string, format: date-time }
         last_seen_at: { type: [string, "null"], format: date-time }
         area_hint: { type: [string, "null"], description: Minimal text-only area hint for accepting the case. }
+        elder_age: { type: [integer, "null"], format: int16, minimum: 0, maximum: 130, description: Elder age, without any identifying profile fields. }
 
     CaseListItem:
       type: object

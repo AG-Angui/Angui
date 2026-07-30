@@ -1,8 +1,8 @@
 import { Button, Card, Chip } from '@heroui/react'
 import { ClipboardCheck, FileSearch, RadioTower, RefreshCw, UsersRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { getCase, listCases } from '../api/cases'
-import type { CaseDetail, CaseListItem } from '../api/cases'
+import { getCase, listCases, listCommandIntake } from '../api/cases'
+import type { CaseDetail, CaseListItem, CommandIntakeCase } from '../api/cases'
 import { useAuth } from '../auth/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/ContentState'
 import { ServiceStatus } from '../components/ServiceStatus'
@@ -15,8 +15,10 @@ const caseStatusLabels: Record<string, string> = {
 
 export function DashboardPage() {
   const { token, user } = useAuth()
+  const isCommander = user?.global_capabilities.includes('commander') ?? false
   const [cases, setCases] = useState<CaseListItem[]>([])
   const [details, setDetails] = useState<CaseDetail[]>([])
+  const [pendingIntakeCases, setPendingIntakeCases] = useState<CommandIntakeCase[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -25,7 +27,10 @@ export function DashboardPage() {
     setIsLoading(true)
     setError('')
     try {
-      const items = await listCases(token)
+      const [items, intakeCases] = await Promise.all([
+        listCases(token),
+        isCommander ? listCommandIntake(token) : Promise.resolve([]),
+      ])
       const settledDetails = await Promise.allSettled(
         items.slice(0, 20).map((item) => getCase(token, item.id)),
       )
@@ -35,17 +40,19 @@ export function DashboardPage() {
 
       setCases(items)
       setDetails(loaded)
+      setPendingIntakeCases(intakeCases)
       if (loaded.length !== items.length) {
         setError('部分案件详情暂时不可用，统计数据可能不完整。')
       }
     } catch (cause) {
       setCases([])
       setDetails([])
+      setPendingIntakeCases([])
       setError(cause instanceof Error ? cause.message : '无法连接案件服务。')
     } finally {
       setIsLoading(false)
     }
-  }, [token])
+  }, [isCommander, token])
 
   useEffect(() => {
     void loadDashboard()
@@ -57,6 +64,7 @@ export function DashboardPage() {
   )
   const activeCases = cases.filter((item) => item.status === 'active').length
   const confirmedClues = details.flatMap((item) => item.clues).filter((clue) => clue.status === 'confirmed').length
+  const statusRecordCount = cases.length + pendingIntakeCases.length
   const emptyState = user?.account_type === 'learner'
     ? {
         title: '新人账号暂未获得案件权限',
@@ -74,6 +82,7 @@ export function DashboardPage() {
 
   const metrics = [
     { label: '活动案件', value: activeCases, icon: RadioTower, iconClass: 'bg-red-50 text-red-700' },
+    ...(isCommander ? [{ label: '待受理案件', value: pendingIntakeCases.length, icon: RadioTower, iconClass: 'bg-violet-50 text-violet-700' }] : []),
     { label: '待审核线索', value: pendingClues, icon: FileSearch, iconClass: 'bg-amber-50 text-amber-700' },
     { label: '已确认线索', value: confirmedClues, icon: ClipboardCheck, iconClass: 'bg-blue-50 text-blue-700' },
     { label: '可访问案件', value: cases.length, icon: UsersRound, iconClass: 'bg-emerald-50 text-emerald-700' },
@@ -116,7 +125,7 @@ export function DashboardPage() {
         </section>
       ) : (
         <>
-      <section className="mb-7 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 lg:gap-3" aria-label="行动指标">
+      <section className="mb-7 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 lg:gap-3" aria-label="行动指标">
         {metrics.map(({ label, value, icon: Icon, iconClass }) => (
           <Card key={label} className="min-h-24 rounded-md! border border-slate-200 shadow-none">
             <Card.Content className="flex h-full flex-row! items-center! gap-3 p-4">
@@ -139,13 +148,20 @@ export function DashboardPage() {
             <h2 id="case-status-title" className="m-0 text-base font-bold text-slate-950">案件态势</h2>
           </div>
           <Chip size="sm" variant="soft">
-            <Chip.Label>{cases.length} 条记录</Chip.Label>
+            <Chip.Label>{statusRecordCount} 条记录</Chip.Label>
           </Chip>
         </header>
-        {cases.length === 0 ? (
+        {statusRecordCount === 0 ? (
           <EmptyState icon={RadioTower} {...emptyState} />
         ) : (
           <div className="divide-y divide-slate-100">
+            {pendingIntakeCases.map((item) => (
+              <div key={item.id} className="grid gap-2 bg-violet-50/50 px-5 py-3 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center">
+                <strong className="text-sm text-slate-950">{item.case_code}</strong>
+                <span className="text-sm text-slate-600">地区：{item.area_hint ?? '待补充'} · 走失时间：{item.last_seen_at ?? '待补充'} · 老人年龄：{item.elder_age == null ? '待补充' : `${item.elder_age} 岁`}</span>
+                <Chip size="sm" variant="soft"><Chip.Label>待受理</Chip.Label></Chip>
+              </div>
+            ))}
             {cases.slice(0, 6).map((item) => (
               <div key={item.id} className="grid gap-2 px-5 py-3 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center">
                 <strong className="text-sm text-slate-950">{item.case_code}</strong>

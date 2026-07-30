@@ -125,6 +125,9 @@ async fn commander_accepts_a_minimal_pending_case_without_global_case_visibility
         .expect("new family case should be pending");
     assert!(item.get("health_notes").is_none());
     assert!(item.get("display_name").is_none());
+    assert_eq!(item["area_hint"], "测试公园北门");
+    assert_eq!(item["last_seen_at"], "2026-07-13T09:00:00Z");
+    assert_eq!(item["elder_age"], 76);
 
     let accepted = test::call_service(
         &app,

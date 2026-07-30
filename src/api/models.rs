@@ -668,6 +668,7 @@ pub struct CommandIntakeCaseResponse {
     pub created_at: String,
     pub last_seen_at: Option<String>,
     pub area_hint: Option<String>,
+    pub elder_age: Option<i16>,
 }
 
 #[derive(Debug, Serialize)]

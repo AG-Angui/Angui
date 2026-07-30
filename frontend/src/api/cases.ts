@@ -217,7 +217,7 @@ export interface CaseMapItem {
   related_task_id: string | null
   updated_at: string
 }
-export interface CommandIntakeCase { id: string; case_code: string; created_at: string; last_seen_at: string | null; area_hint: string | null }
+export interface CommandIntakeCase { id: string; case_code: string; created_at: string; last_seen_at: string | null; area_hint: string | null; elder_age: number | null }
 export interface CaseMapView { items: CaseMapItem[] }
 export interface CaseSummaryClue { clue_id: string; content: string; occurred_at: string | null; location_text: string | null; review_status: string }
 export interface CaseSummary { case_id: string; access_role: CaseRole; generated_at: string; source_scope: string[]; last_confirmed_information: CaseSummaryClue | null; confirmed_clues: CaseSummaryClue[]; pending_verification: CaseSummaryClue[]; excluded_directions: CaseSummaryClue[]; current_focus: Array<{ label: string; detail: string }>; task_status: Array<{ task_id: string; title: string; status: string; due_at: string }>; safety_reminders: string[] }

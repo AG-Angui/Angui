@@ -148,7 +148,10 @@ pub async fn list_command_intake(
             case_code: case_model.case_code,
             created_at: case_model.created_at,
             last_seen_at: profile.as_ref().and_then(|item| item.last_seen_at.clone()),
-            area_hint: profile.and_then(|item| item.last_seen_location),
+            area_hint: profile
+                .as_ref()
+                .and_then(|item| item.last_seen_location.clone()),
+            elder_age: profile.and_then(|item| item.age),
         })
         .collect())
 }
