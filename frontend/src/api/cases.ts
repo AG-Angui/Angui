@@ -225,6 +225,9 @@ export type TaskStatus = 'assigned' | 'accepted' | 'active' | 'blocked' | 'compl
 export interface CaseTask { id: string; case_id: string; source_clue_id: string | null; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string | null; risk_level: string; risk_notes: string; safety_briefing: string; expected_feedback: string; status: TaskStatus; result_summary: string | null; assigned_volunteer_user_id: string | null; assigned_at: string | null; created_at: string; updated_at: string }
 export interface TaskListPage { items: CaseTask[]; page: number; page_size: number; total: number }
 export interface CreateTaskPayload { source_clue_id: string; volunteer_user_id: string; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string; risk_level: 'low' | 'medium' | 'high'; risk_notes: string; safety_briefing: string; expected_feedback: string }
+export interface TaskNavigation { task_id: string; area_text: string; navigation_url: string | null; route_summary: string; source: string; degradation_status: string; fallback_message: string | null; updated_at: string }
+export interface TaskSafetyBriefing { task_id: string; risk_level: string; notices: string[]; emergency_stop_message: string; source: string; degradation_status: string; updated_at: string }
+export interface TaskLocationReportReceipt { id: string; source: string; captured_at: string; retention_expires_at: string; created_at: string }
 
 export function listCases(token: string): Promise<CaseListItem[]> {
   return apiRequest<CaseListItem[]>('/cases', {}, token)
@@ -293,6 +296,22 @@ export function createCaseTask(token: string, caseId: string, payload: CreateTas
 
 export function updateTaskStatus(token: string, taskId: string, status: TaskStatus): Promise<CaseTask> {
   return apiRequest<CaseTask>(`/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, token)
+}
+
+export function listMyTasks(token: string): Promise<CaseTask[]> {
+  return apiRequest<CaseTask[]>('/tasks/mine', {}, token)
+}
+
+export function getTaskNavigation(token: string, taskId: string): Promise<TaskNavigation> {
+  return apiRequest<TaskNavigation>(`/tasks/${taskId}/navigation`, {}, token)
+}
+
+export function getTaskSafetyBriefing(token: string, taskId: string): Promise<TaskSafetyBriefing> {
+  return apiRequest<TaskSafetyBriefing>(`/tasks/${taskId}/safety-briefing`, {}, token)
+}
+
+export function submitTaskLocationReport(token: string, taskId: string, payload: { source: 'simulated_demo'; latitude: number; longitude: number; accuracy_meters: number; captured_at: string }): Promise<TaskLocationReportReceipt> {
+  return apiRequest<TaskLocationReportReceipt>(`/tasks/${taskId}/location-reports`, { method: 'POST', body: JSON.stringify(payload) }, token)
 }
 
 export function submitTaskFeedback(token: string, taskId: string, payload: { content: string; occurred_at: string | null; location_text: string | null; location_precision: LocationPrecision | null }): Promise<{ task_id: string; clue_id: string; status: 'pending_review'; submitted_at: string }> {

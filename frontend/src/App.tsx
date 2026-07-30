@@ -7,6 +7,7 @@ import { CaseWorkspacePage } from './pages/CaseWorkspacePage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 import { ProfilePage } from './pages/ProfilePage'
+import { VolunteerWorkspacePage } from './pages/VolunteerWorkspacePage'
 
 function CaseRoleRoute({
   capability,
@@ -64,7 +65,7 @@ function App() {
           path="volunteer"
           element={
             <CaseRoleRoute capability="volunteer">
-              <CaseWorkspacePage mode="volunteer" />
+              <VolunteerWorkspacePage />
             </CaseRoleRoute>
           }
         />
