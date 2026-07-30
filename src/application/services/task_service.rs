@@ -10,6 +10,7 @@ use sea_orm::{
     TransactionTrait, TryInsertResult,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::{
     entities::{
@@ -490,6 +491,12 @@ pub async fn submit_location_report(
     idempotency_key: &str,
 ) -> Result<TaskLocationReportReceipt, ApiError> {
     let request = ValidatedLocationReportRequest::try_from(request)?;
+    let request_fingerprint = request_fingerprint(&json!({
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+        "accuracy_meters": request.accuracy_meters,
+        "captured_at": format_timestamp(request.captured_at),
+    }))?;
     let transaction = db.begin().await?;
     let task = tasks::Entity::find_by_id(task_id)
         .one(&transaction)
@@ -519,6 +526,7 @@ pub async fn submit_location_report(
         &auth.id,
         LOCATION_REPORT_OPERATION,
         idempotency_key,
+        &request_fingerprint,
     )
     .await?
     {
@@ -531,6 +539,7 @@ pub async fn submit_location_report(
         &auth.id,
         LOCATION_REPORT_OPERATION,
         idempotency_key,
+        &request_fingerprint,
     )
     .await?
     {
@@ -540,6 +549,7 @@ pub async fn submit_location_report(
             &auth.id,
             LOCATION_REPORT_OPERATION,
             idempotency_key,
+            &request_fingerprint,
         )
         .await?
         .ok_or(ApiError::Internal)?;
@@ -627,6 +637,13 @@ pub async fn submit_task_feedback(
     idempotency_key: &str,
 ) -> Result<TaskFeedbackReceipt, ApiError> {
     let request = ValidatedTaskFeedbackRequest::try_from(request)?;
+    let request_fingerprint = request_fingerprint(&json!({
+        "content": request.content,
+        "occurred_at": request.occurred_at,
+        "location_text": request.location_text,
+        "location_precision": request.location_precision,
+        "attachment_ids": request.attachment_ids,
+    }))?;
     let transaction = db.begin().await?;
     let task = tasks::Entity::find_by_id(task_id)
         .one(&transaction)
@@ -656,6 +673,7 @@ pub async fn submit_task_feedback(
         &auth.id,
         TASK_FEEDBACK_OPERATION,
         idempotency_key,
+        &request_fingerprint,
     )
     .await?
     {
@@ -668,6 +686,7 @@ pub async fn submit_task_feedback(
         &auth.id,
         TASK_FEEDBACK_OPERATION,
         idempotency_key,
+        &request_fingerprint,
     )
     .await?
     {
@@ -677,6 +696,7 @@ pub async fn submit_task_feedback(
             &auth.id,
             TASK_FEEDBACK_OPERATION,
             idempotency_key,
+            &request_fingerprint,
         )
         .await?
         .ok_or(ApiError::Internal)?;
@@ -822,6 +842,7 @@ async fn existing_idempotent_receipt<T: serde::de::DeserializeOwned>(
     volunteer_user_id: &str,
     operation: &str,
     idempotency_key: &str,
+    request_fingerprint: &str,
 ) -> Result<Option<T>, ApiError> {
     let Some(record) = task_operation_idempotency::Entity::find()
         .filter(task_operation_idempotency::Column::TaskId.eq(task_id))
@@ -833,6 +854,11 @@ async fn existing_idempotent_receipt<T: serde::de::DeserializeOwned>(
     else {
         return Ok(None);
     };
+    if record.request_fingerprint != request_fingerprint {
+        return Err(ApiError::Conflict(
+            "Idempotency-Key was reused with a different payload".to_owned(),
+        ));
+    }
     serde_json::from_str(&record.response_json)
         .map(Some)
         .map_err(|_| ApiError::Internal)
@@ -844,6 +870,7 @@ async fn claim_idempotency_key(
     volunteer_user_id: &str,
     operation: &str,
     idempotency_key: &str,
+    request_fingerprint: &str,
 ) -> Result<bool, ApiError> {
     let conflict_target = OnConflict::columns([
         task_operation_idempotency::Column::TaskId,
@@ -860,6 +887,7 @@ async fn claim_idempotency_key(
             volunteer_user_id: Set(volunteer_user_id.to_owned()),
             operation: Set(operation.to_owned()),
             idempotency_key: Set(idempotency_key.to_owned()),
+            request_fingerprint: Set(request_fingerprint.to_owned()),
             response_json: Set("{}".to_owned()),
             created_at: Set(now()),
         },
@@ -869,6 +897,11 @@ async fn claim_idempotency_key(
     .exec(transaction)
     .await?;
     Ok(matches!(result, TryInsertResult::Inserted(_)))
+}
+
+fn request_fingerprint(value: &serde_json::Value) -> Result<String, ApiError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| ApiError::Internal)?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 async fn persist_idempotent_receipt<T: serde::Serialize>(

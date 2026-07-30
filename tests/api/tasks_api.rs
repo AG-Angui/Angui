@@ -613,6 +613,41 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
     assert!(metadata.get("longitude").is_none());
     assert!(metadata.get("accuracy_meters").is_none());
 
+    let reused_key = "e6d449bb-5b77-4378-a7a1-54de941f1bb8";
+    let first_idempotent_report = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/tasks/{task_id}/location-reports"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .insert_header(("Idempotency-Key", reused_key))
+            .set_json(location_report_json(Utc::now()))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(first_idempotent_report.status(), StatusCode::CREATED);
+    let conflicting_idempotent_report = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/tasks/{task_id}/location-reports"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .insert_header(("Idempotency-Key", reused_key))
+            .set_json(json!({
+                "source": "simulated",
+                "latitude": 31.3,
+                "longitude": 121.5,
+                "accuracy_meters": 20,
+                "captured_at": Utc::now().to_rfc3339(),
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        conflicting_idempotent_report,
+        StatusCode::CONFLICT,
+        "conflict",
+    )
+    .await;
+
     task_location_reports::Entity::update_many()
         .col_expr(
             task_location_reports::Column::RetentionExpiresAt,

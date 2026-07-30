@@ -1507,7 +1507,7 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      description: UUID generated once per logical write. Retrying with the same key returns the first receipt without repeating writes or audit events.
+      description: UUID generated once per logical write. Retrying with the same key and payload returns the first receipt without repeating writes or audit events; reusing a key with a different payload returns 409.
       schema:
         type: string
         format: uuid

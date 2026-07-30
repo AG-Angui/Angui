@@ -9,6 +9,7 @@ pub struct Model {
     pub volunteer_user_id: String,
     pub operation: String,
     pub idempotency_key: String,
+    pub request_fingerprint: String,
     pub response_json: String,
     pub created_at: String,
 }

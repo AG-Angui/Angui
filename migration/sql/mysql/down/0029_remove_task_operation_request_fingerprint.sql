@@ -1,0 +1,1 @@
+ALTER TABLE task_operation_idempotency DROP COLUMN request_fingerprint;

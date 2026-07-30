@@ -223,7 +223,7 @@ Example:
 
 `POST /api/tasks/{task_id}/feedback` 仅允许该任务受领志愿者在任务和案件均为 `active` 时提交。服务端将反馈与可选的本人上传附件写成关联任务的 `pending_review` 线索，并写入审计；反馈不会确认线索、改变案件事实或推进任务状态。
 
-`POST /api/tasks/{task_id}/location-reports` 与 `POST /api/tasks/{task_id}/feedback` 都必须提供 UUID 格式的 `Idempotency-Key` 请求头。客户端为一次逻辑提交生成一个键，并在超时、断网等重试时复用该键；服务端会返回第一次成功提交的回执，不会重复写入位置、线索或审计事件。
+`POST /api/tasks/{task_id}/location-reports` 与 `POST /api/tasks/{task_id}/feedback` 都必须提供 UUID 格式的 `Idempotency-Key` 请求头。客户端为一次逻辑提交生成一个键，并在超时、断网等重试时复用该键；服务端会返回第一次成功提交的回执，不会重复写入位置、线索或审计事件。幂等键与规范化后的请求内容绑定：用同一键提交不同内容会返回 `409`，不会静默丢弃新的提交。
 
 `GET /api/tasks/{task_id}/safety-briefing` 和 `GET /api/tasks/{task_id}/navigation` 仅允许该任务受领志愿者与案件指挥访问。安全提示是规则化的辅助信息，不是现场强制指令；即使实时天气等外部条件不可用，也会返回人工规则和紧急停止提示。导航接口只返回已授权任务区域的文字路线摘要；现有任务坐标没有坐标系声明时，服务端不会生成可能偏移的第三方导航链接。家属、其他志愿者和非成员不会获取这些内容。
 
