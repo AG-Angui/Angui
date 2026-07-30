@@ -614,17 +614,32 @@ async fn task_location_reports_accept_only_recent_simulated_points_from_the_acti
     assert!(metadata.get("accuracy_meters").is_none());
 
     let reused_key = "e6d449bb-5b77-4378-a7a1-54de941f1bb8";
+    let idempotent_payload = location_report_json(Utc::now());
     let first_idempotent_report = test::call_service(
         &app,
         test::TestRequest::post()
             .uri(&format!("/api/tasks/{task_id}/location-reports"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
             .insert_header(("Idempotency-Key", reused_key))
-            .set_json(location_report_json(Utc::now()))
+            .set_json(idempotent_payload.clone())
             .to_request(),
     )
     .await;
     assert_eq!(first_idempotent_report.status(), StatusCode::CREATED);
+    let replayed_idempotent_report = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/tasks/{task_id}/location-reports"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .insert_header(("Idempotency-Key", reused_key))
+            .set_json(idempotent_payload)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(replayed_idempotent_report.status(), StatusCode::CREATED);
+    let replayed: Value = test::read_body_json(replayed_idempotent_report).await;
+    let first: Value = test::read_body_json(first_idempotent_report).await;
+    assert_eq!(replayed, first);
     let conflicting_idempotent_report = test::call_service(
         &app,
         test::TestRequest::post()

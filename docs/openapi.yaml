@@ -339,8 +339,6 @@ paths:
         - bearerAuth: []
       x-account-types: [member, learner]
       x-data-classification: case-restricted
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: 当前用户可访问的案件列表
