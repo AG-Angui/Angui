@@ -18,7 +18,7 @@ import {
   createCaseTask,
   getCaseMapView,
   getCaseSummary,
-  createSummaryDraft,
+  getLatestSummaryDraft,
   getCasePublicProgress,
   listCasePois,
   listCaseMembers,
@@ -943,7 +943,14 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
 
   const loadSummary = useCallback(async () => {
     if (!token || !isCommander) { setSummary(null); return }
-    try { setSummary(await getCaseSummary(token, detail.id)) } catch (cause) { setError(messageFrom(cause)) }
+    try {
+      const [loadedSummary, latestDraft] = await Promise.all([
+        getCaseSummary(token, detail.id),
+        getLatestSummaryDraft(token, detail.id),
+      ])
+      setSummary(loadedSummary)
+      setSummaryDraft(latestDraft)
+    } catch (cause) { setError(messageFrom(cause)) }
   }, [detail.id, isCommander, token])
 
   useEffect(() => {
@@ -1029,9 +1036,8 @@ function CaseCollaborationPanel({ detail, token }: { detail: CaseDetail; token: 
           {!summary ? <p className="mb-0 mt-2 text-sm text-slate-500">正在加载服务端确定性摘要…</p> : <><p className="mb-0 mt-2 text-xs text-slate-500">生成于 {formatDate(summary.generated_at)} · 来源范围：{summary.source_scope.join('、')}</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><div><strong className="text-sm text-slate-900">最后确认信息</strong><p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{summary.last_confirmed_information?.content ?? '暂无已确认信息。'}</p></div><div><strong className="text-sm text-slate-900">待核实事项</strong><p className="mb-0 mt-1 text-sm leading-6 text-slate-700">{summary.pending_verification.length === 0 ? '暂无。' : `${summary.pending_verification.length} 项仍需人工核实，未作为确认事实发布。`}</p></div></div>{summary.safety_reminders.length > 0 && <ul className="mb-0 mt-3 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-600">{summary.safety_reminders.map((item) => <li key={item}>{item}</li>)}</ul>}</>}
         </div>
         <h3 className="m-0 text-base font-bold text-slate-950">案件摘要草稿审核</h3>
-        <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">只有服务端按已授权范围生成的摘要可发布；发布会替代该案件旧的已发布版本。</p>
-        <div className="mt-3"><Button size="sm" variant="secondary" isDisabled={!token || busy === 'summary'} onPress={() => void run('summary', async () => { if (!token) return; setSummaryDraft(await createSummaryDraft(token, detail.id)) })}>生成待审核摘要</Button></div>
-        {summaryDraft && <div className="mt-3 rounded-md border border-slate-200 bg-white p-3"><Chip size="sm" variant="soft"><Chip.Label>{statusLabels[summaryDraft.status] ?? summaryDraft.status}</Chip.Label></Chip><p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{summaryDraft.content}</p>{summaryDraft.status === 'pending_review' && <><Field label="审核理由" required><Input value={reviewReason} maxLength={1000} onChange={(event) => setReviewReason(event.target.value)} fullWidth /></Field><div className="mt-3 flex flex-wrap justify-end gap-2"><Button size="sm" variant="ghost" isDisabled={!token || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'reject', reason: reviewReason })) })}>驳回</Button><Button size="sm" variant="primary" isDisabled={!token || !summaryDraft.publication_eligible || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'publish', reason: reviewReason })) })}>审核发布</Button></div></>}</div>}
+        <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">线索完成人工审核后，系统会依据已授权来源范围自动生成待审核摘要；发布会替代该案件旧的已发布版本。</p>
+        {!summaryDraft ? <p className="mb-0 mt-3 text-sm text-slate-500">暂无待审核摘要。审核一条线索后，系统会自动生成。</p> : <div className="mt-3 rounded-md border border-slate-200 bg-white p-3"><Chip size="sm" variant="soft"><Chip.Label>{statusLabels[summaryDraft.status] ?? summaryDraft.status}</Chip.Label></Chip>{summaryDraft.provider_model == null && <p className="mb-0 mt-2 text-xs text-amber-800">当前使用受控规则降级摘要；仍须人工审核后才能发布。</p>}<p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{summaryDraft.content}</p>{summaryDraft.status === 'pending_review' && <><Field label="审核理由" required><Input value={reviewReason} maxLength={1000} onChange={(event) => setReviewReason(event.target.value)} fullWidth /></Field><div className="mt-3 flex flex-wrap justify-end gap-2"><Button size="sm" variant="ghost" isDisabled={!token || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'reject', reason: reviewReason })) })}>驳回</Button><Button size="sm" variant="primary" isDisabled={!token || !summaryDraft.publication_eligible || !reviewReason.trim() || busy === 'summary-review'} onPress={() => void run('summary-review', async () => { if (!token) return; setSummaryDraft(await reviewSummaryDraft(token, detail.id, summaryDraft.id, { action: 'publish', reason: reviewReason })) })}>审核发布</Button></div></>}</div>}
       </div>}
 
       {error && <div className="lg:col-span-2"><Message tone="error">{error}</Message></div>}

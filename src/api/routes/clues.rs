@@ -23,6 +23,16 @@ async fn review_clue(
     request: web::Json<ReviewClueRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let clue = case_service::review_clue(&state.db, &auth, &clue_id, request.into_inner()).await?;
+    // Summary generation is a non-blocking derivative of a completed human review.
+    // Its controlled rule-based fallback must never prevent the review itself from persisting.
+    let _ = crate::services::case_collaboration_service::create_summary_draft(
+        &state.db,
+        &auth,
+        &clue.case_id,
+        crate::models::CreateSummaryDraftRequest { content: None },
+        &state.ai_gateway,
+    )
+    .await;
     Ok(HttpResponse::Ok().json(clue))
 }
 

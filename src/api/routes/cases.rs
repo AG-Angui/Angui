@@ -41,6 +41,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/pois", web::get().to(list_case_pois))
             .route(
                 "/{case_id}/summary-drafts",
+                web::get().to(get_latest_summary_draft),
+            )
+            .route(
+                "/{case_id}/summary-drafts",
                 web::post().to(create_summary_draft),
             )
             .route(
@@ -411,6 +415,19 @@ async fn create_summary_draft(
             &case_id,
             request.into_inner(),
             &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn get_latest_summary_draft(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::get_latest_summary_draft(
+            &state.db, &auth, &case_id,
         )
         .await?,
     ))

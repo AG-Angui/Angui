@@ -275,6 +275,10 @@ export function getCaseSummary(token: string, caseId: string): Promise<CaseSumma
   return apiRequest<CaseSummary>(`/cases/${caseId}/summary`, {}, token)
 }
 
+export function getLatestSummaryDraft(token: string, caseId: string): Promise<SummaryDraft | null> {
+  return apiRequest<SummaryDraft | null>(`/cases/${caseId}/summary-drafts`, {}, token)
+}
+
 export function listCaseTasks(token: string, caseId: string): Promise<TaskListPage> {
   return apiRequest<TaskListPage>(`/cases/${caseId}/tasks`, {}, token)
 }

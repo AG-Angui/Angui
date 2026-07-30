@@ -979,11 +979,25 @@ paths:
 
   /api/cases/{case_id}/summary-drafts:
     parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: getLatestSummaryDraft
+      summary: Get the latest pending automated summary draft
+      description: Commander only. A pending-review draft is created automatically after a commander completes a clue review. The response is null when there is no draft awaiting review. A deterministic, source-scoped fallback is used when AI generation is unavailable, and it is still subject to the same human review before publication.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: case-restricted
+      responses:
+        "200": { description: Latest pending-review summary draft or null, content: { application/json: { schema: { oneOf: [{ $ref: "#/components/schemas/SummaryDraft" }, { type: "null" }] } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Cases]
       operationId: createSummaryDraft
       summary: Create a commander-only summary draft
-      description: Server-generated drafts are built from the commander's authorized summary scope and start in pending_review. Free-form commander drafts remain internal and are not publication eligible.
+      description: Internal re-generation endpoint. Ordinary summary drafts are created automatically after a commander completes a clue review. Server-generated drafts are built from the commander's authorized summary scope and start in pending_review; when all AI providers are unavailable, a deterministic source-scoped fallback is generated instead. Free-form commander drafts remain internal and are not publication eligible.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
