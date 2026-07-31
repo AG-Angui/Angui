@@ -70,7 +70,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/ContentState
 import { FamilyIntakeForm } from './FamilyIntakeForm'
 
 type WorkspaceMode = 'family' | 'commander' | 'volunteer'
-type ReviewDraft = { reason: string; relatedClueId: string }
+type ReviewDraft = { reason: string; relatedClueId: string; relatedClueQuery: string }
 type ClueQueueFilters = {
   status: ClueStatus | ''
   sourceType: ClueSourceType | ''
@@ -592,10 +592,16 @@ function CaseDetailView({
               {isCommander && clue.status === 'pending_review' && (
                 <div className="mt-3 grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-3">
                   <Field label="审核理由（每次确认、排除、降级或合并必填）" required>
-                    <TextArea aria-label="审核理由" value={reviewDrafts[clue.id]?.reason ?? ''} maxLength={1000} rows={2} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: event.target.value, relatedClueId: current[clue.id]?.relatedClueId ?? '' } }))} fullWidth required />
+                    <TextArea aria-label="审核理由" value={reviewDrafts[clue.id]?.reason ?? ''} maxLength={1000} rows={2} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: event.target.value, relatedClueId: current[clue.id]?.relatedClueId ?? '', relatedClueQuery: current[clue.id]?.relatedClueQuery ?? '' } }))} fullWidth required />
                   </Field>
-                  <Field label="关联线索 ID（重复或冲突时必填）">
-                    <Input value={reviewDrafts[clue.id]?.relatedClueId ?? ''} maxLength={36} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: current[clue.id]?.reason ?? '', relatedClueId: event.target.value } }))} placeholder="选择重复/冲突关系时填写" fullWidth />
+                  <Field label="关联线索（重复或冲突时必选）">
+                    <RelatedCluePicker
+                      clueId={clue.id}
+                      candidates={detail.clues}
+                      selectedId={reviewDrafts[clue.id]?.relatedClueId ?? ''}
+                      query={reviewDrafts[clue.id]?.relatedClueQuery ?? ''}
+                      onChange={(relatedClueId, relatedClueQuery) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: current[clue.id]?.reason ?? '', relatedClueId, relatedClueQuery } }))}
+                    />
                   </Field>
                   <p className="m-0 text-xs leading-5 text-amber-900">审核只会由指挥端提交。每条线索各自保存审核草稿，成功审核后会清空该条草稿。</p>
                   <div className="flex flex-wrap gap-2">
@@ -1141,6 +1147,58 @@ function ReviewButton({
     </AlertDialog.Backdrop>
     </AlertDialog>
   )
+}
+
+function RelatedCluePicker({
+  clueId,
+  candidates,
+  selectedId,
+  query,
+  onChange,
+}: {
+  clueId: string
+  candidates: Clue[]
+  selectedId: string
+  query: string
+  onChange: (relatedClueId: string, relatedClueQuery: string) => void
+}) {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const options = candidates.filter((candidate) => {
+    if (candidate.id === clueId) return false
+    if (candidate.id === selectedId || !normalizedQuery) return true
+    return [candidate.content, candidate.status, candidate.location_text, candidate.reported_at]
+      .filter((value): value is string => Boolean(value))
+      .join(' ')
+      .toLocaleLowerCase()
+      .includes(normalizedQuery)
+  })
+
+  return <div className="grid gap-2">
+    <Input
+      aria-label="搜索关联线索"
+      value={query}
+      maxLength={200}
+      placeholder="按线索内容、状态、地点或时间筛选"
+      onChange={(event) => onChange(selectedId, event.target.value)}
+      fullWidth
+    />
+    <select
+      aria-label="选择关联线索"
+      className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+      value={selectedId}
+      onChange={(event) => onChange(event.target.value, query)}
+    >
+      <option value="">请选择关联线索</option>
+      {options.map((candidate) => <option key={candidate.id} value={candidate.id}>{clueOptionLabel(candidate)}</option>)}
+    </select>
+    <p className="m-0 text-xs leading-5 text-slate-600">{options.length === 0 ? '没有匹配的案件线索。' : `显示 ${options.length} 条可选线索；不会提交或显示 UUID。`}</p>
+  </div>
+}
+
+function clueOptionLabel(clue: Clue) {
+  const excerpt = clue.content.replace(/\s+/g, ' ').slice(0, 80)
+  const location = clue.location_text ? ` · ${clue.location_text}` : ''
+  return `${statusLabels[clue.status] ?? clue.status} · ${formatDate(clue.reported_at) ?? '时间未知'} · ${excerpt}${location}`
 }
 
 function ElderProfileEditor({ detail, token, busy, onSave }: { detail: CaseDetail; token: string | null; busy: string; onSave: (payload: import('../api/cases').UpdateElderProfilePayload) => Promise<boolean> }) {

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { CaseDetail, CaseRole, CaseStatus } from '../api/cases'
+import type { CaseDetail, CaseRole, CaseStatus, Clue } from '../api/cases'
 import { CaseWorkspacePage } from './CaseWorkspacePage'
 
 const mocked = vi.hoisted(() => ({
@@ -358,6 +358,50 @@ describe('CaseWorkspacePage', () => {
     fireEvent.click(reviewTrigger)
     fireEvent.click(screen.getByRole('button', { name: '确认提交' }))
     await waitFor(() => expect(mocked.reviewClue).toHaveBeenCalledWith('test-session', 'clue-pending', expect.objectContaining({ status: 'confirmed', reason: 'Reviewed against the fictional record.' })))
+  })
+
+  it('selects a related clue by searchable case content instead of requiring a UUID', async () => {
+    vi.clearAllMocks()
+    const pendingClue: Clue = {
+      id: 'clue-pending', case_id: 'case-command', status: 'pending_review', source: 'field responder', source_type: 'field_report',
+      content: 'A fictional field observation.', raw_record_reference: null, occurred_at: null, reported_at: '2026-07-24T00:00:00Z', confirmed_at: null,
+      location_text: null, location_precision: null, next_action: null, linked_task_reference: null, related_clue_id: null, relationship_type: null,
+      review_reason: null, attachment_ids: [], created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z', reviewed_at: null, is_own_submission: false,
+    }
+    const relatedClue: Clue = {
+      ...pendingClue,
+      id: 'clue-related',
+      status: 'confirmed',
+      content: '公交站旁的目击记录。',
+      location_text: '北门公交站',
+    }
+    const commandDetail = detail('case-command', '指挥案件', 'commander')
+    commandDetail.clues = [pendingClue, relatedClue]
+    mocked.listCommandIntake.mockResolvedValue([])
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: '指挥案件', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(commandDetail)
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.getCaseMapView.mockResolvedValue({ items: [] })
+    mocked.listCaseClues.mockResolvedValue({ items: [pendingClue], page: 1, page_size: 25, total: 1 })
+    mocked.reviewClue.mockResolvedValue({ ...pendingClue, status: 'duplicate', related_clue_id: relatedClue.id, relationship_type: 'duplicate_of' })
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    await screen.findByRole('heading', { name: '指挥案件' })
+    fireEvent.change(await screen.findByLabelText('审核理由'), { target: { value: '与已有目击记录重复。' } })
+    fireEvent.change(screen.getByLabelText('搜索关联线索'), { target: { value: '公交站' } })
+    expect(screen.getByLabelText('选择关联线索')).toHaveTextContent('公交站旁的目击记录')
+    expect(screen.queryByText('clue-related')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('选择关联线索'), { target: { value: relatedClue.id } })
+    const duplicate = screen.getByRole('button', { name: '重复' })
+    expect(duplicate).toBeEnabled()
+    fireEvent.click(duplicate)
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }))
+    await waitFor(() => expect(mocked.reviewClue).toHaveBeenCalledWith('test-session', 'clue-pending', expect.objectContaining({
+      status: 'duplicate',
+      related_clue_id: relatedClue.id,
+      relationship_type: 'duplicate_of',
+    })))
   })
 
   it('discards a stale commander queue response after filters change', async () => {
