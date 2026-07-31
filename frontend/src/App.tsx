@@ -70,6 +70,14 @@ function App() {
           }
         />
         <Route
+          path="command/cases/:caseId"
+          element={
+            <CaseRoleRoute capability="commander">
+              <CaseWorkspacePage mode="commander" />
+            </CaseRoleRoute>
+          }
+        />
+        <Route
           path="volunteer"
           element={
             <CaseRoleRoute capability="volunteer">
