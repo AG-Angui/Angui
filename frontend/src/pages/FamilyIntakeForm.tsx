@@ -117,6 +117,8 @@ export function FamilyIntakeForm({
     useState<IntakeProfileDraftFieldMetadata | null>(null);
   const [editAnswer, setEditAnswer] = useState("");
   const [confirmReviewOpen, setConfirmReviewOpen] = useState(false);
+  const [isReviewingBasicInformation, setIsReviewingBasicInformation] =
+    useState(false);
   const [busyAction, setBusyAction] = useState<
     "begin" | "answer" | "replace" | "confirm" | null
   >(null);
@@ -223,6 +225,7 @@ export function FamilyIntakeForm({
       setAssessments([]);
       setAnswer("");
       setBasicInformation(blankBasicInformation);
+      setIsReviewingBasicInformation(false);
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -230,10 +233,14 @@ export function FamilyIntakeForm({
     }
   }
 
-  async function sendAnswer(field: string, value: string, replace = false) {
+  async function sendAnswer(
+    field: string,
+    value: string,
+    replace = false,
+  ): Promise<boolean> {
     if (!token || !session || !value.trim()) {
       setError("请填写答案，或选择“标记为未知”。");
-      return;
+      return false;
     }
     setBusyAction(replace ? "replace" : "answer");
     setError("");
@@ -245,25 +252,28 @@ export function FamilyIntakeForm({
       });
       const next = sessionFromAnswerResponse(response);
       setSession(next);
+      if (next.phase !== "phase_two") setIsReviewingBasicInformation(false);
       setAssessments(response.assessments);
       if (replace) {
-        const replacedFields =
-          draft?.field_metadata
+        if (draft) {
+          const replacedFields = draft.field_metadata
             .filter((item) => item.source_field === field)
-            .map((item) => item.field) ?? [];
-        setEditSource(null);
-        setEditAnswer("");
-        const refreshed = await loadDraft(next.id, false);
-        if (refreshed)
-          setProfile((current) =>
-            syncProfileFields(current, refreshed, replacedFields),
-          );
+            .map((item) => item.field);
+          setEditSource(null);
+          setEditAnswer("");
+          const refreshed = await loadDraft(next.id, false);
+          if (refreshed)
+            setProfile((current) =>
+              syncProfileFields(current, refreshed, replacedFields),
+            );
+        }
       } else {
         setAnswer("");
         if (next.status === "ready_for_confirmation") {
           await loadDraft(next.id, true, basicInformation);
         }
       }
+      return true;
     } catch (cause) {
       setError(messageFrom(cause));
       if (
@@ -273,6 +283,7 @@ export function FamilyIntakeForm({
       ) {
         await loadDraft(session.id, false);
       }
+      return false;
     } finally {
       setBusyAction(null);
     }
@@ -293,6 +304,16 @@ export function FamilyIntakeForm({
       return;
     }
     await sendAnswer(session.next_question.field, answerToSubmit);
+  }
+
+  async function saveBasicInformationAndReturn() {
+    const nextAnswer = basicInformationAnswer(basicInformation);
+    if (!nextAnswer) {
+      setError("请填写姓名或称呼，或返回补充线索继续填写。");
+      return;
+    }
+    const saved = await sendAnswer("basic_information", nextAnswer, true);
+    if (saved) setIsReviewingBasicInformation(false);
   }
 
   async function confirmCase() {
@@ -661,9 +682,13 @@ export function FamilyIntakeForm({
   }
 
   const question = session.next_question;
+  const isReviewingPhaseOne =
+    session.phase === "phase_two" && isReviewingBasicInformation;
   const completed = session.completed_phase_one_fields.length;
   const phaseTotal = 4;
-  const currentLabel = question
+  const currentLabel = isReviewingPhaseOne
+    ? "基本情况（编辑）"
+    : question
     ? (questionLabels[question.field] ?? question.field)
     : "正在整理草稿";
 
@@ -676,7 +701,7 @@ export function FamilyIntakeForm({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <span className="text-xs font-semibold text-brand-700">
-              {session.phase === "phase_one"
+              {isReviewingPhaseOne || session.phase === "phase_one"
                 ? "第 1 步 · 基本情况"
                 : "第 2 步 · 补充线索"}
             </span>
@@ -723,15 +748,23 @@ export function FamilyIntakeForm({
           className="mt-5"
           onSubmit={(event) => {
             event.preventDefault();
+            if (isReviewingPhaseOne) {
+              void saveBasicInformationAndReturn();
+              return;
+            }
             void submitCurrentAnswer();
           }}
         >
-          {question.field === "basic_information" ? (
+          {isReviewingPhaseOne || question.field === "basic_information" ? (
             <BasicInformationForm
               value={basicInformation}
               onChange={setBasicInformation}
-              required={question.required}
-              hint={questionReasons[question.field]}
+              required={isReviewingPhaseOne || question.required}
+              hint={
+                isReviewingPhaseOne
+                  ? "可在这里更正基本情况；保存后将返回补充线索。"
+                  : questionReasons[question.field]
+              }
             />
           ) : (
             <Field
@@ -753,12 +786,40 @@ export function FamilyIntakeForm({
             URL、日志或跨设备存储。
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
+            {session.phase === "phase_two" && !isReviewingPhaseOne && (
+              <Button
+                variant="ghost"
+                onPress={() => {
+                  setIsReviewingBasicInformation(true);
+                  setError("");
+                }}
+                isDisabled={isBusy}
+              >
+                <ArrowLeft size={16} aria-hidden="true" />
+                上一步
+              </Button>
+            )}
             <Button type="submit" variant="primary" isDisabled={isBusy}>
-              {busyAction === "answer" && (
-                <Spinner size="sm" aria-label="正在保存答案" />
+              {(busyAction === "answer" ||
+                (isReviewingPhaseOne && busyAction === "replace")) && (
+                <Spinner
+                  size="sm"
+                  aria-label={
+                    isReviewingPhaseOne ? "正在保存基本情况更正" : "正在保存答案"
+                  }
+                />
               )}
-              保存并继续
+              {isReviewingPhaseOne ? "保存更正并返回补充线索" : "保存并继续"}
             </Button>
+            {isReviewingPhaseOne && (
+              <Button
+                variant="ghost"
+                onPress={() => setIsReviewingBasicInformation(false)}
+                isDisabled={isBusy}
+              >
+                返回补充线索（不保存）
+              </Button>
+            )}
             <Button
               type="button"
               variant="ghost"
