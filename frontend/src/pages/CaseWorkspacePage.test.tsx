@@ -880,6 +880,21 @@ describe("CaseWorkspacePage", () => {
     fireEvent.change(screen.getByLabelText("审核理由"), {
       target: { value: "Reviewed against the fictional record." },
     });
+    fireEvent.change(screen.getByLabelText("搜索线索"), {
+      target: { value: "field observation" },
+    });
+    await waitFor(() =>
+      expect(mocked.listCaseClues).toHaveBeenLastCalledWith(
+        "test-session",
+        "case-command",
+        expect.objectContaining({
+          source_type: "field_report",
+          q: "field observation",
+          page: 1,
+        }),
+      ),
+    );
+    await screen.findByLabelText("审核理由");
     const reviewTrigger = screen.getByRole("button", { name: "确认" });
     reviewTrigger.focus();
     fireEvent.click(reviewTrigger);

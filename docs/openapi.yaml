@@ -551,6 +551,10 @@ paths:
           in: query
           description: Filter by the recorded clue origin without broadening the caller's role-scoped visibility.
           schema: { $ref: "#/components/schemas/ClueSourceType" }
+        - name: q
+          in: query
+          description: Case-insensitive keyword match against already role-visible clue content, source, source type, status, location, and timestamps.
+          schema: { type: string, minLength: 1, maxLength: 200 }
         - name: sort
           in: query
           schema: { type: string, enum: [created_at, occurred_at], default: created_at }

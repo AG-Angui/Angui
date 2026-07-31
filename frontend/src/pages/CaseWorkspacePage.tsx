@@ -83,6 +83,7 @@ type ReviewDraft = {
 type ClueQueueFilters = {
   status: ClueStatus | "";
   sourceType: ClueSourceType | "";
+  query: string;
   sort: "created_at" | "occurred_at";
   order: "asc" | "desc";
   page: number;
@@ -90,6 +91,7 @@ type ClueQueueFilters = {
 const defaultClueQueueFilters: ClueQueueFilters = {
   status: "pending_review",
   sourceType: "",
+  query: "",
   sort: "created_at",
   order: "desc",
   page: 1,
@@ -527,6 +529,7 @@ function CaseDetailView({
         page_size: 25,
         status: queueFilters.status || undefined,
         source_type: queueFilters.sourceType || undefined,
+        q: queueFilters.query.trim() || undefined,
         sort: queueFilters.sort,
         order: queueFilters.order,
       });
@@ -828,10 +831,26 @@ function CaseDetailView({
         </div>
 
         {isCommander && (
-          <fieldset className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4">
+          <fieldset className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-5">
             <legend className="px-1 text-sm font-semibold text-slate-800">
               筛选与排序
             </legend>
+            <Field label="搜索线索">
+              <Input
+                aria-label="搜索线索"
+                value={queueFilters.query}
+                maxLength={200}
+                placeholder="内容、来源、地点或状态"
+                onChange={(event) =>
+                  setQueueFilters((current) => ({
+                    ...current,
+                    query: event.target.value,
+                    page: 1,
+                  }))
+                }
+                fullWidth
+              />
+            </Field>
             <Field label="审核状态">
               <select
                 aria-label="审核状态筛选"

@@ -180,6 +180,8 @@ fn clue_timeline_openapi_contract_covers_pagination_and_visibility() {
         "name: page",
         "name: page_size",
         "name: status",
+        "name: source_type",
+        "name: q",
         "name: sort",
         "name: order",
         "#/components/schemas/ClueTimelinePage",

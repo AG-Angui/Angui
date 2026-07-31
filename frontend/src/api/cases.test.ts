@@ -64,12 +64,13 @@ describe("case API contract", () => {
       page_size: 25,
       status: "pending_review",
       source_type: "field_report",
+      q: "north gate",
       sort: "occurred_at",
       order: "asc",
     });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/cases/case-1/clues?page=2&page_size=25&status=pending_review&source_type=field_report&sort=occurred_at&order=asc",
+      "/api/cases/case-1/clues?page=2&page_size=25&status=pending_review&source_type=field_report&q=north+gate&sort=occurred_at&order=asc",
     );
   });
 
