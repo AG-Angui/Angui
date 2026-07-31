@@ -16,6 +16,9 @@ const mocked = vi.hoisted(() => ({
   listCaseClues: vi.fn(),
   listCasePois: vi.fn(),
   addCaseMember: vi.fn(),
+  listCaseTasks: vi.fn(),
+  listCaseMembers: vi.fn(),
+  createCaseTask: vi.fn(),
   reviewClue: vi.fn(),
 }))
 
@@ -34,6 +37,9 @@ vi.mock('../api/cases', () => ({
   listCaseClues: (...args: unknown[]) => mocked.listCaseClues(...args),
   listCasePois: (...args: unknown[]) => mocked.listCasePois(...args),
   addCaseMember: (...args: unknown[]) => mocked.addCaseMember(...args),
+  listCaseTasks: (...args: unknown[]) => mocked.listCaseTasks(...args),
+  listCaseMembers: (...args: unknown[]) => mocked.listCaseMembers(...args),
+  createCaseTask: (...args: unknown[]) => mocked.createCaseTask(...args),
   createCase: vi.fn(),
   createClue: vi.fn(),
   reviewClue: (...args: unknown[]) => mocked.reviewClue(...args),
@@ -358,6 +364,34 @@ describe('CaseWorkspacePage', () => {
     fireEvent.click(reviewTrigger)
     fireEvent.click(screen.getByRole('button', { name: '确认提交' }))
     await waitFor(() => expect(mocked.reviewClue).toHaveBeenCalledWith('test-session', 'clue-pending', expect.objectContaining({ status: 'confirmed', reason: 'Reviewed against the fictional record.' })))
+  })
+
+  it('describes task creation as open until a volunteer is selected', async () => {
+    vi.clearAllMocks()
+    const confirmedClue: Clue = {
+      id: 'clue-confirmed', case_id: 'case-command', status: 'confirmed', source: 'commander', source_type: 'manual_report',
+      content: 'Confirmed sighting for task creation.', raw_record_reference: null, occurred_at: null, reported_at: '2026-07-24T00:00:00Z', confirmed_at: '2026-07-24T01:00:00Z',
+      location_text: null, location_precision: null, next_action: null, linked_task_reference: null, related_clue_id: null, relationship_type: null,
+      review_reason: null, attachment_ids: [], created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z', reviewed_at: '2026-07-24T01:00:00Z', is_own_submission: false,
+    }
+    const commandDetail = detail('case-command', 'Commander case', 'commander')
+    commandDetail.clues = [confirmedClue]
+    mocked.listCases.mockResolvedValue([{ id: 'case-command', case_code: 'AG-COMMAND', status: 'active', access_role: 'commander', display_name: 'Commander case', last_seen_at: null, last_seen_location: null, created_at: '2026-07-24T00:00:00Z', updated_at: '2026-07-24T00:00:00Z' }])
+    mocked.getCase.mockResolvedValue(commandDetail)
+    mocked.getCaseResourceConfiguration.mockResolvedValue({ attachment_max_image_bytes: 5 * 1024 * 1024, attachment_max_per_case: 12, case_place_types: ['frequent'] })
+    mocked.listCaseTasks.mockResolvedValue({ items: [], page: 1, page_size: 25, total: 0 })
+    mocked.listCaseMembers.mockResolvedValue([{ user_id: 'volunteer-1', email: 'volunteer@demo.invalid', display_name: 'Demo volunteer', account_type: 'member', global_capabilities: [], case_role: 'volunteer' }])
+
+    render(<CaseWorkspacePage mode="commander" />)
+
+    expect(await screen.findByRole('heading', { name: '创建开放任务' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '创建并等待志愿者申请' })).toBeInTheDocument()
+    await screen.findByRole('option', { name: 'Demo volunteer' })
+
+    fireEvent.change(screen.getByLabelText('志愿者'), { target: { value: 'volunteer-1' } })
+
+    expect(await screen.findByRole('heading', { name: '人工创建并分配任务' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '创建并分配' })).toBeInTheDocument()
   })
 
   it('selects a related clue by searchable case content instead of requiring a UUID', async () => {
