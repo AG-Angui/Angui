@@ -539,11 +539,42 @@ function CaseDetailView({
         </div>
       </header>
 
-      <TaskBoard detail={detail} token={token} />
-      <CaseSituationPanel detail={detail} token={token} />
+      <RoleActionPanel
+        accessRole={detail.access_role}
+        caseStatus={detail.status}
+        pendingCount={pendingCount}
+        hasProfileGaps={
+          !detail.elder_profile.last_seen_location ||
+          !detail.elder_profile.last_seen_at ||
+          !detail.elder_profile.physical_description
+        }
+      />
+      <nav
+        className="flex flex-wrap gap-x-4 gap-y-2 border-b border-slate-200 bg-white px-5 py-3 text-sm font-medium sm:px-6"
+        aria-label="案件工作区导航"
+      >
+        <a
+          className="text-brand-700 underline-offset-4 hover:underline"
+          href={detail.access_role === "family" ? "#case-actions" : "#task-board"}
+        >
+          当前行动
+        </a>
+        <a className="text-brand-700 underline-offset-4 hover:underline" href="#case-clues">
+          线索与地点
+        </a>
+        <a className="text-brand-700 underline-offset-4 hover:underline" href="#case-profile">
+          案件资料
+        </a>
+      </nav>
+
+      {detail.access_role !== "family" && (
+        <TaskBoard detail={detail} token={token} />
+      )}
       <CaseCollaborationPanel detail={detail} token={token} />
+      <CaseSituationPanel detail={detail} token={token} />
 
       <section
+        id="case-profile"
         className="grid gap-x-8 gap-y-4 border-b border-slate-200 px-5 py-5 sm:grid-cols-2 sm:px-6 lg:grid-cols-3"
         aria-label="老人资料"
       >
@@ -572,87 +603,96 @@ function CaseDetailView({
       </section>
 
       {canEditElderProfile && (
-        <ElderProfileEditor
-          detail={detail}
-          token={token}
-          busy={busy}
-          onSave={(payload) =>
-            run(
-              "elder-profile",
-              () => updateElderProfile(token!, detail.id, payload),
-              "人物摘要已更新",
-            )
-          }
-        />
+        <details id="case-profile-editor" className="border-b border-slate-200 bg-brand-50/30">
+          <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 sm:px-6">
+            补充或更正人物资料
+          </summary>
+          <ElderProfileEditor
+            detail={detail}
+            token={token}
+            busy={busy}
+            onSave={(payload) =>
+              run(
+                "elder-profile",
+                () => updateElderProfile(token!, detail.id, payload),
+                "人物摘要已更新",
+              )
+            }
+          />
+        </details>
       )}
 
       {(isCommander || detail.access_role === "family") && (
-        <section className="grid gap-5 border-b border-slate-200 bg-slate-50 px-5 py-5 sm:px-6 lg:grid-cols-2">
-          {isCommander && (
+        <details className="border-b border-slate-200 bg-slate-50">
+          <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 sm:px-6">
+            案件状态与成员管理
+          </summary>
+          <section className="grid gap-5 px-5 pb-5 sm:px-6 lg:grid-cols-2">
+            {isCommander && (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token) return;
+                  void run(
+                    "status",
+                    () => updateCaseStatus(token, detail.id, nextStatus),
+                    "案件状态已更新",
+                  );
+                }}
+              >
+                <h3
+                  id="case-status-title"
+                  className="m-0 text-sm font-bold text-slate-950"
+                >
+                  案件状态
+                </h3>
+                <div className="mt-3 flex gap-2">
+                  <select
+                    aria-labelledby="case-status-title"
+                    className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm"
+                    value={nextStatus}
+                    onChange={(event) =>
+                      setNextStatus(event.target.value as CaseStatus)
+                    }
+                    disabled={detail.status === "closed"}
+                  >
+                    {statusOptions.map((status) => (
+                      <option key={status} value={status}>
+                        {statusLabels[status]}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    variant="secondary"
+                    isDisabled={busy === "status" || nextStatus === detail.status}
+                  >
+                    保存
+                  </Button>
+                </div>
+              </form>
+            )}
+
             <form
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!token) return;
                 void run(
-                  "status",
-                  () => updateCaseStatus(token, detail.id, nextStatus),
-                  "案件状态已更新",
-                );
+                  "member",
+                  () =>
+                    addCaseMember(
+                      token,
+                      detail.id,
+                      memberEmail.trim(),
+                      selectedMemberRole,
+                    ),
+                  "案件成员已添加",
+                ).then((succeeded) => {
+                  if (succeeded) setMemberEmail("");
+                });
               }}
             >
-              <h3
-                id="case-status-title"
-                className="m-0 text-sm font-bold text-slate-950"
-              >
-                案件状态
-              </h3>
-              <div className="mt-3 flex gap-2">
-                <select
-                  aria-labelledby="case-status-title"
-                  className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm"
-                  value={nextStatus}
-                  onChange={(event) =>
-                    setNextStatus(event.target.value as CaseStatus)
-                  }
-                  disabled={detail.status === "closed"}
-                >
-                  {statusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {statusLabels[status]}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="submit"
-                  size="sm"
-                  variant="secondary"
-                  isDisabled={busy === "status" || nextStatus === detail.status}
-                >
-                  保存
-                </Button>
-              </div>
-            </form>
-          )}
-
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!token) return;
-              void run(
-                "member",
-                () =>
-                  addCaseMember(
-                    token,
-                    detail.id,
-                    memberEmail.trim(),
-                    selectedMemberRole,
-                  ),
-                "案件成员已添加",
-              ).then((succeeded) => {
-                if (succeeded) setMemberEmail("");
-              });
-            }}
-          >
             <h3 className="m-0 text-sm font-bold text-slate-950">添加成员</h3>
             <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
               <Input
@@ -687,8 +727,9 @@ function CaseDetailView({
                 <UserPlus size={17} />
               </Button>
             </div>
-          </form>
-        </section>
+            </form>
+          </section>
+        </details>
       )}
 
       {error && (
@@ -697,7 +738,7 @@ function CaseDetailView({
         </div>
       )}
 
-      <section className="px-5 py-5 sm:px-6" aria-labelledby="clues-title">
+      <section id="case-clues" className="px-5 py-5 sm:px-6" aria-labelledby="clues-title">
         <div className="flex items-center justify-between gap-3">
           <h3
             id="clues-title"
@@ -1085,8 +1126,12 @@ function CaseDetailView({
         )}
 
         {detail.status === "active" && (
-          <form
-            className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]"
+          <details className="mt-5 rounded-md border border-slate-200 bg-slate-50">
+            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold text-slate-900">
+              {isCommander ? "提交补充线索" : "提交一条新线索"}
+            </summary>
+            <form
+              className="grid gap-3 border-t border-slate-200 p-3 sm:grid-cols-[minmax(0,1fr)_220px] sm:p-4"
             onSubmit={(event) => {
               event.preventDefault();
               if (!token) return;
@@ -1238,7 +1283,8 @@ function CaseDetailView({
                 提交线索
               </Button>
             </div>
-          </form>
+            </form>
+          </details>
         )}
       </section>
 
@@ -1512,6 +1558,87 @@ function CaseDetailView({
   );
 }
 
+function RoleActionPanel({
+  accessRole,
+  caseStatus,
+  pendingCount,
+  hasProfileGaps,
+}: {
+  accessRole: CaseRole;
+  caseStatus: CaseStatus;
+  pendingCount: number;
+  hasProfileGaps: boolean;
+}) {
+  const isCommander = accessRole === "commander";
+  const isFamily = accessRole === "family";
+  const isActive = caseStatus === "active";
+  const heading = isCommander
+    ? "指挥工作台"
+    : isFamily
+      ? "当前可以做什么"
+      : "协作提示";
+  const description = isCommander
+    ? pendingCount > 0
+      ? `有 ${pendingCount} 条线索等待人工审核，请先完成审核并记录理由。`
+      : "当前没有待审核线索；可在任务看板查看或创建受控任务。"
+    : isFamily
+      ? !isActive
+        ? caseStatus === "resolved"
+          ? "案件已找到，不能再提交补充信息。"
+          : "案件已关闭，不能再提交补充信息。"
+        : hasProfileGaps
+        ? "请先补充关键人物资料，再提交新的线索、地点或图片。"
+        : "可补充线索、地点或图片；提交的信息会先进入人工审核。"
+      : "请查看已分配任务与经服务端裁剪后的案件信息。";
+  const action = isCommander
+    ? "前往任务和审核区"
+    : isFamily
+      ? isActive && hasProfileGaps
+        ? "补充人物资料"
+        : isActive
+          ? "提交一条新线索"
+          : "查看案件资料"
+      : "查看已分配任务";
+  const target = isCommander
+    ? "#task-board"
+    : isFamily
+      ? isActive && hasProfileGaps
+        ? "#case-profile-editor"
+        : isActive
+          ? "#case-clues"
+          : "#case-profile"
+      : "#task-board";
+
+  return (
+    <section
+      id="case-actions"
+      className="border-b border-emerald-200 bg-emerald-50/70 px-5 py-5 sm:px-6"
+      aria-labelledby="role-actions-title"
+    >
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div className="max-w-2xl">
+          <p className="m-0 text-xs font-semibold text-emerald-800">
+            {isCommander ? "先处理待办，再查看资料" : "根据当前案件状态继续"}
+          </p>
+          <h3 id="role-actions-title" className="mb-0 mt-1 text-lg font-bold text-slate-950">
+            {heading}
+          </h3>
+          <p className="mb-0 mt-1 text-sm leading-6 text-slate-700">
+            {description}
+          </p>
+        </div>
+        <a
+          className="inline-flex min-h-10 items-center justify-center rounded-md bg-brand-700 px-4 text-sm font-semibold text-white no-underline transition-colors hover:bg-brand-800 focus:outline-none focus:ring-2 focus:ring-brand-700 focus:ring-offset-2"
+          href={target}
+          aria-label={`${action}（主操作）`}
+        >
+          {action}
+        </a>
+      </div>
+    </section>
+  );
+}
+
 const taskStatusLabels: Record<string, string> = {
   pending_claim: "待志愿者申请",
   assigned: "待领取",
@@ -1633,6 +1760,7 @@ function TaskBoard({
   }
   return (
     <section
+      id="task-board"
       className="border-b border-slate-200 px-5 py-5 sm:px-6"
       aria-label="任务看板"
     >
@@ -2512,7 +2640,8 @@ function CaseCollaborationPanel({
         </div>
       )}
 
-      <div className="min-w-0">
+      {isCommander && (
+        <div className="min-w-0">
         <h3 className="m-0 text-base font-bold text-slate-950">
           文本整理为待审核线索
         </h3>
@@ -2563,7 +2692,8 @@ function CaseCollaborationPanel({
             </p>
           </div>
         ))}
-      </div>
+        </div>
+      )}
 
       {isCommander && (
         <div className="min-w-0">

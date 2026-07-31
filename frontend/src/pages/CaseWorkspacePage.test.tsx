@@ -99,6 +99,206 @@ function detail(
 }
 
 describe("CaseWorkspacePage", () => {
+  it("gives a family member one next action and keeps long forms collapsed", async () => {
+    vi.clearAllMocks();
+    mocked.listCases.mockResolvedValue([
+      {
+        id: "case-family-workspace",
+        case_code: "AG-FAMILY-WORKSPACE",
+        status: "active",
+        access_role: "family",
+        display_name: "Family workspace",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-07-24T00:00:00Z",
+        updated_at: "2026-07-24T00:00:00Z",
+      },
+    ]);
+    mocked.getCase.mockResolvedValue(
+      detail("case-family-workspace", "Family workspace", "family"),
+    );
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ["frequent"],
+    });
+    mocked.getCaseMapView.mockResolvedValue({ items: [] });
+
+    render(<CaseWorkspacePage mode="family" />);
+
+    expect(
+      await screen.findByRole("heading", { name: "当前可以做什么" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "补充人物资料（主操作）" }),
+    ).toHaveAttribute("href", "#case-profile-editor");
+    expect(document.getElementById("case-profile-editor")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "案件工作区导航" })).toBeInTheDocument();
+    expect(screen.getByText("补充或更正人物资料").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+    expect(screen.getByText("案件状态与成员管理").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+    expect(screen.getByText("提交一条新线索").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+    expect(screen.queryByRole("heading", { name: "任务看板" })).not.toBeInTheDocument();
+    expect(mocked.listCaseTasks).not.toHaveBeenCalled();
+  });
+
+  it("sends a volunteer to assigned tasks from the primary action", async () => {
+    vi.clearAllMocks();
+    mocked.listCases.mockResolvedValue([
+      {
+        id: "case-volunteer-workspace",
+        case_code: "AG-VOLUNTEER-WORKSPACE",
+        status: "active",
+        access_role: "volunteer",
+        display_name: "Volunteer workspace",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-07-24T00:00:00Z",
+        updated_at: "2026-07-24T00:00:00Z",
+      },
+    ]);
+    mocked.getCase.mockResolvedValue(
+      detail("case-volunteer-workspace", "Volunteer workspace", "volunteer"),
+    );
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ["frequent"],
+    });
+    mocked.getCaseMapView.mockResolvedValue({ items: [] });
+    mocked.listCaseTasks.mockResolvedValue({
+      items: [],
+      page: 1,
+      page_size: 25,
+      total: 0,
+    });
+    mocked.listCaseMembers.mockResolvedValue([]);
+    mocked.listCaseClues.mockResolvedValue({
+      items: [],
+      page: 1,
+      page_size: 25,
+      total: 0,
+    });
+
+    render(<CaseWorkspacePage mode="volunteer" />);
+
+    expect(await screen.findByRole("heading", { name: "协作提示" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "查看已分配任务（主操作）" }),
+    ).toHaveAttribute("href", "#task-board");
+    expect(document.getElementById("task-board")).toBeInTheDocument();
+  });
+
+  it("does not offer family clue submission after a case is resolved", async () => {
+    vi.clearAllMocks();
+    mocked.listCases.mockResolvedValue([
+      {
+        id: "case-family-resolved",
+        case_code: "AG-FAMILY-RESOLVED",
+        status: "resolved",
+        access_role: "family",
+        display_name: "Resolved family workspace",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-07-24T00:00:00Z",
+        updated_at: "2026-07-24T00:00:00Z",
+      },
+    ]);
+    mocked.getCase.mockResolvedValue(
+      detail(
+        "case-family-resolved",
+        "Resolved family workspace",
+        "family",
+        "resolved",
+      ),
+    );
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ["frequent"],
+    });
+    mocked.getCaseMapView.mockResolvedValue({ items: [] });
+
+    render(<CaseWorkspacePage mode="family" />);
+
+    expect(
+      await screen.findByText("案件已找到，不能再提交补充信息。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "查看案件资料（主操作）" }),
+    ).toHaveAttribute("href", "#case-profile");
+    expect(document.getElementById("case-profile")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "提交一条新线索（主操作）" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("提交一条新线索")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交线索" })).not.toBeInTheDocument();
+  });
+
+  it("puts commander task and review work ahead of case materials", async () => {
+    vi.clearAllMocks();
+    mocked.listCommandIntake.mockResolvedValue([]);
+    mocked.listCases.mockResolvedValue([
+      {
+        id: "case-commander-workspace",
+        case_code: "AG-COMMANDER-WORKSPACE",
+        status: "active",
+        access_role: "commander",
+        display_name: "Commander workspace",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-07-24T00:00:00Z",
+        updated_at: "2026-07-24T00:00:00Z",
+      },
+    ]);
+    mocked.getCase.mockResolvedValue(
+      detail("case-commander-workspace", "Commander workspace", "commander"),
+    );
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ["frequent"],
+    });
+    mocked.getCaseMapView.mockResolvedValue({ items: [] });
+    mocked.listCaseTasks.mockResolvedValue({
+      items: [],
+      page: 1,
+      page_size: 25,
+      total: 0,
+    });
+    mocked.listCaseMembers.mockResolvedValue([]);
+    mocked.listCaseClues.mockResolvedValue({
+      items: [],
+      page: 1,
+      page_size: 25,
+      total: 0,
+    });
+
+    render(<CaseWorkspacePage mode="commander" />);
+
+    expect(
+      await screen.findByRole("heading", { name: "指挥工作台" }),
+    ).toBeInTheDocument();
+    const taskHeading = screen.getByRole("heading", { name: "任务看板" });
+    const clueHeading = screen.getByRole("heading", { name: "线索" });
+    expect(taskHeading.compareDocumentPosition(clueHeading)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(screen.getByRole("link", { name: "前往任务和审核区（主操作）" })).toHaveAttribute(
+      "href",
+      "#task-board",
+    );
+    expect(document.getElementById("task-board")).toBeInTheDocument();
+    expect(screen.getByText("案件状态与成员管理").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+  });
+
   it("lets a commander accept a minimal pending case before viewing it", async () => {
     mocked.listCases.mockResolvedValue([]);
     mocked.listCommandIntake.mockResolvedValue([
