@@ -603,7 +603,7 @@ function CaseDetailView({
       </section>
 
       {canEditElderProfile && (
-        <details className="border-b border-slate-200 bg-brand-50/30">
+        <details id="case-profile-editor" className="border-b border-slate-200 bg-brand-50/30">
           <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 sm:px-6">
             补充或更正人物资料
           </summary>
@@ -1571,6 +1571,7 @@ function RoleActionPanel({
 }) {
   const isCommander = accessRole === "commander";
   const isFamily = accessRole === "family";
+  const isActive = caseStatus === "active";
   const heading = isCommander
     ? "指挥工作台"
     : isFamily
@@ -1581,22 +1582,32 @@ function RoleActionPanel({
       ? `有 ${pendingCount} 条线索等待人工审核，请先完成审核并记录理由。`
       : "当前没有待审核线索；可在任务看板查看或创建受控任务。"
     : isFamily
-      ? hasProfileGaps
+      ? !isActive
+        ? caseStatus === "resolved"
+          ? "案件已找到，不能再提交补充信息。"
+          : "案件已关闭，不能再提交补充信息。"
+        : hasProfileGaps
         ? "请先补充关键人物资料，再提交新的线索、地点或图片。"
         : "可补充线索、地点或图片；提交的信息会先进入人工审核。"
       : "请查看已分配任务与经服务端裁剪后的案件信息。";
   const action = isCommander
     ? "前往任务和审核区"
     : isFamily
-      ? hasProfileGaps
+      ? isActive && hasProfileGaps
         ? "补充人物资料"
-        : "提交一条新线索"
-      : "查看案件资料";
+        : isActive
+          ? "提交一条新线索"
+          : "查看案件资料"
+      : "查看已分配任务";
   const target = isCommander
     ? "#task-board"
-    : isFamily && hasProfileGaps
-      ? "#case-profile"
-      : "#case-clues";
+    : isFamily
+      ? isActive && hasProfileGaps
+        ? "#case-profile-editor"
+        : isActive
+          ? "#case-clues"
+          : "#case-profile"
+      : "#task-board";
 
   return (
     <section
@@ -1613,7 +1624,7 @@ function RoleActionPanel({
             {heading}
           </h3>
           <p className="mb-0 mt-1 text-sm leading-6 text-slate-700">
-            {caseStatus === "closed" ? "案件已关闭，不能再提交补充信息。" : description}
+            {description}
           </p>
         </div>
         <a
