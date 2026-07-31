@@ -191,6 +191,7 @@ describe("CaseWorkspacePage", () => {
     expect(
       screen.getByRole("link", { name: "查看已分配任务（主操作）" }),
     ).toHaveAttribute("href", "#task-board");
+    expect(document.getElementById("task-board")).toBeInTheDocument();
   });
 
   it("does not offer family clue submission after a case is resolved", async () => {
@@ -231,9 +232,12 @@ describe("CaseWorkspacePage", () => {
     expect(
       screen.getByRole("link", { name: "查看案件资料（主操作）" }),
     ).toHaveAttribute("href", "#case-profile");
+    expect(document.getElementById("case-profile")).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "提交一条新线索（主操作）" }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText("提交一条新线索")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交线索" })).not.toBeInTheDocument();
   });
 
   it("puts commander task and review work ahead of case materials", async () => {
@@ -289,6 +293,7 @@ describe("CaseWorkspacePage", () => {
       "href",
       "#task-board",
     );
+    expect(document.getElementById("task-board")).toBeInTheDocument();
     expect(screen.getByText("案件状态与成员管理").closest("details")).not.toHaveAttribute(
       "open",
     );
