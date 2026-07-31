@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     entities::{
         cases, clue_attributions, clues, elder_profiles, intake_session_answers, intake_sessions,
-        task_assignments, tasks,
+        task_applications, task_assignments, tasks,
     },
     roles::{AccountType, CaseRole, GlobalCapability},
 };
@@ -593,7 +593,10 @@ pub struct ReviewClueRequest {
 #[serde(deny_unknown_fields)]
 pub struct CreateTaskRequest {
     pub source_clue_id: String,
-    pub volunteer_user_id: String,
+    #[serde(default)]
+    pub volunteer_user_id: Option<String>,
+    #[serde(default)]
+    pub volunteer_user_ids: Vec<String>,
     pub title: String,
     pub objective: String,
     pub area_text: String,
@@ -642,6 +645,21 @@ pub struct SubmitTaskFeedbackRequest {
     pub location_precision: Option<String>,
     #[serde(default)]
     pub attachment_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateTaskApplicationRequest {
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewTaskApplicationRequest {
+    pub action: String,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -766,8 +784,39 @@ pub struct TaskResponse {
     pub result_summary: Option<String>,
     pub assigned_volunteer_user_id: Option<String>,
     pub assigned_at: Option<String>,
+    pub collaborators: Vec<TaskCollaboratorResponse>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskCollaboratorResponse {
+    pub volunteer_user_id: String,
+    pub assigned_by_user_id: String,
+    pub assigned_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskApplicationResponse {
+    pub id: String,
+    pub task_id: String,
+    pub volunteer_user_id: String,
+    pub status: String,
+    pub note: Option<String>,
+    pub reviewed_by_user_id: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub review_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskCollaborationLocationResponse {
+    pub volunteer_user_id: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy_meters: f64,
+    pub captured_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1094,9 +1143,10 @@ impl ClueResponse {
 impl TaskResponse {
     pub fn new(
         model: tasks::Model,
-        assignment: Option<task_assignments::Model>,
+        assignments: Vec<task_assignments::Model>,
         include_assignee: bool,
     ) -> Self {
+        let first_assignment = assignments.first();
         Self {
             id: model.id,
             case_id: model.case_id,
@@ -1115,13 +1165,38 @@ impl TaskResponse {
             status: model.status,
             result_summary: model.result_summary,
             assigned_volunteer_user_id: include_assignee
-                .then(|| {
-                    assignment
-                        .as_ref()
-                        .map(|value| value.volunteer_user_id.clone())
-                })
+                .then(|| first_assignment.map(|value| value.volunteer_user_id.clone()))
                 .flatten(),
-            assigned_at: assignment.map(|value| value.assigned_at),
+            assigned_at: first_assignment.map(|value| value.assigned_at.clone()),
+            collaborators: include_assignee
+                .then(|| {
+                    assignments
+                        .iter()
+                        .map(|assignment| TaskCollaboratorResponse {
+                            volunteer_user_id: assignment.volunteer_user_id.clone(),
+                            assigned_by_user_id: assignment.assigned_by_user_id.clone(),
+                            assigned_at: assignment.assigned_at.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            created_at: model.created_at,
+            updated_at: model.updated_at,
+        }
+    }
+}
+
+impl From<task_applications::Model> for TaskApplicationResponse {
+    fn from(model: task_applications::Model) -> Self {
+        Self {
+            id: model.id,
+            task_id: model.task_id,
+            volunteer_user_id: model.volunteer_user_id,
+            status: model.status,
+            note: model.note,
+            reviewed_by_user_id: model.reviewed_by_user_id,
+            reviewed_at: model.reviewed_at,
+            review_reason: model.review_reason,
             created_at: model.created_at,
             updated_at: model.updated_at,
         }

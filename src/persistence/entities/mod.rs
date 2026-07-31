@@ -17,6 +17,7 @@ pub mod intake_question_definitions;
 pub mod intake_session_answers;
 pub mod intake_sessions;
 pub mod summary_drafts;
+pub mod task_applications;
 pub mod task_assignments;
 pub mod task_location_reports;
 pub mod task_operation_idempotency;
