@@ -299,6 +299,7 @@ describe("CaseWorkspacePage", () => {
     expect(
       await screen.findByRole("heading", { name: "指挥工作台" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("权限：指挥人员")).toBeInTheDocument();
     const taskHeading = screen.getByRole("heading", { name: "任务看板" });
     const clueHeading = screen.getByRole("heading", { name: "线索" });
     expect(taskHeading.compareDocumentPosition(clueHeading)).toBe(

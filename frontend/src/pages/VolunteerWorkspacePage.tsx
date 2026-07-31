@@ -45,13 +45,19 @@ import {
 } from "../components/ContentState";
 
 const statusLabels: Record<TaskStatus, string> = {
-  pending_claim: "Open for applications",
-  assigned: "Assigned",
-  accepted: "Accepted",
-  active: "Active",
-  blocked: "Paused",
-  completed: "Completed",
-  cancelled: "Cancelled",
+  pending_claim: "待申请",
+  assigned: "待领取",
+  accepted: "已接受",
+  active: "进行中",
+  blocked: "受阻",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
+const caseStatusLabels: Record<string, string> = {
+  active: "进行中",
+  resolved: "已找到",
+  closed: "已关闭",
 };
 type Failure = { message: string; retry: (() => void) | null };
 type WorkspaceCase = {
@@ -64,10 +70,18 @@ type ClueDraft = { content: string; location: string };
 function messageFrom(cause: unknown) {
   return cause instanceof Error
     ? cause.message
-    : "The operation could not be completed. Please try again.";
+    : "操作未能完成，请稍后重试。";
 }
 function localNow() {
   return new Date().toISOString();
+}
+
+function poiSourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    amap: "高德地图",
+    fixed_demo_fallback: "固定演示数据",
+  };
+  return labels[source] ?? "服务端资源数据";
 }
 
 export function VolunteerWorkspacePage() {
@@ -196,11 +210,11 @@ export function VolunteerWorkspacePage() {
         </div>
         <dl className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
           <div>
-            <dt className="font-medium text-slate-800">Task area</dt>
+            <dt className="font-medium text-slate-800">任务区域</dt>
             <dd className="m-0">{task.area_text}</dd>
           </div>
           <div>
-            <dt className="font-medium text-slate-800">Due</dt>
+            <dt className="font-medium text-slate-800">截止时间</dt>
             <dd className="m-0">{task.due_at}</dd>
           </div>
         </dl>
@@ -217,19 +231,18 @@ export function VolunteerWorkspacePage() {
                     async () => {
                       await applyForTask(token, task.id);
                     },
-                    "Task application submitted for commander review.",
+                    "任务申请已提交，等待指挥人员审核。",
                   );
               }}
             >
               <Users size={16} />
-              Apply to collaborate
+              申请协作
             </Button>
           </div>
         )}
         {!assigned && task.status !== "pending_claim" && (
           <p className="mb-0 mt-3 text-xs text-slate-500">
-            This task already has collaborators; task actions become available
-            after approval.
+            此任务已有协作人员；通过审核后才能进行任务操作。
           </p>
         )}
         {assigned && (
@@ -249,7 +262,7 @@ export function VolunteerWorkspacePage() {
                           refreshTask(
                             await updateTaskStatus(token, task.id, status),
                           ),
-                        `Task marked ${statusLabels[status]}.`,
+                        `任务状态已更新为“${statusLabels[status]}”。`,
                       );
                   }}
                 >
@@ -271,12 +284,12 @@ export function VolunteerWorkspacePage() {
                           [task.id]: result,
                         }));
                       },
-                      "Navigation instructions loaded.",
+                      "导航指引已加载。",
                     );
                 }}
               >
                 <Compass size={16} />
-                Navigation
+                导航指引
               </Button>
               <Button
                 size="sm"
@@ -293,12 +306,12 @@ export function VolunteerWorkspacePage() {
                         );
                         setSafety((value) => ({ ...value, [task.id]: result }));
                       },
-                      "Safety briefing loaded.",
+                      "安全提示已加载。",
                     );
                 }}
               >
                 <ShieldCheck size={16} />
-                Safety
+                安全提示
               </Button>
               <Button
                 size="sm"
@@ -318,12 +331,12 @@ export function VolunteerWorkspacePage() {
                           [task.id]: result,
                         }));
                       },
-                      "Current collaboration locations loaded.",
+                      "当前协作位置已加载。",
                     );
                 }}
               >
                 <MapPin size={16} />
-                Collaboration locations
+                协作位置
               </Button>
             </div>
             {navigation[task.id] && (
@@ -335,7 +348,7 @@ export function VolunteerWorkspacePage() {
               <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-slate-700">
                 <div className="font-semibold text-amber-900">
                   <AlertTriangle className="mr-1 inline" size={16} />
-                  Safety briefing
+                  安全提示
                 </div>
                 <ul className="mb-0 mt-2 list-disc space-y-1 pl-5">
                   {safety[task.id].notices.map((item, index) => (
@@ -347,13 +360,12 @@ export function VolunteerWorkspacePage() {
             {locations[task.id] && (
               <ul className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
                 {locations[task.id].length === 0 ? (
-                  <li>No current collaborator location reports.</li>
+                  <li>暂无协作人员的位置上报。</li>
                 ) : (
                   locations[task.id].map((item) => (
                     <li key={item.volunteer_user_id}>
                       {item.volunteer_user_id}: {item.latitude.toFixed(5)},{" "}
-                      {item.longitude.toFixed(5)} (accuracy{" "}
-                      {item.accuracy_meters}m)
+                      {item.longitude.toFixed(5)}（精度约 {item.accuracy_meters} 米）
                     </li>
                   ))
                 )}
@@ -372,7 +384,7 @@ export function VolunteerWorkspacePage() {
                       !taskLocation.accuracy.trim()
                     ) {
                       setFailure({
-                        message: "Enter latitude, longitude, and accuracy.",
+                        message: "请填写纬度、经度和定位精度。",
                         retry: null,
                       });
                       return;
@@ -392,7 +404,7 @@ export function VolunteerWorkspacePage() {
                     ) {
                       setFailure({
                         message:
-                          "Enter valid coordinates and a positive accuracy.",
+                          "请填写有效的经纬度和大于 0 的定位精度。",
                         retry: null,
                       });
                       return;
@@ -415,17 +427,17 @@ export function VolunteerWorkspacePage() {
                           key,
                         );
                       },
-                      "Simulated location report submitted.",
+                      "模拟位置上报已提交。",
                     );
                   }}
                 >
                   <h4 className="m-0 text-sm font-semibold text-slate-950">
                     <LocateFixed className="mr-1 inline" size={16} />
-                    Simulated location report
+                    模拟位置上报
                   </h4>
                   <div className="grid grid-cols-3 gap-2">
                     <Input
-                      aria-label="Latitude"
+                      aria-label="纬度"
                       type="number"
                       value={taskLocation.latitude}
                       onChange={(event) =>
@@ -439,7 +451,7 @@ export function VolunteerWorkspacePage() {
                       }
                     />
                     <Input
-                      aria-label="Longitude"
+                      aria-label="经度"
                       type="number"
                       value={taskLocation.longitude}
                       onChange={(event) =>
@@ -453,7 +465,7 @@ export function VolunteerWorkspacePage() {
                       }
                     />
                     <Input
-                      aria-label="Accuracy in metres"
+                      aria-label="定位精度（米）"
                       type="number"
                       value={taskLocation.accuracy}
                       onChange={(event) =>
@@ -473,7 +485,7 @@ export function VolunteerWorkspacePage() {
                     variant="secondary"
                     isDisabled={busy}
                   >
-                    Submit location
+                    提交位置
                   </Button>
                 </form>
                 <form
@@ -494,15 +506,15 @@ export function VolunteerWorkspacePage() {
                         await submitTaskFeedback(token, task.id, payload, key);
                         setFeedback((value) => ({ ...value, [task.id]: "" }));
                       },
-                      "Feedback submitted for review.",
+                      "执行反馈已提交审核。",
                     );
                   }}
                 >
                   <h4 className="m-0 text-sm font-semibold text-slate-950">
-                    Execution feedback
+                    执行反馈
                   </h4>
                   <TextArea
-                    aria-label="Execution feedback"
+                      aria-label="执行反馈"
                     value={feedback[task.id] ?? ""}
                     rows={3}
                     maxLength={4000}
@@ -520,7 +532,7 @@ export function VolunteerWorkspacePage() {
                     variant="secondary"
                     isDisabled={busy || !feedback[task.id]?.trim()}
                   >
-                    Submit feedback
+                    提交反馈
                   </Button>
                 </form>
               </div>
@@ -537,7 +549,7 @@ export function VolunteerWorkspacePage() {
       <header className="mb-7 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
         <div>
           <span className="mb-1 block text-xs font-semibold text-slate-500">
-            Volunteer collaboration
+            志愿协作
           </span>
           <h1 className="m-0 text-2xl font-bold text-slate-950 lg:text-3xl">
             我的任务
@@ -553,7 +565,7 @@ export function VolunteerWorkspacePage() {
           onPress={() => void load()}
         >
           <RefreshCw size={16} />
-          Refresh
+          刷新
         </Button>
       </header>
       {notice && (
@@ -570,12 +582,12 @@ export function VolunteerWorkspacePage() {
         </div>
       )}
       {loading ? (
-        <LoadingState label="Loading your collaboration workspace" />
+        <LoadingState label="正在加载协作工作台" />
       ) : cases.length === 0 ? (
         <EmptyState
           icon={Users}
-          title="No collaboration cases yet"
-          description="Cases where you are added as a volunteer will appear here before a task is assigned."
+          title="暂无可协作案件"
+          description="被添加为志愿者的案件会显示在这里，任务分配前也可查看。"
         />
       ) : (
         <section className="grid gap-6">
@@ -607,53 +619,55 @@ export function VolunteerWorkspacePage() {
                     </h2>
                   </div>
                   <Chip size="sm" variant="soft">
-                    <Chip.Label>{workspace.detail.status}</Chip.Label>
+                    <Chip.Label>
+                      {caseStatusLabels[workspace.detail.status] ?? "状态未知"}
+                    </Chip.Label>
                   </Chip>
                 </div>
                 <div className="mt-4 grid gap-4 text-sm text-slate-700 lg:grid-cols-3">
                   <div>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      Family contact
+                      家属联系方式
                     </h3>
                     <p className="mb-0 mt-1">
                       {workspace.detail.family_contact_emails?.join(", ") ||
-                        "No family contact listed."}
+                        "暂未提供家属联系方式。"}
                     </p>
                   </div>
                   <div>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      Health notes
+                      健康注意事项
                     </h3>
                     <p className="mb-0 mt-1">
                       {workspace.detail.elder_profile.health_notes ||
-                        "No health notes listed."}
+                        "暂无健康注意事项。"}
                     </p>
                   </div>
                   <div>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      Case summary
+                      案件摘要
                     </h3>
                     <p className="mb-0 mt-1">
                       {workspace.summary.last_confirmed_information?.content ||
-                        "No confirmed summary item yet."}
+                        "暂无已确认的摘要信息。"}
                     </p>
                   </div>
                 </div>
                 <div className="mt-5 grid gap-5 lg:grid-cols-2">
                   <section>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      Confirmed clues and my submissions
+                      已确认线索与我的上报
                     </h3>
                     <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
                       {workspace.detail.clues.length === 0 ? (
-                        <li>No visible clues yet.</li>
+                        <li>暂无可查看的线索。</li>
                       ) : (
                         workspace.detail.clues.slice(0, 8).map((clue) => (
                           <li key={clue.id}>
                             {clue.content}
                             {clue.is_own_submission && (
                               <span className="ml-1 text-xs text-slate-500">
-                                (submitted by me)
+                                （由我上报）
                               </span>
                             )}
                           </li>
@@ -687,20 +701,20 @@ export function VolunteerWorkspacePage() {
                             }));
                             await load();
                           },
-                          "Observation submitted as a pending-review clue.",
+                          "现场观察已作为待审核线索提交。",
                         );
                       }}
                     >
                       <h4 className="m-0 text-sm font-semibold text-slate-950">
                         <Send className="mr-1 inline" size={16} />
-                        Submit observation for review
+                        提交现场观察以供审核
                       </h4>
                       <TextArea
-                        aria-label="Observation content"
+                        aria-label="观察内容"
                         value={clueDraft.content}
                         maxLength={4000}
                         rows={3}
-                        placeholder="Only describe what you observed; it remains pending until human review."
+                        placeholder="请只描述亲眼观察到的内容；提交后将等待人工审核。"
                         onChange={(event) =>
                           setClueDrafts((value) => ({
                             ...value,
@@ -713,10 +727,10 @@ export function VolunteerWorkspacePage() {
                         fullWidth
                       />
                       <Input
-                        aria-label="Observation location"
+                        aria-label="观察地点"
                         value={clueDraft.location}
                         maxLength={500}
-                        placeholder="Optional location description"
+                        placeholder="可选：地点文字说明"
                         onChange={(event) =>
                           setClueDrafts((value) => ({
                             ...value,
@@ -738,22 +752,21 @@ export function VolunteerWorkspacePage() {
                           ) || !clueDraft.content.trim()
                         }
                       >
-                        Submit for review
+                        提交审核
                       </Button>
                     </form>
                   </section>
                   <section>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      Nearby resources
+                      附近资源
                     </h3>
                     <p className="mb-0 mt-1 text-xs text-slate-600">
-                      The server chooses an authorized center from a task area
-                      or confirmed public place; it does not accept a
-                      browser-provided center.
+                      服务端会根据任务区域或已确认的公开地点选择授权中心；
+                      不会使用浏览器提供的位置作为检索中心。
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <select
-                        aria-label="Nearby resource category"
+                        aria-label="附近资源类别"
                         className="min-h-9 rounded-md border border-slate-300 bg-white px-2 text-sm"
                         value={category}
                         onChange={(event) =>
@@ -763,12 +776,12 @@ export function VolunteerWorkspacePage() {
                           }))
                         }
                       >
-                        <option value="hospital">Hospital</option>
-                        <option value="police">Police</option>
-                        <option value="transit">Transit</option>
-                        <option value="market">Market</option>
+                        <option value="hospital">医院</option>
+                        <option value="police">公安机关</option>
+                        <option value="transit">交通站点</option>
+                        <option value="market">市场</option>
                         <option value="community_service">
-                          Community service
+                          社区服务
                         </option>
                       </select>
                       <Button
@@ -792,18 +805,18 @@ export function VolunteerWorkspacePage() {
                                   [workspace.detail.id]: result,
                                 }));
                               },
-                              "Nearby resources loaded.",
+                              "附近资源已加载。",
                             );
                         }}
                       >
                         <Search size={16} />
-                        Search nearby
+                        搜索附近资源
                       </Button>
                     </div>
                     {pois[workspace.detail.id] && (
                       <div className="mt-3 rounded-md border border-slate-200 p-3 text-sm text-slate-700">
                         <p className="m-0 text-xs text-slate-500">
-                          Source: {pois[workspace.detail.id].source}
+                          数据来源：{poiSourceLabel(pois[workspace.detail.id].source)}
                           {pois[workspace.detail.id].fallback_message
                             ? ` · ${pois[workspace.detail.id].fallback_message}`
                             : ""}
@@ -822,12 +835,12 @@ export function VolunteerWorkspacePage() {
                 </div>
                 <section className="mt-5 border-t border-slate-200 pt-5">
                   <h3 className="m-0 text-base font-semibold text-slate-950">
-                    My collaboration tasks
+                    我的协作任务
                   </h3>
                   <div className="mt-3 grid gap-3 xl:grid-cols-2">
                     {assignedTasks.length === 0 ? (
                       <p className="mb-0 text-sm text-slate-500">
-                        You have not joined a task yet.
+                        你尚未参与任何任务。
                       </p>
                     ) : (
                       assignedTasks.map((task) => renderTask(task, true))
@@ -836,16 +849,15 @@ export function VolunteerWorkspacePage() {
                 </section>
                 <section className="mt-5 border-t border-slate-200 pt-5">
                   <h3 className="m-0 text-base font-semibold text-slate-950">
-                    Open tasks
+                    开放任务
                   </h3>
                   <p className="mb-0 mt-1 text-xs text-slate-600">
-                    These standing or field tasks are awaiting volunteer
-                    applications and commander approval.
+                    这些常设或现场任务正在等待志愿者申请和指挥人员审核。
                   </p>
                   <div className="mt-3 grid gap-3 xl:grid-cols-2">
                     {openTasks.length === 0 ? (
                       <p className="mb-0 text-sm text-slate-500">
-                        No open tasks at the moment.
+                        当前暂无开放任务。
                       </p>
                     ) : (
                       openTasks.map((task) => renderTask(task, false))

@@ -116,6 +116,12 @@ const statusLabels: Record<string, string> = {
   insufficient_information: "信息不足",
 };
 
+const caseRoleLabels: Record<CaseRole, string> = {
+  family: "家属",
+  commander: "指挥人员",
+  volunteer: "志愿者",
+};
+
 const placeTypeLabels: Record<string, string> = {
   frequent: "常去地点",
   key_location: "关键地点",
@@ -604,7 +610,7 @@ function CaseDetailView({
             </span>
           </div>
           <span className="text-xs text-slate-500">
-            权限：{detail.access_role}
+            权限：{caseRoleLabels[detail.access_role]}
           </span>
         </div>
       </header>
