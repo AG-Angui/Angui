@@ -644,15 +644,18 @@ async fn authorized_center(
             latitude: task.latitude.ok_or(ApiError::Internal)?,
         });
     }
-    if role == CaseRole::Commander
-        && let Some(place) = case_places::Entity::find()
-            .filter(case_places::Column::CaseId.eq(case_id))
-            .filter(case_places::Column::ReviewStatus.eq("confirmed"))
-            .filter(case_places::Column::Longitude.is_not_null())
-            .filter(case_places::Column::Latitude.is_not_null())
-            .order_by_desc(case_places::Column::UpdatedAt)
-            .one(db)
-            .await?
+    let mut places = case_places::Entity::find()
+        .filter(case_places::Column::CaseId.eq(case_id))
+        .filter(case_places::Column::ReviewStatus.eq("confirmed"))
+        .filter(case_places::Column::Longitude.is_not_null())
+        .filter(case_places::Column::Latitude.is_not_null());
+    if role == CaseRole::Volunteer {
+        places = places.filter(case_places::Column::Visibility.eq("public"));
+    }
+    if let Some(place) = places
+        .order_by_desc(case_places::Column::UpdatedAt)
+        .one(db)
+        .await?
     {
         return Ok(Coordinate {
             longitude: place.longitude.ok_or(ApiError::Internal)?,

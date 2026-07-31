@@ -93,7 +93,7 @@ Authorization: Bearer angui_<session-token>
 - `member`：正常业务账号类型。可创建案件；创建者在新案件中获得 `family` 角色。只有被显式加入案件后才能读取或操作该案件。
 - `learner`：长期学习账号类型；当前可登录并恢复会话，但不能创建或加入案件，学习与考核能力将在后续平台提供。
 - `commander`：可叠加的全局能力。持有者可被显式授予某案件的 `commander` 角色；该案件角色才允许查看全部线索、审核线索、改变案件状态和添加成员。
-- `volunteer`：可叠加的全局能力。持有者可被指挥显式授予某案件的 `volunteer` 角色；该案件角色只能查看已确认线索，老人资料中的健康注意字段由服务端删除。
+- `volunteer`：可叠加的全局能力。持有者可被指挥显式授予某案件的 `volunteer` 角色；该案件角色可在同一授权范围内查看健康备注与家属联系邮箱，以及已确认线索和自己的待审核线索；不返回其他志愿者的精确位置或他人待审核线索。
 - `admin`：可叠加的全局能力，不自动获得业务案件访问权，也不绕过案件成员关系。
 
 无案件成员关系时，详情和操作接口返回 `404`，不会通过 `403` 暴露案件 ID 是否真实存在。角色已经是案件成员但动作不允许时返回 `403`。
@@ -222,6 +222,19 @@ Example:
 `GET /api/cases/{case_id}/summary` 提供不依赖外部 AI 的确定性案件摘要。响应的 `generated_at` 和 `source_scope` 说明生成时间与当前角色可用的数据范围。只有人工审核为 `confirmed` 的线索才会进入 `last_confirmed_information` 与 `confirmed_clues`；`pending_review` 和 `needs_verification` 始终保留在 `pending_verification`，不会被表述为确认事实。指挥可见待核实事项、已排除方向、未完成任务形成的当前重点和全部任务状态；家属不接收任务或内部搜索方向；志愿者只接收本人任务的执行与安全信息。
 
 `POST /api/tasks/{task_id}/feedback` 仅允许该任务受领志愿者在任务和案件均为 `active` 时提交。服务端将反馈与可选的本人上传附件写成关联任务的 `pending_review` 线索，并写入审计；反馈不会确认线索、改变案件事实或推进任务状态。
+
+`POST /api/tasks/{task_id}/location-reports` 与 `POST /api/tasks/{task_id}/feedback` 都必须提供 UUID 格式的 `Idempotency-Key` 请求头。客户端为一次逻辑提交生成一个键，并在超时、断网等重试时复用该键；服务端会返回第一次成功提交的回执，不会重复写入位置、线索或审计事件。幂等键与规范化后的请求内容绑定：用同一键提交不同内容会返回 `409`，不会静默丢弃新的提交。
+
+## 志愿者任务协作
+
+志愿者只要已作为案件 `volunteer` 成员加入案件，即可通过 `GET /api/cases`、`GET /api/cases/{case_id}`、`GET /api/cases/{case_id}/summary` 与 `GET /api/cases/{case_id}/tasks` 进入协作工作区；不再以“是否已有个人任务”为案件可见性的前提。工作区包含经该角色授权的案件摘要、线索、健康备注与家属联系邮箱；后两者仅在请求者已被显式授予该案件 `volunteer` 角色时一并返回。它不包含其他志愿者的精确位置。
+志愿者可看到已确认线索和自己提交但仍待人工审核的线索；其他成员的待审核线索不会暴露。志愿者调用 `GET /api/cases/{case_id}/pois` 时，服务端仅从该角色可见的任务坐标或已确认的公开地点选择中心，客户端不能提供或覆盖中心坐标。
+
+任务不再是单人独占：`POST /api/cases/{case_id}/tasks` 可以使用 `volunteer_user_ids` 指定一个或多个已授权的案件志愿者（旧 `volunteer_user_id` 保持兼容）。每位受领者都是同一任务协作空间的成员；成员可以独立推进允许的任务状态、提交反馈和位置报告，任一成员完成任务会更新该共享任务状态。指挥仍可取消未结束任务，但不会因取消而需要成为任务成员。如果两个志愿者字段都未提供（或 `volunteer_user_ids` 为空），则会创建 `pending_claim` 的开放/常驻任务；案件志愿者可申请加入，指挥批准首位申请者后任务转为 `assigned`。
+
+未获分配的案件志愿者可以调用 `POST /api/tasks/{task_id}/applications` 申请加入未结束任务，可选 `note` 最长 2000 字符。该操作只创建 `pending` 申请，不授予导航、安全说明、反馈、位置或协作位置权限。案件指挥或平台管理员用 `GET /api/tasks/{task_id}/applications` 查看申请，并用 `PATCH /api/tasks/{task_id}/applications/{application_id}` 以 `{ "action": "approve" }` 或 `{ "action": "reject" }` 审核。批准与新增任务成员关系在同一事务中完成，不会替换原有成员；重复或已经审核的申请返回 `409`。
+
+`GET /api/tasks/{task_id}/collaboration-locations` 只向该任务的已分配志愿者和该案件指挥返回每位协作成员最新、未过期的位置报告，包含协作者 ID、经纬度、精度和采集时间。它绝不返回其他任务的位置；案件中的其他志愿者、家属和非成员均不能访问。位置报告仍仅支持手动 `simulated` 数据，24 小时到期清理，并沿用 `Idempotency-Key` 的重试语义。
 
 `GET /api/tasks/{task_id}/safety-briefing` 和 `GET /api/tasks/{task_id}/navigation` 仅允许该任务受领志愿者与案件指挥访问。安全提示是规则化的辅助信息，不是现场强制指令；即使实时天气等外部条件不可用，也会返回人工规则和紧急停止提示。导航接口只返回已授权任务区域的文字路线摘要；现有任务坐标没有坐标系声明时，服务端不会生成可能偏移的第三方导航链接。家属、其他志愿者和非成员不会获取这些内容。
 

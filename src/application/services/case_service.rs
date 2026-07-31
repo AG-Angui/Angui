@@ -970,9 +970,17 @@ async fn load_case_detail(
         })
         .collect();
 
-    let mut profile_response: ElderProfileResponse = profile.into();
-    if case_role == CaseRole::Volunteer {
-        profile_response.health_notes = None;
+    let profile_response: ElderProfileResponse = profile.into();
+    let family_members = case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(&membership.case_id))
+        .filter(case_memberships::Column::Role.eq(CaseRole::Family.to_string()))
+        .all(db)
+        .await?;
+    let mut family_contact_emails = Vec::with_capacity(family_members.len());
+    for member in family_members {
+        if let Some(user) = users::Entity::find_by_id(member.user_id).one(db).await? {
+            family_contact_emails.push(user.email);
+        }
     }
 
     let (places, attachments) = futures_util::try_join!(
@@ -997,6 +1005,7 @@ async fn load_case_detail(
         places,
         attachments,
         case_role,
+        family_contact_emails,
     ))
 }
 
@@ -1050,7 +1059,7 @@ fn visible_clue_response(
     let visible = match case_role {
         CaseRole::Commander => true,
         CaseRole::Family => clue.status == "confirmed" || own,
-        CaseRole::Volunteer => clue.status == "confirmed",
+        CaseRole::Volunteer => clue.status == "confirmed" || own,
     };
     let can_see_attachment_references = case_role == CaseRole::Commander || own;
     visible.then(|| {
@@ -1571,7 +1580,7 @@ mod tests {
         assert_eq!(family_view.clues.len(), 1);
         let volunteer_view = get_case(&database, &volunteer, &case.id).await.unwrap();
         assert!(volunteer_view.clues.is_empty());
-        assert!(volunteer_view.elder_profile.health_notes.is_none());
+        assert!(volunteer_view.elder_profile.health_notes.is_some());
 
         let family_review = review_clue(
             &database,

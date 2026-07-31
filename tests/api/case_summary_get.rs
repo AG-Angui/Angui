@@ -146,8 +146,14 @@ async fn get_case_summary_classifies_review_states_and_crops_each_role() {
     )
     .await;
     assert_eq!(volunteer["access_role"], "volunteer");
-    assert!(volunteer["last_confirmed_information"].is_null());
-    assert_eq!(volunteer["confirmed_clues"], json!([]));
+    assert_eq!(
+        volunteer["last_confirmed_information"]["clue_id"],
+        latest_confirmed_id
+    );
+    assert_eq!(
+        volunteer["confirmed_clues"].as_array().map(Vec::len),
+        Some(2)
+    );
     assert_eq!(volunteer["pending_verification"], json!([]));
     assert_eq!(volunteer["excluded_directions"], json!([]));
     assert_eq!(volunteer["current_focus"], json!([]));
@@ -158,7 +164,7 @@ async fn get_case_summary_classifies_review_states_and_crops_each_role() {
             .as_array()
             .expect("source scope")
             .iter()
-            .all(|scope| scope == "own_assigned_tasks")
+            .any(|scope| scope == "confirmed_clues")
     );
 
     let hidden = test::call_service(&app, request_for(context.token(LEARNER).await)).await;

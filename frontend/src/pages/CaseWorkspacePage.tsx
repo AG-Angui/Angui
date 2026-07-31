@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addCaseMember,
   acceptCommandCase,
+  applyForTask,
   createCasePlace,
   createClueDraft,
   createCaseTask,
@@ -69,7 +70,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/ContentState
 import { FamilyIntakeForm } from './FamilyIntakeForm'
 
 type WorkspaceMode = 'family' | 'commander' | 'volunteer'
-type ReviewDraft = { reason: string; relatedClueId: string }
+type ReviewDraft = { reason: string; relatedClueId: string; relatedClueQuery: string }
 type ClueQueueFilters = {
   status: ClueStatus | ''
   sourceType: ClueSourceType | ''
@@ -591,10 +592,16 @@ function CaseDetailView({
               {isCommander && clue.status === 'pending_review' && (
                 <div className="mt-3 grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-3">
                   <Field label="审核理由（每次确认、排除、降级或合并必填）" required>
-                    <TextArea aria-label="审核理由" value={reviewDrafts[clue.id]?.reason ?? ''} maxLength={1000} rows={2} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: event.target.value, relatedClueId: current[clue.id]?.relatedClueId ?? '' } }))} fullWidth required />
+                    <TextArea aria-label="审核理由" value={reviewDrafts[clue.id]?.reason ?? ''} maxLength={1000} rows={2} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: event.target.value, relatedClueId: current[clue.id]?.relatedClueId ?? '', relatedClueQuery: current[clue.id]?.relatedClueQuery ?? '' } }))} fullWidth required />
                   </Field>
-                  <Field label="关联线索 ID（重复或冲突时必填）">
-                    <Input value={reviewDrafts[clue.id]?.relatedClueId ?? ''} maxLength={36} onChange={(event) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: current[clue.id]?.reason ?? '', relatedClueId: event.target.value } }))} placeholder="选择重复/冲突关系时填写" fullWidth />
+                  <Field label="关联线索（重复或冲突时必选）">
+                    <RelatedCluePicker
+                      clueId={clue.id}
+                      candidates={detail.clues}
+                      selectedId={reviewDrafts[clue.id]?.relatedClueId ?? ''}
+                      query={reviewDrafts[clue.id]?.relatedClueQuery ?? ''}
+                      onChange={(relatedClueId, relatedClueQuery) => setReviewDrafts((current) => ({ ...current, [clue.id]: { reason: current[clue.id]?.reason ?? '', relatedClueId, relatedClueQuery } }))}
+                    />
                   </Field>
                   <p className="m-0 text-xs leading-5 text-amber-900">审核只会由指挥端提交。每条线索各自保存审核草稿，成功审核后会清空该条草稿。</p>
                   <div className="flex flex-wrap gap-2">
@@ -749,8 +756,16 @@ function CaseDetailView({
   )
 }
 
-const taskStatusLabels: Record<string, string> = { assigned: '待领取', accepted: '已接受', active: '进行中', blocked: '受阻', completed: '已完成', cancelled: '已取消' }
-const emptyTask = (): CreateTaskPayload => ({ source_clue_id: '', volunteer_user_id: '', title: '', objective: '', area_text: '', latitude: null, longitude: null, due_at: '', background: '', risk_level: 'low', risk_notes: '', safety_briefing: '', expected_feedback: '' })
+const taskStatusLabels: Record<string, string> = {
+  pending_claim: '待志愿者申请',
+  assigned: '待领取',
+  accepted: '已接受',
+  active: '进行中',
+  blocked: '受阻',
+  completed: '已完成',
+  cancelled: '已取消',
+}
+const emptyTask = (): CreateTaskPayload => ({ source_clue_id: '', volunteer_user_id: undefined, title: '', objective: '', area_text: '', latitude: null, longitude: null, due_at: '', background: '', risk_level: 'low', risk_notes: '', safety_briefing: '', expected_feedback: '' })
 
 function TaskBoard({ detail, token }: { detail: CaseDetail; token: string | null }) {
   const [tasks, setTasks] = useState<CaseTask[]>([])
@@ -758,6 +773,7 @@ function TaskBoard({ detail, token }: { detail: CaseDetail; token: string | null
   const [draft, setDraft] = useState<CreateTaskPayload>(emptyTask)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState('')
   const [feedback, setFeedback] = useState<Record<string, string>>({})
   const isCommander = detail.access_role === 'commander'
@@ -772,10 +788,16 @@ function TaskBoard({ detail, token }: { detail: CaseDetail; token: string | null
   useEffect(() => { setDraft(emptyTask()); void load() }, [detail.id, load])
   const volunteers = members.filter((member) => member.case_role === 'volunteer')
   const confirmedClues = detail.clues.filter((clue) => clue.status === 'confirmed')
+  const createsOpenTask = !draft.volunteer_user_id
   async function changeStatus(taskId: string, status: 'accepted' | 'active' | 'blocked' | 'completed' | 'cancelled') {
     if (!token) return
     setBusy(taskId); setError('')
     try { await updateTaskStatus(token, taskId, status); await load() } catch (cause) { setError(messageFrom(cause)) } finally { setBusy('') }
+  }
+  async function applyToTask(taskId: string) {
+    if (!token) return
+    setBusy(taskId); setError(''); setNotice('')
+    try { await applyForTask(token, taskId); setNotice('申请已提交，等待指挥审核。'); await load() } catch (cause) { setError(messageFrom(cause)) } finally { setBusy('') }
   }
   async function sendFeedback(taskId: string) {
     const content = feedback[taskId]?.trim()
@@ -787,8 +809,9 @@ function TaskBoard({ detail, token }: { detail: CaseDetail; token: string | null
     <section className="border-b border-slate-200 px-5 py-5 sm:px-6" aria-label="任务看板">
       <div className="flex items-start justify-between gap-3"><div><h3 className="m-0 text-base font-bold text-slate-950">任务看板</h3><p className="mb-0 mt-1 text-xs leading-5 text-slate-600">任务只由指挥人工创建和分配；状态、人员与失败结果均以服务端返回为准。</p></div><Button size="sm" variant="ghost" isDisabled={loading} onPress={() => void load()}><RefreshCw size={16} />刷新任务</Button></div>
       {error && <div className="mt-3"><Message tone="error">{error}</Message></div>}
-      {loading ? <p className="mb-0 mt-3 text-sm text-slate-500">正在加载任务…</p> : tasks.length === 0 ? <p className="mb-0 mt-3 text-sm text-slate-500">当前没有你可查看的任务。</p> : <div className="mt-3 grid gap-3 lg:grid-cols-2">{tasks.map((task) => <article key={task.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center gap-2"><Chip size="sm" variant="soft"><Chip.Label>{taskStatusLabels[task.status]}</Chip.Label></Chip><Chip size="sm" variant="soft"><Chip.Label>{task.risk_level} 风险</Chip.Label></Chip></div><h4 className="mb-0 mt-3 text-sm font-semibold text-slate-950">{task.title}</h4><p className="mb-0 mt-1 text-sm text-slate-700">{task.objective}</p><p className="mb-0 mt-2 text-xs text-slate-500">区域：{task.area_text} · 截止：{formatDate(task.due_at) ?? '待补充'}</p><p className="mb-0 mt-1 text-xs text-slate-600">安全提示：{task.safety_briefing}</p>{detail.access_role === 'volunteer' && <><div className="mt-3 flex flex-wrap gap-2">{task.status === 'assigned' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'accepted')}>接受</Button>}{task.status === 'accepted' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'active')}>开始执行</Button>}{task.status === 'active' && <><Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'blocked')}>标记受阻</Button><Button size="sm" variant="primary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'completed')}>完成</Button></>}{task.status === 'blocked' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'active')}>继续执行</Button>}</div>{task.status === 'active' && <div className="mt-3"><TextArea aria-label={`${task.title} 任务反馈`} value={feedback[task.id] ?? ''} maxLength={4000} rows={2} placeholder="提交现场反馈；将进入人工审核，不会直接成为确认事实" onChange={(event) => setFeedback((current) => ({ ...current, [task.id]: event.target.value }))} fullWidth /><div className="mt-2 flex justify-end"><Button size="sm" variant="secondary" isDisabled={!feedback[task.id]?.trim() || busy === `feedback-${task.id}`} onPress={() => void sendFeedback(task.id)}>提交待审核反馈</Button></div></div>}</>}{isCommander && !['completed', 'cancelled'].includes(task.status) && <div className="mt-3"><Button size="sm" variant="ghost" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'cancelled')}>取消任务</Button></div>}</article>)}</div>}
-      {isCommander && detail.status !== 'closed' && <form className="mt-5 grid gap-3 border-t border-slate-200 pt-5 lg:grid-cols-2" onSubmit={(event) => { event.preventDefault(); if (!token) return; setBusy('create'); setError(''); createCaseTask(token, detail.id, draft).then(async () => { setDraft(emptyTask()); await load() }).catch((cause) => setError(messageFrom(cause))).finally(() => setBusy('')) }}><h4 className="m-0 text-sm font-semibold text-slate-950 lg:col-span-2">人工创建并分配任务</h4><Field label="关联的已确认线索" required><select required className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={draft.source_clue_id} onChange={(event) => setDraft({ ...draft, source_clue_id: event.target.value })}><option value="">请选择</option>{confirmedClues.map((clue) => <option key={clue.id} value={clue.id}>{clue.content.slice(0, 80)}</option>)}</select></Field><Field label="志愿者" required><select required className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={draft.volunteer_user_id} onChange={(event) => setDraft({ ...draft, volunteer_user_id: event.target.value })}><option value="">请选择</option>{volunteers.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}</select></Field><Field label="任务标题" required><Input required value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} fullWidth /></Field><Field label="任务区域" required><Input required value={draft.area_text} maxLength={500} onChange={(event) => setDraft({ ...draft, area_text: event.target.value })} fullWidth /></Field><Field label="目标" required><TextArea required value={draft.objective} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, objective: event.target.value })} fullWidth /></Field><Field label="截止时间" required><Input required type="datetime-local" value={draft.due_at} onChange={(event) => setDraft({ ...draft, due_at: event.target.value ? new Date(event.target.value).toISOString() : '' })} fullWidth /></Field><Field label="背景说明" required><TextArea required value={draft.background} maxLength={10000} rows={2} onChange={(event) => setDraft({ ...draft, background: event.target.value })} fullWidth /></Field><Field label="风险说明与安全提示" required><TextArea required value={draft.risk_notes} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, risk_notes: event.target.value, safety_briefing: draft.safety_briefing || event.target.value })} fullWidth /></Field><Field label="预期反馈" required><TextArea required value={draft.expected_feedback} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, expected_feedback: event.target.value })} fullWidth /></Field><div className="flex items-end"><Button type="submit" size="sm" variant="primary" isDisabled={busy === 'create' || confirmedClues.length === 0 || volunteers.length === 0}>创建并分配</Button></div></form>}
+      {notice && <div className="mt-3"><Message tone="success">{notice}</Message></div>}
+      {loading ? <p className="mb-0 mt-3 text-sm text-slate-500">正在加载任务…</p> : tasks.length === 0 ? <p className="mb-0 mt-3 text-sm text-slate-500">当前没有你可查看的任务。</p> : <div className="mt-3 grid gap-3 lg:grid-cols-2">{tasks.map((task) => <article key={task.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center gap-2"><Chip size="sm" variant="soft"><Chip.Label>{taskStatusLabels[task.status] ?? task.status}</Chip.Label></Chip><Chip size="sm" variant="soft"><Chip.Label>{task.risk_level} 风险</Chip.Label></Chip></div><h4 className="mb-0 mt-3 text-sm font-semibold text-slate-950">{task.title}</h4><p className="mb-0 mt-1 text-sm text-slate-700">{task.objective}</p><p className="mb-0 mt-2 text-xs text-slate-500">区域：{task.area_text} · 截止：{formatDate(task.due_at) ?? '待补充'}</p><p className="mb-0 mt-1 text-xs text-slate-600">安全提示：{task.safety_briefing}</p>{detail.access_role === 'volunteer' && <><div className="mt-3 flex flex-wrap gap-2">{task.status === 'pending_claim' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void applyToTask(task.id)}>申请协作</Button>}{task.status === 'assigned' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'accepted')}>接受</Button>}{task.status === 'accepted' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'active')}>开始执行</Button>}{task.status === 'active' && <><Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'blocked')}>标记受阻</Button><Button size="sm" variant="primary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'completed')}>完成</Button></>}{task.status === 'blocked' && <Button size="sm" variant="secondary" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'active')}>继续执行</Button>}</div>{task.status === 'active' && <div className="mt-3"><TextArea aria-label={`${task.title} 任务反馈`} value={feedback[task.id] ?? ''} maxLength={4000} rows={2} placeholder="提交现场反馈；将进入人工审核，不会直接成为确认事实" onChange={(event) => setFeedback((current) => ({ ...current, [task.id]: event.target.value }))} fullWidth /><div className="mt-2 flex justify-end"><Button size="sm" variant="secondary" isDisabled={!feedback[task.id]?.trim() || busy === `feedback-${task.id}`} onPress={() => void sendFeedback(task.id)}>提交待审核反馈</Button></div></div>}</>}{isCommander && !['completed', 'cancelled'].includes(task.status) && <div className="mt-3"><Button size="sm" variant="ghost" isDisabled={busy === task.id} onPress={() => void changeStatus(task.id, 'cancelled')}>取消任务</Button></div>}</article>)}</div>}
+      {isCommander && detail.status !== 'closed' && <form className="mt-5 grid gap-3 border-t border-slate-200 pt-5 lg:grid-cols-2" onSubmit={(event) => { event.preventDefault(); if (!token) return; setBusy('create'); setError(''); createCaseTask(token, detail.id, draft).then(async () => { setDraft(emptyTask()); await load() }).catch((cause) => setError(messageFrom(cause))).finally(() => setBusy('')) }}><h4 className="m-0 text-sm font-semibold text-slate-950 lg:col-span-2">{createsOpenTask ? '创建开放任务' : '人工创建并分配任务'}</h4><Field label="关联的已确认线索" required><select required className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={draft.source_clue_id} onChange={(event) => setDraft({ ...draft, source_clue_id: event.target.value })}><option value="">请选择</option>{confirmedClues.map((clue) => <option key={clue.id} value={clue.id}>{clue.content.slice(0, 80)}</option>)}</select></Field><Field label="志愿者"><select className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" value={draft.volunteer_user_id ?? ''} onChange={(event) => setDraft({ ...draft, volunteer_user_id: event.target.value || undefined })}><option value="">开放任务：等待志愿者申请</option>{volunteers.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}</select></Field><Field label="任务标题" required><Input required value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} fullWidth /></Field><Field label="任务区域" required><Input required value={draft.area_text} maxLength={500} onChange={(event) => setDraft({ ...draft, area_text: event.target.value })} fullWidth /></Field><Field label="目标" required><TextArea required value={draft.objective} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, objective: event.target.value })} fullWidth /></Field><Field label="截止时间" required><Input required type="datetime-local" value={toDateTimeLocal(draft.due_at)} onChange={(event) => setDraft({ ...draft, due_at: event.target.value ? new Date(event.target.value).toISOString() : '' })} fullWidth /></Field><Field label="背景说明" required><TextArea required value={draft.background} maxLength={10000} rows={2} onChange={(event) => setDraft({ ...draft, background: event.target.value })} fullWidth /></Field><Field label="风险说明与安全提示" required><TextArea required value={draft.risk_notes} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, risk_notes: event.target.value, safety_briefing: draft.safety_briefing || event.target.value })} fullWidth /></Field><Field label="预期反馈" required><TextArea required value={draft.expected_feedback} maxLength={4000} rows={2} onChange={(event) => setDraft({ ...draft, expected_feedback: event.target.value })} fullWidth /></Field><div className="flex items-end"><Button type="submit" size="sm" variant="primary" isDisabled={busy === 'create' || confirmedClues.length === 0}>{createsOpenTask ? '创建并等待志愿者申请' : '创建并分配'}</Button></div></form>}
     </section>
   )
 }
@@ -1127,6 +1150,58 @@ function ReviewButton({
   )
 }
 
+function RelatedCluePicker({
+  clueId,
+  candidates,
+  selectedId,
+  query,
+  onChange,
+}: {
+  clueId: string
+  candidates: Clue[]
+  selectedId: string
+  query: string
+  onChange: (relatedClueId: string, relatedClueQuery: string) => void
+}) {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const options = candidates.filter((candidate) => {
+    if (candidate.id === clueId) return false
+    if (candidate.id === selectedId || !normalizedQuery) return true
+    return [candidate.content, candidate.status, candidate.location_text, candidate.reported_at]
+      .filter((value): value is string => Boolean(value))
+      .join(' ')
+      .toLocaleLowerCase()
+      .includes(normalizedQuery)
+  })
+
+  return <div className="grid gap-2">
+    <Input
+      aria-label="搜索关联线索"
+      value={query}
+      maxLength={200}
+      placeholder="按线索内容、状态、地点或时间筛选"
+      onChange={(event) => onChange(selectedId, event.target.value)}
+      fullWidth
+    />
+    <select
+      aria-label="选择关联线索"
+      className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+      value={selectedId}
+      onChange={(event) => onChange(event.target.value, query)}
+    >
+      <option value="">请选择关联线索</option>
+      {options.map((candidate) => <option key={candidate.id} value={candidate.id}>{clueOptionLabel(candidate)}</option>)}
+    </select>
+    <p className="m-0 text-xs leading-5 text-slate-600">{options.length === 0 ? '没有匹配的案件线索。' : `显示 ${options.length} 条可选线索；不会提交或显示 UUID。`}</p>
+  </div>
+}
+
+function clueOptionLabel(clue: Clue) {
+  const excerpt = clue.content.replace(/\s+/g, ' ').slice(0, 80)
+  const location = clue.location_text ? ` · ${clue.location_text}` : ''
+  return `${statusLabels[clue.status] ?? clue.status} · ${formatDate(clue.reported_at) ?? '时间未知'} · ${excerpt}${location}`
+}
+
 function ElderProfileEditor({ detail, token, busy, onSave }: { detail: CaseDetail; token: string | null; busy: string; onSave: (payload: import('../api/cases').UpdateElderProfilePayload) => Promise<boolean> }) {
   const [ageError, setAgeError] = useState('')
   const [draft, setDraft] = useState({
@@ -1215,6 +1290,14 @@ function formatDate(value: string | null): string | null {
   if (!value) return null
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function toDateTimeLocal(value: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
 function formatBytes(value: number): string {

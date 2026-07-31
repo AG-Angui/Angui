@@ -2,7 +2,7 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::support::{COMMANDER, FAMILY, TestContext, VOLUNTEER, assert_error};
 
@@ -32,6 +32,23 @@ async fn get_case_applies_membership_and_role_based_field_and_clue_cuts() {
         .await;
     context.create_clue(&case_id, FAMILY).await;
 
+    let own_clue = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
+            .set_json(json!({
+                "source": "volunteer",
+                "source_type": "field_report",
+                "content": "Volunteer observation pending review",
+                "occurred_at": "2026-07-13T09:10:00Z",
+                "location_text": "North gate"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(own_clue.status(), StatusCode::CREATED);
+
     let family = test::call_service(
         &app,
         test::TestRequest::get()
@@ -54,6 +71,8 @@ async fn get_case_applies_membership_and_role_based_field_and_clue_cuts() {
     .await;
     let volunteer_body: Value = test::read_body_json(volunteer).await;
     assert_eq!(volunteer_body["access_role"], "volunteer");
-    assert!(volunteer_body["elder_profile"]["health_notes"].is_null());
-    assert_eq!(volunteer_body["clues"].as_array().map(Vec::len), Some(0));
+    assert!(volunteer_body["elder_profile"]["health_notes"].is_string());
+    assert!(volunteer_body["family_contact_emails"].is_array());
+    assert_eq!(volunteer_body["clues"].as_array().map(Vec::len), Some(1));
+    assert_eq!(volunteer_body["clues"][0]["is_own_submission"], true);
 }

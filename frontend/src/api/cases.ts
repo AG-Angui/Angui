@@ -86,6 +86,7 @@ export interface CaseDetail {
   case_code: string
   status: CaseStatus
   access_role: CaseRole
+  family_contact_emails?: string[]
   elder_profile: ElderProfile
   clues: Clue[]
   places: CasePlace[]
@@ -221,10 +222,16 @@ export interface CommandIntakeCase { id: string; case_code: string; created_at: 
 export interface CaseMapView { items: CaseMapItem[] }
 export interface CaseSummaryClue { clue_id: string; content: string; occurred_at: string | null; location_text: string | null; review_status: string }
 export interface CaseSummary { case_id: string; access_role: CaseRole; generated_at: string; source_scope: string[]; last_confirmed_information: CaseSummaryClue | null; confirmed_clues: CaseSummaryClue[]; pending_verification: CaseSummaryClue[]; excluded_directions: CaseSummaryClue[]; current_focus: Array<{ label: string; detail: string }>; task_status: Array<{ task_id: string; title: string; status: string; due_at: string }>; safety_reminders: string[] }
-export type TaskStatus = 'assigned' | 'accepted' | 'active' | 'blocked' | 'completed' | 'cancelled'
-export interface CaseTask { id: string; case_id: string; source_clue_id: string | null; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string | null; risk_level: string; risk_notes: string; safety_briefing: string; expected_feedback: string; status: TaskStatus; result_summary: string | null; assigned_volunteer_user_id: string | null; assigned_at: string | null; created_at: string; updated_at: string }
+export type TaskStatus = 'pending_claim' | 'assigned' | 'accepted' | 'active' | 'blocked' | 'completed' | 'cancelled'
+export interface TaskCollaborator { volunteer_user_id: string; assigned_by_user_id: string; assigned_at: string }
+export interface CaseTask { id: string; case_id: string; source_clue_id: string | null; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string | null; risk_level: string; risk_notes: string; safety_briefing: string; expected_feedback: string; status: TaskStatus; result_summary: string | null; assigned_volunteer_user_id: string | null; assigned_at: string | null; collaborators: TaskCollaborator[]; created_at: string; updated_at: string }
+export interface TaskApplication { id: string; task_id: string; volunteer_user_id: string; status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; note: string | null; reviewed_by_user_id: string | null; reviewed_at: string | null; review_reason: string | null; created_at: string; updated_at: string }
+export interface TaskCollaborationLocation { volunteer_user_id: string; latitude: number; longitude: number; accuracy_meters: number; captured_at: string }
 export interface TaskListPage { items: CaseTask[]; page: number; page_size: number; total: number }
-export interface CreateTaskPayload { source_clue_id: string; volunteer_user_id: string; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string; risk_level: 'low' | 'medium' | 'high'; risk_notes: string; safety_briefing: string; expected_feedback: string }
+export interface CreateTaskPayload { source_clue_id: string; volunteer_user_id?: string; volunteer_user_ids?: string[]; title: string; objective: string; area_text: string; latitude: number | null; longitude: number | null; due_at: string; background: string; risk_level: 'low' | 'medium' | 'high'; risk_notes: string; safety_briefing: string; expected_feedback: string }
+export interface TaskNavigation { task_id: string; area_text: string; navigation_url: string | null; route_summary: string; source: string; degradation_status: string; fallback_message: string | null; updated_at: string }
+export interface TaskSafetyBriefing { task_id: string; risk_level: string; notices: string[]; emergency_stop_message: string; source: string; degradation_status: string; updated_at: string }
+export interface TaskLocationReportReceipt { id: string; source: string; captured_at: string; retention_expires_at: string; created_at: string }
 
 export function listCases(token: string): Promise<CaseListItem[]> {
   return apiRequest<CaseListItem[]>('/cases', {}, token)
@@ -295,8 +302,40 @@ export function updateTaskStatus(token: string, taskId: string, status: TaskStat
   return apiRequest<CaseTask>(`/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, token)
 }
 
-export function submitTaskFeedback(token: string, taskId: string, payload: { content: string; occurred_at: string | null; location_text: string | null; location_precision: LocationPrecision | null }): Promise<{ task_id: string; clue_id: string; status: 'pending_review'; submitted_at: string }> {
-  return apiRequest(`/tasks/${taskId}/feedback`, { method: 'POST', body: JSON.stringify(payload) }, token)
+export function listMyTasks(token: string): Promise<CaseTask[]> {
+  return apiRequest<CaseTask[]>('/tasks/mine', {}, token)
+}
+
+export function applyForTask(token: string, taskId: string, note?: string): Promise<TaskApplication> {
+  return apiRequest<TaskApplication>(`/tasks/${taskId}/applications`, { method: 'POST', body: JSON.stringify(note?.trim() ? { note: note.trim() } : {}) }, token)
+}
+
+export function listTaskApplications(token: string, taskId: string): Promise<TaskApplication[]> {
+  return apiRequest<TaskApplication[]>(`/tasks/${taskId}/applications`, {}, token)
+}
+
+export function reviewTaskApplication(token: string, taskId: string, applicationId: string, action: 'approve' | 'reject', reason?: string): Promise<TaskApplication> {
+  return apiRequest<TaskApplication>(`/tasks/${taskId}/applications/${applicationId}`, { method: 'PATCH', body: JSON.stringify(reason?.trim() ? { action, reason: reason.trim() } : { action }) }, token)
+}
+
+export function listTaskCollaborationLocations(token: string, taskId: string): Promise<TaskCollaborationLocation[]> {
+  return apiRequest<TaskCollaborationLocation[]>(`/tasks/${taskId}/collaboration-locations`, {}, token)
+}
+
+export function getTaskNavigation(token: string, taskId: string): Promise<TaskNavigation> {
+  return apiRequest<TaskNavigation>(`/tasks/${taskId}/navigation`, {}, token)
+}
+
+export function getTaskSafetyBriefing(token: string, taskId: string): Promise<TaskSafetyBriefing> {
+  return apiRequest<TaskSafetyBriefing>(`/tasks/${taskId}/safety-briefing`, {}, token)
+}
+
+export function submitTaskLocationReport(token: string, taskId: string, payload: { source: 'simulated'; latitude: number; longitude: number; accuracy_meters: number; captured_at: string }, idempotencyKey = crypto.randomUUID()): Promise<TaskLocationReportReceipt> {
+  return apiRequest<TaskLocationReportReceipt>(`/tasks/${taskId}/location-reports`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload) }, token)
+}
+
+export function submitTaskFeedback(token: string, taskId: string, payload: { content: string; occurred_at: string | null; location_text: string | null; location_precision: LocationPrecision | null }, idempotencyKey = crypto.randomUUID()): Promise<{ task_id: string; clue_id: string; status: 'pending_review'; submitted_at: string }> {
+  return apiRequest(`/tasks/${taskId}/feedback`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload) }, token)
 }
 
 export function createClueDraft(token: string, caseId: string, payload: { text: string; source_type?: PublicClueSourceType; raw_record_reference?: string }): Promise<ClueDraft[]> {

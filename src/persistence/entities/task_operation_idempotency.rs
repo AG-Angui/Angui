@@ -1,15 +1,17 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "task_assignments")]
+#[sea_orm(table_name = "task_operation_idempotency")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    pub id: String,
     pub task_id: String,
-    #[sea_orm(primary_key, auto_increment = false)]
     pub volunteer_user_id: String,
-    pub assigned_by_user_id: String,
-    pub assigned_at: String,
-    pub updated_at: String,
+    pub operation: String,
+    pub idempotency_key: String,
+    pub request_fingerprint: String,
+    pub response_json: String,
+    pub created_at: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -22,11 +24,25 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Task,
+    #[sea_orm(
+        belongs_to = "super::users::Entity",
+        from = "Column::VolunteerUserId",
+        to = "super::users::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Restrict"
+    )]
+    Volunteer,
 }
 
 impl Related<super::tasks::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Task.def()
+    }
+}
+
+impl Related<super::users::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Volunteer.def()
     }
 }
 

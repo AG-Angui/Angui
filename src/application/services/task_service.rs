@@ -4,24 +4,27 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, Set, TransactionTrait, TryInsertResult,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::{
     entities::{
         case_attachments, case_memberships, cases, clue_attachment_links, clue_attributions, clues,
-        task_assignments, task_location_reports, tasks, user_global_capabilities, users,
+        task_applications, task_assignments, task_location_reports, task_operation_idempotency,
+        tasks, user_global_capabilities, users,
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateTaskRequest, SubmitTaskFeedbackRequest,
-        SubmitTaskLocationReportRequest, TaskFeedbackReceipt, TaskListQuery, TaskListResponse,
-        TaskLocationReportReceipt, TaskNavigationResponse, TaskResponse,
-        TaskSafetyBriefingResponse, UpdateTaskStatusRequest,
+        AuthenticatedUser, CreateTaskApplicationRequest, CreateTaskRequest,
+        ReviewTaskApplicationRequest, SubmitTaskFeedbackRequest, SubmitTaskLocationReportRequest,
+        TaskApplicationResponse, TaskCollaborationLocationResponse, TaskFeedbackReceipt,
+        TaskListQuery, TaskListResponse, TaskLocationReportReceipt, TaskNavigationResponse,
+        TaskResponse, TaskSafetyBriefingResponse, UpdateTaskStatusRequest,
     },
     roles::{CaseRole, GlobalCapability},
     services::case_service::{require_case_role, write_audit},
@@ -44,6 +47,8 @@ const MAX_LOCATION_REPORT_FUTURE_SKEW: Duration = Duration::minutes(5);
 const LOCATION_REPORT_RETENTION: Duration = Duration::hours(24);
 const LOCATION_REPORT_PURGE_INTERVAL: StdDuration = StdDuration::from_secs(60);
 const CLUE_LOCATION_PRECISIONS: &[&str] = &["exact", "approximate", "unknown"];
+const LOCATION_REPORT_OPERATION: &str = "location_report";
+const TASK_FEEDBACK_OPERATION: &str = "task_feedback";
 
 pub fn start_location_report_retention_purger(db: DatabaseConnection) {
     actix_web::rt::spawn(async move {
@@ -95,27 +100,8 @@ pub async fn create_task(
             )
         })?;
 
-    let volunteer_membership = case_memberships::Entity::find()
-        .filter(case_memberships::Column::CaseId.eq(case_id))
-        .filter(case_memberships::Column::UserId.eq(&request.volunteer_user_id))
-        .filter(case_memberships::Column::Role.eq(CaseRole::Volunteer.to_string()))
-        .one(&transaction)
-        .await?;
-    let volunteer_is_active = users::Entity::find_by_id(&request.volunteer_user_id)
-        .filter(users::Column::Status.eq("active"))
-        .one(&transaction)
-        .await?
-        .is_some();
-    let volunteer_is_authorized = user_global_capabilities::Entity::find()
-        .filter(user_global_capabilities::Column::UserId.eq(&request.volunteer_user_id))
-        .filter(user_global_capabilities::Column::Capability.eq("volunteer"))
-        .one(&transaction)
-        .await?
-        .is_some();
-    if volunteer_membership.is_none() || !volunteer_is_active || !volunteer_is_authorized {
-        return Err(ApiError::Validation(
-            "volunteer_user_id must reference an active volunteer in this case".to_owned(),
-        ));
+    for volunteer_user_id in &request.volunteer_user_ids {
+        ensure_active_case_volunteer(&transaction, case_id, volunteer_user_id).await?;
     }
 
     let timestamp = now();
@@ -135,7 +121,12 @@ pub async fn create_task(
         risk_notes: Set(request.risk_notes),
         safety_briefing: Set(request.safety_briefing),
         expected_feedback: Set(request.expected_feedback),
-        status: Set("assigned".to_owned()),
+        status: Set(if request.volunteer_user_ids.is_empty() {
+            "pending_claim"
+        } else {
+            "assigned"
+        }
+        .to_owned()),
         result_summary: Set(None),
         created_by_user_id: Set(auth.id.clone()),
         created_at: Set(timestamp.clone()),
@@ -143,15 +134,20 @@ pub async fn create_task(
     }
     .insert(&transaction)
     .await?;
-    let assignment = task_assignments::ActiveModel {
-        task_id: Set(task_id.clone()),
-        volunteer_user_id: Set(request.volunteer_user_id.clone()),
-        assigned_by_user_id: Set(auth.id.clone()),
-        assigned_at: Set(timestamp.clone()),
-        updated_at: Set(timestamp),
+    let mut assignments = Vec::with_capacity(request.volunteer_user_ids.len());
+    for volunteer_user_id in &request.volunteer_user_ids {
+        assignments.push(
+            task_assignments::ActiveModel {
+                task_id: Set(task_id.clone()),
+                volunteer_user_id: Set(volunteer_user_id.clone()),
+                assigned_by_user_id: Set(auth.id.clone()),
+                assigned_at: Set(timestamp.clone()),
+                updated_at: Set(timestamp.clone()),
+            }
+            .insert(&transaction)
+            .await?,
+        );
     }
-    .insert(&transaction)
-    .await?;
 
     write_audit(
         &transaction,
@@ -161,25 +157,27 @@ pub async fn create_task(
         "task",
         task_id.clone(),
         Some(json!({
-            "status": "assigned",
+            "status": task.status,
             "source_clue_id": task.source_clue_id,
             "risk_level": task.risk_level,
         })),
     )
     .await?;
-    write_audit(
-        &transaction,
-        Some(case_id.to_owned()),
-        auth,
-        "task.assigned",
-        "task",
-        task_id,
-        Some(json!({ "volunteer_user_id": assignment.volunteer_user_id })),
-    )
-    .await?;
+    for assignment in &assignments {
+        write_audit(
+            &transaction,
+            Some(case_id.to_owned()),
+            auth,
+            "task.assigned",
+            "task",
+            task_id.clone(),
+            Some(json!({ "volunteer_user_id": assignment.volunteer_user_id })),
+        )
+        .await?;
+    }
 
     transaction.commit().await?;
-    Ok(TaskResponse::new(task, Some(assignment), true))
+    Ok(TaskResponse::new(task, assignments, true))
 }
 
 pub async fn list_tasks(
@@ -232,15 +230,12 @@ async fn load_visible_tasks(
         assignments_for_tasks(db, task_models.iter().map(|task| task.id.clone())).await?;
     Ok(task_models
         .into_iter()
-        .filter(|task| {
-            case_role == CaseRole::Commander
-                || assignments
-                    .get(&task.id)
-                    .is_some_and(|assignment| assignment.volunteer_user_id == auth.id)
-        })
         .map(|task| {
-            let assignment = assignments.get(&task.id).cloned();
-            TaskResponse::new(task, assignment, case_role == CaseRole::Commander)
+            TaskResponse::new(
+                task.clone(),
+                assignments.get(&task.id).cloned().unwrap_or_default(),
+                case_role == CaseRole::Commander,
+            )
         })
         .collect())
 }
@@ -284,23 +279,28 @@ pub async fn list_my_tasks(
     if assignments.is_empty() {
         return Ok(Vec::new());
     }
-    let assignments = assignments
-        .into_iter()
-        .map(|assignment| (assignment.task_id.clone(), assignment))
-        .collect::<HashMap<_, _>>();
+    let task_ids = assignments
+        .iter()
+        .map(|assignment| assignment.task_id.clone())
+        .collect::<Vec<_>>();
     let task_models = tasks::Entity::find()
-        .filter(tasks::Column::Id.is_in(assignments.keys().cloned()))
+        .filter(tasks::Column::Id.is_in(task_ids))
         .order_by_asc(tasks::Column::DueAt)
         .order_by_asc(tasks::Column::Id)
         .all(db)
         .await?;
 
+    let assignments =
+        assignments_for_tasks(db, task_models.iter().map(|task| task.id.clone())).await?;
     Ok(task_models
         .into_iter()
         .filter(|task| volunteer_case_ids.contains(&task.case_id))
         .map(|task| {
-            let assignment = assignments.get(&task.id).cloned();
-            TaskResponse::new(task, assignment, false)
+            TaskResponse::new(
+                task.clone(),
+                assignments.get(&task.id).cloned().unwrap_or_default(),
+                false,
+            )
         })
         .collect())
 }
@@ -384,7 +384,9 @@ async fn load_task_for_assignee_or_commander(
         return Ok(task);
     }
     let is_assignee = role == CaseRole::Volunteer
-        && task_assignments::Entity::find_by_id(task_id)
+        && task_assignments::Entity::find()
+            .filter(task_assignments::Column::TaskId.eq(task_id))
+            .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
             .one(db)
             .await?
             .is_some_and(|assignment| assignment.volunteer_user_id == auth.id);
@@ -416,15 +418,6 @@ pub async fn update_task_status(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let assignment = task_assignments::Entity::find_by_id(task_id)
-        .one(&transaction)
-        .await?
-        .ok_or_else(|| {
-            ApiError::Database(sea_orm::DbErr::Custom(
-                "task is missing its required assignment".to_owned(),
-            ))
-        })?;
-
     if case_role == CaseRole::Commander {
         if next_status != "cancelled" || is_terminal_status(&task.status) {
             return Err(ApiError::Conflict(
@@ -432,7 +425,14 @@ pub async fn update_task_status(
             ));
         }
     } else {
-        if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
+        let is_assignee = case_role == CaseRole::Volunteer
+            && task_assignments::Entity::find()
+                .filter(task_assignments::Column::TaskId.eq(task_id))
+                .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
+                .one(&transaction)
+                .await?
+                .is_some();
+        if !is_assignee {
             return Err(ApiError::NotFound("task was not found".to_owned()));
         }
         if !volunteer_transition_allowed(&task.status, &next_status) {
@@ -472,9 +472,10 @@ pub async fn update_task_status(
     .await?;
     transaction.commit().await?;
 
+    let assignments = assignments_for_tasks(db, [updated.id.clone()]).await?;
     Ok(TaskResponse::new(
-        updated,
-        Some(assignment),
+        updated.clone(),
+        assignments.get(&updated.id).cloned().unwrap_or_default(),
         case_role == CaseRole::Commander,
     ))
 }
@@ -484,8 +485,15 @@ pub async fn submit_location_report(
     auth: &AuthenticatedUser,
     task_id: &str,
     request: SubmitTaskLocationReportRequest,
+    idempotency_key: &str,
 ) -> Result<TaskLocationReportReceipt, ApiError> {
     let request = ValidatedLocationReportRequest::try_from(request)?;
+    let request_fingerprint = request_fingerprint(&json!({
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+        "accuracy_meters": request.accuracy_meters,
+        "captured_at": format_timestamp(request.captured_at),
+    }))?;
     let transaction = db.begin().await?;
     let task = tasks::Entity::find_by_id(task_id)
         .one(&transaction)
@@ -498,16 +506,52 @@ pub async fn submit_location_report(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let assignment = task_assignments::Entity::find_by_id(task_id)
+    let is_assignee = task_assignments::Entity::find()
+        .filter(task_assignments::Column::TaskId.eq(task_id))
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
         .one(&transaction)
         .await?
-        .ok_or_else(|| {
-            ApiError::Database(sea_orm::DbErr::Custom(
-                "task is missing its required assignment".to_owned(),
-            ))
-        })?;
-    if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
+        .is_some();
+    if case_role != CaseRole::Volunteer || !is_assignee {
         return Err(ApiError::NotFound("task was not found".to_owned()));
+    }
+    if let Some(receipt) = existing_idempotent_receipt::<TaskLocationReportReceipt>(
+        &transaction,
+        task_id,
+        &auth.id,
+        LOCATION_REPORT_OPERATION,
+        idempotency_key,
+        &request_fingerprint,
+    )
+    .await?
+    {
+        transaction.commit().await?;
+        return Ok(receipt);
+    }
+    if !claim_idempotency_key(
+        &transaction,
+        task_id,
+        &auth.id,
+        LOCATION_REPORT_OPERATION,
+        idempotency_key,
+        &request_fingerprint,
+    )
+    .await?
+    {
+        let receipt = existing_idempotent_receipt::<TaskLocationReportReceipt>(
+            &transaction,
+            task_id,
+            &auth.id,
+            LOCATION_REPORT_OPERATION,
+            idempotency_key,
+            &request_fingerprint,
+        )
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict("a concurrent request is using this Idempotency-Key".to_owned())
+        })?;
+        transaction.commit().await?;
+        return Ok(receipt);
     }
     if task.status != "active" {
         return Err(ApiError::Conflict(
@@ -561,15 +605,244 @@ pub async fn submit_location_report(
         })),
     )
     .await?;
-    transaction.commit().await?;
-
-    Ok(TaskLocationReportReceipt {
+    let receipt = TaskLocationReportReceipt {
         id: report.id,
         source: report.source,
         captured_at: report.captured_at,
         retention_expires_at: report.retention_expires_at,
         created_at: report.created_at,
-    })
+    };
+    persist_idempotent_receipt(
+        &transaction,
+        task_id,
+        &auth.id,
+        LOCATION_REPORT_OPERATION,
+        idempotency_key,
+        &receipt,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(receipt)
+}
+
+pub async fn create_task_application(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+    request: CreateTaskApplicationRequest,
+) -> Result<TaskApplicationResponse, ApiError> {
+    if !auth
+        .global_capabilities
+        .contains(&GlobalCapability::Volunteer)
+    {
+        return Err(ApiError::Forbidden(
+            "only volunteer accounts can apply for tasks".to_owned(),
+        ));
+    }
+    let note = optional_field("note", request.note, 2_000)?;
+    let transaction = db.begin().await?;
+    let task = tasks::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    if is_terminal_status(&task.status) {
+        return Err(ApiError::Conflict(
+            "applications are closed for this task".to_owned(),
+        ));
+    }
+    require_case_role(
+        &transaction,
+        &auth.id,
+        &task.case_id,
+        &[CaseRole::Volunteer],
+    )
+    .await?;
+    if task_assignments::Entity::find()
+        .filter(task_assignments::Column::TaskId.eq(task_id))
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
+        .one(&transaction)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(
+            "you are already a collaborator on this task".to_owned(),
+        ));
+    }
+    let existing = task_applications::Entity::find()
+        .filter(task_applications::Column::TaskId.eq(task_id))
+        .filter(task_applications::Column::VolunteerUserId.eq(&auth.id))
+        .one(&transaction)
+        .await?;
+    if let Some(existing) = existing {
+        if existing.status == "pending" {
+            return Err(ApiError::Conflict(
+                "an application is already pending".to_owned(),
+            ));
+        }
+        return Err(ApiError::Conflict(
+            "this task application has already been reviewed".to_owned(),
+        ));
+    }
+    let timestamp = now();
+    let application = task_applications::ActiveModel {
+        id: Set(crate::services::case_service::new_id()),
+        task_id: Set(task_id.to_owned()),
+        volunteer_user_id: Set(auth.id.clone()),
+        status: Set("pending".to_owned()),
+        note: Set(note),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+        review_reason: Set(None),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+    write_audit(
+        &transaction,
+        Some(task.case_id),
+        auth,
+        "task.application_created",
+        "task_application",
+        application.id.clone(),
+        Some(json!({ "task_id": task_id })),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(TaskApplicationResponse::from(application))
+}
+
+pub async fn list_task_applications(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+) -> Result<Vec<TaskApplicationResponse>, ApiError> {
+    let task = tasks::Entity::find_by_id(task_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    require_task_reviewer(db, auth, &task.case_id).await?;
+    Ok(task_applications::Entity::find()
+        .filter(task_applications::Column::TaskId.eq(task_id))
+        .order_by_asc(task_applications::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(TaskApplicationResponse::from)
+        .collect())
+}
+
+pub async fn review_task_application(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+    application_id: &str,
+    request: ReviewTaskApplicationRequest,
+) -> Result<TaskApplicationResponse, ApiError> {
+    let action = request.action.trim().to_lowercase();
+    if !["approve", "reject"].contains(&action.as_str()) {
+        return Err(ApiError::Validation(
+            "action must be approve or reject".to_owned(),
+        ));
+    }
+    let reason = optional_field("reason", request.reason, 2_000)?;
+    let transaction = db.begin().await?;
+    let task = tasks::Entity::find_by_id(task_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    require_task_reviewer(&transaction, auth, &task.case_id).await?;
+    let application = task_applications::Entity::find_by_id(application_id)
+        .one(&transaction)
+        .await?
+        .filter(|value| value.task_id == task_id)
+        .ok_or_else(|| ApiError::NotFound("task application was not found".to_owned()))?;
+    if application.status != "pending" {
+        return Err(ApiError::Conflict(
+            "task application has already been reviewed".to_owned(),
+        ));
+    }
+    let timestamp = now();
+    let status = if action == "approve" {
+        "approved"
+    } else {
+        "rejected"
+    };
+    if action == "approve" {
+        ensure_active_case_volunteer(&transaction, &task.case_id, &application.volunteer_user_id)
+            .await?;
+        task_assignments::Entity::insert(task_assignments::ActiveModel {
+            task_id: Set(task_id.to_owned()),
+            volunteer_user_id: Set(application.volunteer_user_id.clone()),
+            assigned_by_user_id: Set(auth.id.clone()),
+            assigned_at: Set(timestamp.clone()),
+            updated_at: Set(timestamp.clone()),
+        })
+        .on_conflict(
+            OnConflict::columns([
+                task_assignments::Column::TaskId,
+                task_assignments::Column::VolunteerUserId,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .do_nothing()
+        .exec(&transaction)
+        .await?;
+        tasks::Entity::update_many()
+            .col_expr(tasks::Column::Status, Expr::value("assigned"))
+            .col_expr(tasks::Column::UpdatedAt, Expr::value(timestamp.clone()))
+            .filter(tasks::Column::Id.eq(task_id))
+            .filter(tasks::Column::Status.eq("pending_claim"))
+            .exec(&transaction)
+            .await?;
+    }
+    let mut updated: task_applications::ActiveModel = application.into();
+    updated.status = Set(status.to_owned());
+    updated.reviewed_by_user_id = Set(Some(auth.id.clone()));
+    updated.reviewed_at = Set(Some(timestamp.clone()));
+    updated.review_reason = Set(reason);
+    updated.updated_at = Set(timestamp);
+    let updated = updated.update(&transaction).await?;
+    write_audit(
+        &transaction,
+        Some(task.case_id),
+        auth,
+        "task.application_reviewed",
+        "task_application",
+        updated.id.clone(),
+        Some(json!({ "task_id": task_id, "action": action })),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(TaskApplicationResponse::from(updated))
+}
+
+pub async fn list_task_collaboration_locations(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    task_id: &str,
+) -> Result<Vec<TaskCollaborationLocationResponse>, ApiError> {
+    let _task = load_task_for_assignee_or_commander(db, auth, task_id).await?;
+    let reports = task_location_reports::Entity::find()
+        .filter(task_location_reports::Column::TaskId.eq(task_id))
+        .filter(task_location_reports::Column::RetentionExpiresAt.gt(now()))
+        .order_by_desc(task_location_reports::Column::CapturedAt)
+        .all(db)
+        .await?;
+    let mut seen = HashSet::new();
+    Ok(reports
+        .into_iter()
+        .filter(|report| seen.insert(report.volunteer_user_id.clone()))
+        .map(|report| TaskCollaborationLocationResponse {
+            volunteer_user_id: report.volunteer_user_id,
+            latitude: report.latitude,
+            longitude: report.longitude,
+            accuracy_meters: report.accuracy_meters,
+            captured_at: report.captured_at,
+        })
+        .collect())
 }
 
 pub async fn submit_task_feedback(
@@ -577,8 +850,16 @@ pub async fn submit_task_feedback(
     auth: &AuthenticatedUser,
     task_id: &str,
     request: SubmitTaskFeedbackRequest,
+    idempotency_key: &str,
 ) -> Result<TaskFeedbackReceipt, ApiError> {
     let request = ValidatedTaskFeedbackRequest::try_from(request)?;
+    let request_fingerprint = request_fingerprint(&json!({
+        "content": request.content,
+        "occurred_at": request.occurred_at,
+        "location_text": request.location_text,
+        "location_precision": request.location_precision,
+        "attachment_ids": request.attachment_ids,
+    }))?;
     let transaction = db.begin().await?;
     let task = tasks::Entity::find_by_id(task_id)
         .one(&transaction)
@@ -591,16 +872,52 @@ pub async fn submit_task_feedback(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let assignment = task_assignments::Entity::find_by_id(task_id)
+    let is_assignee = task_assignments::Entity::find()
+        .filter(task_assignments::Column::TaskId.eq(task_id))
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
         .one(&transaction)
         .await?
-        .ok_or_else(|| {
-            ApiError::Database(sea_orm::DbErr::Custom(
-                "task is missing its required assignment".to_owned(),
-            ))
-        })?;
-    if case_role != CaseRole::Volunteer || assignment.volunteer_user_id != auth.id {
+        .is_some();
+    if case_role != CaseRole::Volunteer || !is_assignee {
         return Err(ApiError::NotFound("task was not found".to_owned()));
+    }
+    if let Some(receipt) = existing_idempotent_receipt::<TaskFeedbackReceipt>(
+        &transaction,
+        task_id,
+        &auth.id,
+        TASK_FEEDBACK_OPERATION,
+        idempotency_key,
+        &request_fingerprint,
+    )
+    .await?
+    {
+        transaction.commit().await?;
+        return Ok(receipt);
+    }
+    if !claim_idempotency_key(
+        &transaction,
+        task_id,
+        &auth.id,
+        TASK_FEEDBACK_OPERATION,
+        idempotency_key,
+        &request_fingerprint,
+    )
+    .await?
+    {
+        let receipt = existing_idempotent_receipt::<TaskFeedbackReceipt>(
+            &transaction,
+            task_id,
+            &auth.id,
+            TASK_FEEDBACK_OPERATION,
+            idempotency_key,
+            &request_fingerprint,
+        )
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict("a concurrent request is using this Idempotency-Key".to_owned())
+        })?;
+        transaction.commit().await?;
+        return Ok(receipt);
     }
     if task.status != "active" {
         return Err(ApiError::Conflict(
@@ -715,20 +1032,124 @@ pub async fn submit_task_feedback(
         })),
     )
     .await?;
-    transaction.commit().await?;
-
-    Ok(TaskFeedbackReceipt {
+    let receipt = TaskFeedbackReceipt {
         task_id: task_id.to_owned(),
         clue_id: clue.id,
         status: clue.status,
         submitted_at: timestamp,
-    })
+    };
+    persist_idempotent_receipt(
+        &transaction,
+        task_id,
+        &auth.id,
+        TASK_FEEDBACK_OPERATION,
+        idempotency_key,
+        &receipt,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(receipt)
+}
+
+async fn existing_idempotent_receipt<T: serde::de::DeserializeOwned>(
+    transaction: &sea_orm::DatabaseTransaction,
+    task_id: &str,
+    volunteer_user_id: &str,
+    operation: &str,
+    idempotency_key: &str,
+    request_fingerprint: &str,
+) -> Result<Option<T>, ApiError> {
+    let Some(record) = task_operation_idempotency::Entity::find()
+        .filter(task_operation_idempotency::Column::TaskId.eq(task_id))
+        .filter(task_operation_idempotency::Column::VolunteerUserId.eq(volunteer_user_id))
+        .filter(task_operation_idempotency::Column::Operation.eq(operation))
+        .filter(task_operation_idempotency::Column::IdempotencyKey.eq(idempotency_key))
+        .one(transaction)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if record.request_fingerprint != request_fingerprint {
+        return Err(ApiError::Conflict(
+            "Idempotency-Key was reused with a different payload".to_owned(),
+        ));
+    }
+    serde_json::from_str(&record.response_json)
+        .map(Some)
+        .map_err(|_| ApiError::Internal)
+}
+
+async fn claim_idempotency_key(
+    transaction: &sea_orm::DatabaseTransaction,
+    task_id: &str,
+    volunteer_user_id: &str,
+    operation: &str,
+    idempotency_key: &str,
+    request_fingerprint: &str,
+) -> Result<bool, ApiError> {
+    let conflict_target = OnConflict::columns([
+        task_operation_idempotency::Column::TaskId,
+        task_operation_idempotency::Column::VolunteerUserId,
+        task_operation_idempotency::Column::Operation,
+        task_operation_idempotency::Column::IdempotencyKey,
+    ])
+    .do_nothing()
+    .to_owned();
+    let result = task_operation_idempotency::Entity::insert_many([
+        task_operation_idempotency::ActiveModel {
+            id: Set(crate::services::case_service::new_id()),
+            task_id: Set(task_id.to_owned()),
+            volunteer_user_id: Set(volunteer_user_id.to_owned()),
+            operation: Set(operation.to_owned()),
+            idempotency_key: Set(idempotency_key.to_owned()),
+            request_fingerprint: Set(request_fingerprint.to_owned()),
+            response_json: Set("{}".to_owned()),
+            created_at: Set(now()),
+        },
+    ])
+    .on_conflict(conflict_target)
+    .do_nothing()
+    .exec(transaction)
+    .await?;
+    Ok(matches!(result, TryInsertResult::Inserted(_)))
+}
+
+fn request_fingerprint(value: &serde_json::Value) -> Result<String, ApiError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| ApiError::Internal)?;
+    Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+async fn persist_idempotent_receipt<T: serde::Serialize>(
+    transaction: &sea_orm::DatabaseTransaction,
+    task_id: &str,
+    volunteer_user_id: &str,
+    operation: &str,
+    idempotency_key: &str,
+    receipt: &T,
+) -> Result<(), ApiError> {
+    let response_json = serde_json::to_string(receipt).map_err(|_| ApiError::Internal)?;
+    let update = task_operation_idempotency::Entity::update_many()
+        .col_expr(
+            task_operation_idempotency::Column::ResponseJson,
+            Expr::value(response_json),
+        )
+        .filter(task_operation_idempotency::Column::TaskId.eq(task_id))
+        .filter(task_operation_idempotency::Column::VolunteerUserId.eq(volunteer_user_id))
+        .filter(task_operation_idempotency::Column::Operation.eq(operation))
+        .filter(task_operation_idempotency::Column::IdempotencyKey.eq(idempotency_key))
+        .exec(transaction)
+        .await?;
+    if update.rows_affected != 1 {
+        return Err(ApiError::Internal);
+    }
+    Ok(())
 }
 
 async fn assignments_for_tasks(
     db: &DatabaseConnection,
     task_ids: impl IntoIterator<Item = String>,
-) -> Result<HashMap<String, task_assignments::Model>, ApiError> {
+) -> Result<HashMap<String, Vec<task_assignments::Model>>, ApiError> {
     let task_ids = task_ids.into_iter().collect::<Vec<_>>();
     if task_ids.is_empty() {
         return Ok(HashMap::new());
@@ -738,13 +1159,63 @@ async fn assignments_for_tasks(
         .all(db)
         .await?
         .into_iter()
-        .map(|assignment| (assignment.task_id.clone(), assignment))
-        .collect())
+        .fold(HashMap::new(), |mut grouped, assignment| {
+            grouped
+                .entry(assignment.task_id.clone())
+                .or_insert_with(Vec::new)
+                .push(assignment);
+            grouped
+        }))
+}
+
+async fn ensure_active_case_volunteer<C: ConnectionTrait>(
+    db: &C,
+    case_id: &str,
+    volunteer_user_id: &str,
+) -> Result<(), ApiError> {
+    let membership = case_memberships::Entity::find()
+        .filter(case_memberships::Column::CaseId.eq(case_id))
+        .filter(case_memberships::Column::UserId.eq(volunteer_user_id))
+        .filter(case_memberships::Column::Role.eq(CaseRole::Volunteer.to_string()))
+        .one(db)
+        .await?;
+    let active = users::Entity::find_by_id(volunteer_user_id)
+        .filter(users::Column::Status.eq("active"))
+        .one(db)
+        .await?
+        .is_some();
+    let capable = user_global_capabilities::Entity::find()
+        .filter(user_global_capabilities::Column::UserId.eq(volunteer_user_id))
+        .filter(
+            user_global_capabilities::Column::Capability
+                .eq(GlobalCapability::Volunteer.to_string()),
+        )
+        .one(db)
+        .await?
+        .is_some();
+    if membership.is_none() || !active || !capable {
+        return Err(ApiError::Validation(
+            "volunteer_user_id must reference an active volunteer in this case".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn require_task_reviewer<C: ConnectionTrait>(
+    db: &C,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<(), ApiError> {
+    if auth.global_capabilities.contains(&GlobalCapability::Admin) {
+        return Ok(());
+    }
+    require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    Ok(())
 }
 
 struct ValidatedCreateTaskRequest {
     source_clue_id: String,
-    volunteer_user_id: String,
+    volunteer_user_ids: Vec<String>,
     title: String,
     objective: String,
     area_text: String,
@@ -763,7 +1234,16 @@ impl TryFrom<CreateTaskRequest> for ValidatedCreateTaskRequest {
 
     fn try_from(value: CreateTaskRequest) -> Result<Self, Self::Error> {
         let source_clue_id = required_field("source_clue_id", value.source_clue_id, 36)?;
-        let volunteer_user_id = required_field("volunteer_user_id", value.volunteer_user_id, 36)?;
+        let mut volunteer_user_ids = value.volunteer_user_ids;
+        if let Some(volunteer_user_id) = value.volunteer_user_id {
+            volunteer_user_ids.push(volunteer_user_id);
+        }
+        volunteer_user_ids = volunteer_user_ids
+            .into_iter()
+            .map(|value| required_field("volunteer_user_id", value, 36))
+            .collect::<Result<Vec<_>, _>>()?;
+        volunteer_user_ids.sort();
+        volunteer_user_ids.dedup();
         let title = required_field("title", value.title, 200)?;
         let objective = required_field("objective", value.objective, 4_000)?;
         let area_text = required_field("area_text", value.area_text, 500)?;
@@ -780,7 +1260,7 @@ impl TryFrom<CreateTaskRequest> for ValidatedCreateTaskRequest {
             required_field("expected_feedback", value.expected_feedback, 4_000)?;
         Ok(Self {
             source_clue_id,
-            volunteer_user_id,
+            volunteer_user_ids,
             title,
             objective,
             area_text,
