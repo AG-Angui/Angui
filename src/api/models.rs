@@ -1168,18 +1168,18 @@ impl TaskResponse {
                 .then(|| first_assignment.map(|value| value.volunteer_user_id.clone()))
                 .flatten(),
             assigned_at: first_assignment.map(|value| value.assigned_at.clone()),
-            collaborators: include_assignee
-                .then(|| {
-                    assignments
-                        .iter()
-                        .map(|assignment| TaskCollaboratorResponse {
-                            volunteer_user_id: assignment.volunteer_user_id.clone(),
-                            assigned_by_user_id: assignment.assigned_by_user_id.clone(),
-                            assigned_at: assignment.assigned_at.clone(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            collaborators: if include_assignee {
+                assignments
+                    .iter()
+                    .map(|assignment| TaskCollaboratorResponse {
+                        volunteer_user_id: assignment.volunteer_user_id.clone(),
+                        assigned_by_user_id: assignment.assigned_by_user_id.clone(),
+                        assigned_at: assignment.assigned_at.clone(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
             created_at: model.created_at,
             updated_at: model.updated_at,
         }
