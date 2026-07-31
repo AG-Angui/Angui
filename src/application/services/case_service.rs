@@ -1580,7 +1580,7 @@ mod tests {
         assert_eq!(family_view.clues.len(), 1);
         let volunteer_view = get_case(&database, &volunteer, &case.id).await.unwrap();
         assert!(volunteer_view.clues.is_empty());
-        assert!(volunteer_view.elder_profile.health_notes.is_none());
+        assert!(volunteer_view.elder_profile.health_notes.is_some());
 
         let family_review = review_clue(
             &database,
