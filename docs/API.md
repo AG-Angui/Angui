@@ -225,6 +225,16 @@ Example:
 
 `POST /api/tasks/{task_id}/location-reports` 与 `POST /api/tasks/{task_id}/feedback` 都必须提供 UUID 格式的 `Idempotency-Key` 请求头。客户端为一次逻辑提交生成一个键，并在超时、断网等重试时复用该键；服务端会返回第一次成功提交的回执，不会重复写入位置、线索或审计事件。幂等键与规范化后的请求内容绑定：用同一键提交不同内容会返回 `409`，不会静默丢弃新的提交。
 
+## 志愿者任务协作
+
+志愿者只要已作为案件 `volunteer` 成员加入案件，即可通过 `GET /api/cases`、`GET /api/cases/{case_id}`、`GET /api/cases/{case_id}/summary` 与 `GET /api/cases/{case_id}/tasks` 进入协作工作区；不再以“是否已有个人任务”为案件可见性的前提。工作区包含经该角色授权的案件摘要、线索、家属联系邮箱和健康备注。它不包含其他志愿者的精确位置。
+
+任务不再是单人独占：`POST /api/cases/{case_id}/tasks` 可以使用 `volunteer_user_ids` 指定一个或多个已授权的案件志愿者（旧 `volunteer_user_id` 保持兼容）。每位受领者都是同一任务协作空间的成员；成员可以独立推进允许的任务状态、提交反馈和位置报告，任一成员完成任务会更新该共享任务状态。指挥仍可取消未结束任务，但不会因取消而需要成为任务成员。
+
+未获分配的案件志愿者可以调用 `POST /api/tasks/{task_id}/applications` 申请加入未结束任务，可选 `note` 最长 2000 字符。该操作只创建 `pending` 申请，不授予导航、安全说明、反馈、位置或协作位置权限。案件指挥或平台管理员用 `GET /api/tasks/{task_id}/applications` 查看申请，并用 `PATCH /api/tasks/{task_id}/applications/{application_id}` 以 `{ "action": "approve" }` 或 `{ "action": "reject" }` 审核。批准与新增任务成员关系在同一事务中完成，不会替换原有成员；重复或已经审核的申请返回 `409`。
+
+`GET /api/tasks/{task_id}/collaboration-locations` 只向该任务的已分配志愿者和该案件指挥返回每位协作成员最新、未过期的位置报告，包含协作者 ID、经纬度、精度和采集时间。它绝不返回其他任务的位置；案件中的其他志愿者、家属和非成员均不能访问。位置报告仍仅支持手动 `simulated` 数据，24 小时到期清理，并沿用 `Idempotency-Key` 的重试语义。
+
 `GET /api/tasks/{task_id}/safety-briefing` 和 `GET /api/tasks/{task_id}/navigation` 仅允许该任务受领志愿者与案件指挥访问。安全提示是规则化的辅助信息，不是现场强制指令；即使实时天气等外部条件不可用，也会返回人工规则和紧急停止提示。导航接口只返回已授权任务区域的文字路线摘要；现有任务坐标没有坐标系声明时，服务端不会生成可能偏移的第三方导航链接。家属、其他志愿者和非成员不会获取这些内容。
 
 ## 公开进展、草稿与周边资源

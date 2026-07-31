@@ -742,6 +742,76 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/tasks/{task_id}/applications:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      tags: [Tasks]
+      operationId: createTaskApplication
+      summary: Apply to collaborate on a case task
+      description: Only an active volunteer member of the task's case may apply. One pending or reviewed application exists per volunteer and task; submitting an application does not grant task access.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateTaskApplicationRequest" } } }
+      responses:
+        "201": { description: Pending application created, content: { application/json: { schema: { $ref: "#/components/schemas/TaskApplication" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      tags: [Tasks]
+      operationId: listTaskApplications
+      summary: List task applications for review
+      description: Available to a commander of the case or a platform administrator.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Applications in creation order, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TaskApplication" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/tasks/{task_id}/applications/{application_id}:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Tasks]
+      operationId: reviewTaskApplication
+      summary: Approve or reject a task application
+      description: A case commander or platform administrator reviews a pending application. Approval atomically creates a collaborator assignment without replacing existing assignees.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReviewTaskApplicationRequest" } } }
+      responses:
+        "200": { description: Reviewed application, content: { application/json: { schema: { $ref: "#/components/schemas/TaskApplication" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/tasks/{task_id}/collaboration-locations:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    get:
+      tags: [Tasks]
+      operationId: listTaskCollaborationLocations
+      summary: Read current task collaborator locations
+      description: Exact location reports are visible only to an assigned volunteer on this exact task and the case commander. Expired reports and reports from other tasks are excluded.
+      security: [{ bearerAuth: [] }]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Latest unexpired report for each collaborator, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TaskCollaborationLocation" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/tasks/{task_id}/location-reports:
     parameters:
       - $ref: "#/components/parameters/TaskId"
@@ -2463,7 +2533,7 @@ components:
     CreateTaskRequest:
       type: object
       additionalProperties: false
-      required: [source_clue_id, volunteer_user_id, title, objective, area_text, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback]
+      required: [source_clue_id, title, objective, area_text, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback]
       properties:
         source_clue_id:
           type: string
@@ -2472,7 +2542,13 @@ components:
         volunteer_user_id:
           type: string
           format: uuid
-          description: An active volunteer member of the same case; the server does not auto-select one.
+          description: Deprecated compatibility field for one initially assigned active volunteer member of the same case.
+        volunteer_user_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, format: uuid }
+          description: Active volunteer members initially assigned to the shared task collaboration space.
         title: { type: string, minLength: 1, maxLength: 200 }
         objective: { type: string, minLength: 1, maxLength: 4000 }
         area_text: { type: string, minLength: 1, maxLength: 500 }
@@ -2504,6 +2580,47 @@ components:
         status:
           $ref: "#/components/schemas/TaskStatusTransitionTarget"
           description: The current task state and caller role determine whether this otherwise valid target transition is allowed.
+
+    CreateTaskApplicationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note: { type: [string, "null"], maxLength: 2000 }
+
+    ReviewTaskApplicationRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: { type: string, enum: [approve, reject] }
+        reason: { type: [string, "null"], maxLength: 2000 }
+
+    TaskApplication:
+      type: object
+      additionalProperties: false
+      required: [id, task_id, volunteer_user_id, status, note, reviewed_by_user_id, reviewed_at, review_reason, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        volunteer_user_id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, approved, rejected, withdrawn] }
+        note: { type: [string, "null"] }
+        reviewed_by_user_id: { type: [string, "null"], format: uuid }
+        reviewed_at: { type: [string, "null"], format: date-time }
+        review_reason: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TaskCollaborationLocation:
+      type: object
+      additionalProperties: false
+      required: [volunteer_user_id, latitude, longitude, accuracy_meters, captured_at]
+      properties:
+        volunteer_user_id: { type: string, format: uuid }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        accuracy_meters: { type: number, exclusiveMinimum: 0 }
+        captured_at: { type: string, format: date-time }
 
     SubmitTaskLocationReportRequest:
       type: object
@@ -2612,7 +2729,7 @@ components:
     Task:
       type: object
       additionalProperties: false
-      required: [id, case_id, source_clue_id, title, objective, area_text, latitude, longitude, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback, status, result_summary, assigned_volunteer_user_id, assigned_at, created_at, updated_at]
+      required: [id, case_id, source_clue_id, title, objective, area_text, latitude, longitude, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback, status, result_summary, assigned_volunteer_user_id, assigned_at, collaborators, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
@@ -2640,6 +2757,17 @@ components:
           format: uuid
           description: Returned to commanders only; it is null in volunteer responses.
         assigned_at: { type: [string, "null"], format: date-time }
+        collaborators:
+          type: array
+          description: Returned to commanders; volunteer task-list responses omit collaborator identities.
+          items:
+            type: object
+            additionalProperties: false
+            required: [volunteer_user_id, assigned_by_user_id, assigned_at]
+            properties:
+              volunteer_user_id: { type: string, format: uuid }
+              assigned_by_user_id: { type: string, format: uuid }
+              assigned_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
