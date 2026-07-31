@@ -1,43 +1,51 @@
-import { Spinner } from '@heroui/react'
-import { Navigate, Route, Routes } from 'react-router'
-import type { ReactNode } from 'react'
-import { useAuth } from './auth/useAuth'
-import { AppShell } from './components/AppShell'
-import { CaseWorkspacePage } from './pages/CaseWorkspacePage'
-import { DashboardPage } from './pages/DashboardPage'
-import { LoginPage } from './pages/LoginPage'
-import { ProfilePage } from './pages/ProfilePage'
-import { VolunteerWorkspacePage } from './pages/VolunteerWorkspacePage'
+import { Spinner } from "@heroui/react";
+import { Navigate, Route, Routes } from "react-router";
+import type { ReactNode } from "react";
+import { useAuth } from "./auth/useAuth";
+import { AppShell } from "./components/AppShell";
+import { CaseWorkspacePage } from "./pages/CaseWorkspacePage";
+import { DashboardPage } from "./pages/DashboardPage";
+import { LoginPage } from "./pages/LoginPage";
+import { ProfilePage } from "./pages/ProfilePage";
+import { VolunteerWorkspacePage } from "./pages/VolunteerWorkspacePage";
 
 function CaseRoleRoute({
   capability,
   familyOnly,
   children,
 }: {
-  capability?: 'commander' | 'volunteer'
-  familyOnly?: boolean
-  children: ReactNode
+  capability?: "commander" | "volunteer";
+  familyOnly?: boolean;
+  children: ReactNode;
 }) {
-  const { user } = useAuth()
-  const isFamilyOnlyMember = user?.account_type === 'member' && user.global_capabilities.length === 0
-  return user?.account_type === 'member' && (!capability || user.global_capabilities.includes(capability)) && (!familyOnly || isFamilyOnlyMember)
-    ? children
-    : <Navigate to="/" replace />
+  const { user } = useAuth();
+  const isFamilyOnlyMember =
+    user?.account_type === "member" && user.global_capabilities.length === 0;
+  return user?.account_type === "member" &&
+    (!capability || user.global_capabilities.includes(capability)) &&
+    (!familyOnly || isFamilyOnlyMember) ? (
+    children
+  ) : (
+    <Navigate to="/" replace />
+  );
 }
 
 function App() {
-  const { user, isLoading } = useAuth()
+  const { user, isLoading } = useAuth();
 
   if (isLoading) {
     return (
-      <main className="grid min-h-screen place-items-center bg-canvas" aria-label="正在恢复会话">
+      <main
+        className="grid min-h-screen place-items-center bg-canvas"
+        aria-label="正在恢复会话"
+      >
         <Spinner size="lg" />
       </main>
-    )
+    );
   }
 
   if (!user) {
-    return <LoginPage />
+    return <LoginPage />;
   }
 
   return (
@@ -72,7 +80,7 @@ function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-  )
+  );
 }
 
-export default App
+export default App;
