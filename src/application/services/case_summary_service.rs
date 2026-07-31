@@ -38,9 +38,7 @@ pub async fn get_case_summary(
             .cmp(&left.reported_at)
             .then_with(|| right.clue_id.cmp(&left.clue_id))
     });
-    let last_confirmed_information = (detail.access_role != CaseRole::Volunteer)
-        .then(|| confirmed_clues.first().cloned())
-        .flatten();
+    let last_confirmed_information = confirmed_clues.first().cloned();
 
     let pending_verification = if detail.access_role == CaseRole::Volunteer {
         Vec::new()
@@ -83,11 +81,7 @@ pub async fn get_case_summary(
         generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
         source_scope: source_scope(detail.access_role),
         last_confirmed_information,
-        confirmed_clues: if detail.access_role == CaseRole::Volunteer {
-            Vec::new()
-        } else {
-            confirmed_clues
-        },
+        confirmed_clues,
         pending_verification,
         excluded_directions,
         current_focus,
@@ -140,7 +134,10 @@ fn source_scope(role: CaseRole) -> Vec<String> {
             "confirmed_clues".to_owned(),
             "own_unverified_clues".to_owned(),
         ],
-        CaseRole::Volunteer => vec!["own_assigned_tasks".to_owned()],
+        CaseRole::Volunteer => vec![
+            "confirmed_clues".to_owned(),
+            "authorized_case_tasks".to_owned(),
+        ],
     }
 }
 

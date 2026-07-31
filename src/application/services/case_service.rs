@@ -1059,7 +1059,7 @@ fn visible_clue_response(
     let visible = match case_role {
         CaseRole::Commander => true,
         CaseRole::Family => clue.status == "confirmed" || own,
-        CaseRole::Volunteer => clue.status == "confirmed",
+        CaseRole::Volunteer => clue.status == "confirmed" || own,
     };
     let can_see_attachment_references = case_role == CaseRole::Commander || own;
     visible.then(|| {

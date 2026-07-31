@@ -121,7 +121,12 @@ pub async fn create_task(
         risk_notes: Set(request.risk_notes),
         safety_briefing: Set(request.safety_briefing),
         expected_feedback: Set(request.expected_feedback),
-        status: Set("assigned".to_owned()),
+        status: Set(if request.volunteer_user_ids.is_empty() {
+            "pending_claim"
+        } else {
+            "assigned"
+        }
+        .to_owned()),
         result_summary: Set(None),
         created_by_user_id: Set(auth.id.clone()),
         created_at: Set(timestamp.clone()),
@@ -152,7 +157,7 @@ pub async fn create_task(
         "task",
         task_id.clone(),
         Some(json!({
-            "status": "assigned",
+            "status": task.status,
             "source_clue_id": task.source_clue_id,
             "risk_level": task.risk_level,
         })),
@@ -785,6 +790,13 @@ pub async fn review_task_application(
         .do_nothing()
         .exec(&transaction)
         .await?;
+        tasks::Entity::update_many()
+            .col_expr(tasks::Column::Status, Expr::value("assigned"))
+            .col_expr(tasks::Column::UpdatedAt, Expr::value(timestamp.clone()))
+            .filter(tasks::Column::Id.eq(task_id))
+            .filter(tasks::Column::Status.eq("pending_claim"))
+            .exec(&transaction)
+            .await?;
     }
     let mut updated: task_applications::ActiveModel = application.into();
     updated.status = Set(status.to_owned());
@@ -1232,11 +1244,6 @@ impl TryFrom<CreateTaskRequest> for ValidatedCreateTaskRequest {
             .collect::<Result<Vec<_>, _>>()?;
         volunteer_user_ids.sort();
         volunteer_user_ids.dedup();
-        if volunteer_user_ids.is_empty() {
-            return Err(ApiError::Validation(
-                "at least one volunteer_user_id is required".to_owned(),
-            ));
-        }
         let title = required_field("title", value.title, 200)?;
         let objective = required_field("objective", value.objective, 4_000)?;
         let area_text = required_field("area_text", value.area_text, 500)?;

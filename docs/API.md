@@ -228,8 +228,9 @@ Example:
 ## 志愿者任务协作
 
 志愿者只要已作为案件 `volunteer` 成员加入案件，即可通过 `GET /api/cases`、`GET /api/cases/{case_id}`、`GET /api/cases/{case_id}/summary` 与 `GET /api/cases/{case_id}/tasks` 进入协作工作区；不再以“是否已有个人任务”为案件可见性的前提。工作区包含经该角色授权的案件摘要、线索、家属联系邮箱和健康备注。它不包含其他志愿者的精确位置。
+志愿者可看到已确认线索和自己提交但仍待人工审核的线索；其他成员的待审核线索不会暴露。志愿者调用 `GET /api/cases/{case_id}/pois` 时，服务端仅从该角色可见的任务坐标或已确认的公开地点选择中心，客户端不能提供或覆盖中心坐标。
 
-任务不再是单人独占：`POST /api/cases/{case_id}/tasks` 可以使用 `volunteer_user_ids` 指定一个或多个已授权的案件志愿者（旧 `volunteer_user_id` 保持兼容）。每位受领者都是同一任务协作空间的成员；成员可以独立推进允许的任务状态、提交反馈和位置报告，任一成员完成任务会更新该共享任务状态。指挥仍可取消未结束任务，但不会因取消而需要成为任务成员。
+任务不再是单人独占：`POST /api/cases/{case_id}/tasks` 可以使用 `volunteer_user_ids` 指定一个或多个已授权的案件志愿者（旧 `volunteer_user_id` 保持兼容）。每位受领者都是同一任务协作空间的成员；成员可以独立推进允许的任务状态、提交反馈和位置报告，任一成员完成任务会更新该共享任务状态。指挥仍可取消未结束任务，但不会因取消而需要成为任务成员。如果两个志愿者字段都未提供（或 `volunteer_user_ids` 为空），则会创建 `pending_claim` 的开放/常驻任务；案件志愿者可申请加入，指挥批准首位申请者后任务转为 `assigned`。
 
 未获分配的案件志愿者可以调用 `POST /api/tasks/{task_id}/applications` 申请加入未结束任务，可选 `note` 最长 2000 字符。该操作只创建 `pending` 申请，不授予导航、安全说明、反馈、位置或协作位置权限。案件指挥或平台管理员用 `GET /api/tasks/{task_id}/applications` 查看申请，并用 `PATCH /api/tasks/{task_id}/applications/{application_id}` 以 `{ "action": "approve" }` 或 `{ "action": "reject" }` 审核。批准与新增任务成员关系在同一事务中完成，不会替换原有成员；重复或已经审核的申请返回 `409`。
 

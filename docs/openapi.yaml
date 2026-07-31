@@ -649,13 +649,14 @@ paths:
     post:
       tags: [Tasks]
       operationId: createCaseTask
-      summary: Manually create and assign a rescue task
+      summary: Manually create an assigned or open rescue task
       description: |
-        Only a commander of an open case can create this endpoint's initially `assigned` task.
-        The source clue must be confirmed and belong to the same case; the recipient must be an
-        active case member with the volunteer role. Creation, assignment, and `task.created` /
-        `task.assigned` audit events commit in one transaction. No automatic assignment or
-        high-risk-action authorization is performed.
+        Only a commander of an open case can create this endpoint's task. The source clue must be
+        confirmed and belong to the same case. When volunteer recipients are supplied, each must
+        be an active case member with the volunteer role and the task is initially `assigned`.
+        When recipients are omitted, the task is an open `pending_claim` task that case volunteers
+        can apply to join. Creation, assignments, and audit events commit in one transaction. No
+        automatic assignment or high-risk-action authorization is performed.
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -668,7 +669,7 @@ paths:
             schema: { $ref: "#/components/schemas/CreateTaskRequest" }
       responses:
         "201":
-          description: Assigned task created
+          description: Assigned or open pending-claim task created
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Task" }
@@ -1032,7 +1033,7 @@ paths:
       tags: [Cases]
       operationId: listCasePois
       summary: Find bounded nearby resources from a server-authorized center
-      description: The caller can choose only an allow-listed category; it cannot submit coordinates. The server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task or confirmed place. AMap transport, quota, or business failures return a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
+      description: The caller can choose only an allow-listed category; it cannot submit coordinates. The server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task coordinate or, when none exists, a confirmed place; volunteers may use only confirmed public places as that fallback center. AMap transport, quota, or business failures return a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander, volunteer]
@@ -2542,13 +2543,13 @@ components:
         volunteer_user_id:
           type: string
           format: uuid
-          description: Deprecated compatibility field for one initially assigned active volunteer member of the same case.
+          description: Deprecated compatibility field for one initially assigned active volunteer member of the same case. Omit it with volunteer_user_ids to create an open task.
         volunteer_user_ids:
           type: array
-          minItems: 1
+          minItems: 0
           uniqueItems: true
           items: { type: string, format: uuid }
-          description: Active volunteer members initially assigned to the shared task collaboration space.
+          description: Active volunteer members initially assigned to the shared task collaboration space. Omit or provide an empty list to create an open pending-claim task.
         title: { type: string, minLength: 1, maxLength: 200 }
         objective: { type: string, minLength: 1, maxLength: 4000 }
         area_text: { type: string, minLength: 1, maxLength: 500 }

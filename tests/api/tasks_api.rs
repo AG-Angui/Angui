@@ -212,7 +212,7 @@ async fn post_case_tasks_requires_a_commander_confirmed_source_and_active_case_v
     .await;
     assert_error(unconfirmed, StatusCode::BAD_REQUEST, "validation_error").await;
 
-    let no_volunteer = test::call_service(
+    let invalid_recipient = test::call_service(
         &app,
         test::TestRequest::post()
             .uri(&format!("/api/cases/{case_id}/tasks"))
@@ -224,7 +224,31 @@ async fn post_case_tasks_requires_a_commander_confirmed_source_and_active_case_v
             .to_request(),
     )
     .await;
-    assert_error(no_volunteer, StatusCode::BAD_REQUEST, "validation_error").await;
+    assert_error(
+        invalid_recipient,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    let mut open_task_payload = task_json(&source_clue_id, &volunteer.id);
+    open_task_payload
+        .as_object_mut()
+        .expect("task payload object")
+        .remove("volunteer_user_id");
+    let open_task = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/tasks"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(open_task_payload)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(open_task.status(), StatusCode::CREATED);
+    let open_task: Value = test::read_body_json(open_task).await;
+    assert_eq!(open_task["status"], "pending_claim");
+    assert_eq!(open_task["collaborators"], json!([]));
 
     context.close_case(&case_id).await;
     let closed_case = test::call_service(
@@ -931,18 +955,28 @@ async fn task_applications_create_multi_volunteer_collaboration_and_scope_locati
         .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
         .await;
     let commander_token = context.token(COMMANDER).await;
-    let volunteer_token = context.token(VOLUNTEER).await;
     let second_volunteer_token = add_second_case_volunteer(&context, &case_id).await;
     let volunteer = context.authenticated(VOLUNTEER).await;
     let second_volunteer = context.authenticated(LEARNER).await;
     let source_clue_id = confirmed_clue!(&context, &app, &case_id, &commander_token);
-    let task_id = create_task!(
+    let mut open_task_payload = task_json(&source_clue_id, &volunteer.id);
+    open_task_payload
+        .as_object_mut()
+        .expect("task payload object")
+        .remove("volunteer_user_id");
+    let open_task = test::call_service(
         &app,
-        &case_id,
-        &commander_token,
-        &source_clue_id,
-        &volunteer.id
-    );
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/tasks"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(open_task_payload)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(open_task.status(), StatusCode::CREATED);
+    let open_task: Value = test::read_body_json(open_task).await;
+    assert_eq!(open_task["status"], "pending_claim");
+    let task_id = open_task["id"].as_str().expect("open task id").to_owned();
 
     let application = test::call_service(
         &app,
@@ -988,9 +1022,14 @@ async fn task_applications_create_multi_volunteer_collaboration_and_scope_locati
     )
     .await;
     assert_eq!(approval.status(), StatusCode::OK);
-    let approval: Value = test::read_body_json(approval).await;
-    assert_eq!(approval["status"], "approved");
-
+    let approved: Value = test::read_body_json(approval).await;
+    assert_eq!(approved["status"], "approved");
+    let task_after_approval = tasks::Entity::find_by_id(&task_id)
+        .one(&context.database)
+        .await
+        .expect("task query")
+        .expect("task exists");
+    assert_eq!(task_after_approval.status, "assigned");
     let personal_queue = test::call_service(
         &app,
         test::TestRequest::get()
@@ -1010,17 +1049,17 @@ async fn task_applications_create_multi_volunteer_collaboration_and_scope_locati
     );
 
     assert_eq!(
-        update_status!(&app, &task_id, &volunteer_token, "accepted").status(),
+        update_status!(&app, &task_id, &second_volunteer_token, "accepted").status(),
         StatusCode::OK
     );
     assert_eq!(
-        update_status!(&app, &task_id, &volunteer_token, "active").status(),
+        update_status!(&app, &task_id, &second_volunteer_token, "active").status(),
         StatusCode::OK
     );
     let report = submit_location_report!(
         &app,
         &task_id,
-        &volunteer_token,
+        &second_volunteer_token,
         location_report_json(Utc::now())
     );
     assert_eq!(report.status(), StatusCode::CREATED);
@@ -1040,7 +1079,7 @@ async fn task_applications_create_multi_volunteer_collaboration_and_scope_locati
     let collaboration_locations: Value = test::read_body_json(collaboration_locations).await;
     assert_eq!(
         collaboration_locations.as_array().expect("locations")[0]["volunteer_user_id"],
-        volunteer.id
+        second_volunteer.id
     );
 
     let task = tasks::Entity::find_by_id(&task_id)
