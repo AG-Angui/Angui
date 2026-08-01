@@ -32,6 +32,7 @@
 | `GET` | `/api/cases/{case_id}/summary` | `200` | 获取含来源范围与生成时间的角色裁剪确定性案件摘要 |
 | `GET` | `/api/cases/{case_id}/public-progress` | `200` | 家属查看仅含已确认信息和本人待补充事项的公开进展 |
 | `POST` | `/api/cases/{case_id}/clue-drafts` | `201` | 将受控文本持久化为不可直接确认的线索草稿 |
+| `PATCH` | `/api/cases/{case_id}/clue-drafts/{draft_id}/review` | `200` | 指挥人工接受或拒绝线索字段候选 |
 | `GET` | `/api/cases/{case_id}/pois` | `200` | 按服务端授权中心查询有上限的周边资源，失败时明确降级 |
 | `POST` | `/api/cases/{case_id}/summary-drafts` | `201` | 指挥创建带来源范围和版本的内部摘要草稿 |
 | `PATCH` | `/api/cases/{case_id}/summary-drafts/{draft_id}/review` | `200` | 指挥提交、审核发布、驳回或撤回摘要草稿 |
@@ -242,13 +243,17 @@ Example:
 
 `GET /api/cases/{case_id}/public-progress` 仅对该案件的 `family` 成员开放。它仅返回已人工审核为 `confirmed` 的进展类别、请求者本人仍待补充/核实的项目类别、以及安全和联系提醒；它绝不返回任何原始线索正文、未核实的他人线索、内部搜索方向、任务与分配、志愿者位置、病史全文或成员详情。每项仅包含服务端生成的公开类别、审核状态和更新时间，客户端不得把其他案件详情替代为“公开进展”。
 
-`POST /api/cases/{case_id}/clue-drafts` 可由案件 `family`、`commander` 或 `volunteer` 调用，用于将聊天/文本整理成持久化的 `draft`。响应会保留草稿 ID、受控原始记录引用、模板版本、可选模型标识和不确定性提示。服务不可用时以 `rule_based_fallback` 返回，不阻断人工工作；该接口不创建正式线索，更不允许创建 `confirmed` 线索。
+`POST /api/cases/{case_id}/clue-drafts` 可由案件 `family`、`commander` 或 `volunteer` 调用，用于将聊天/文本整理成持久化的 `draft`。响应会保留草稿 ID、受控原始记录引用、模板版本、可选模型标识、不确定性提示和字段候选。时间、地点、来源或动作候选缺失时保持为空，并在 `missing_fields` 中明确要求人工补充。服务不可用、输出无效或策略不匹配时以 `rule_based_fallback` 返回，不阻断人工工作；该接口不创建正式线索，更不允许创建 `confirmed` 线索。
+
+`PATCH /api/cases/{case_id}/clue-drafts/{draft_id}/review` 仅对该案件 `commander` 开放。指挥可在接受前修正时间、地点、来源和动作候选，并以必填理由执行 `accept` 或 `reject`；服务端以版本号防止并发覆盖，保留候选、操作者、时间和理由的审计记录。接受候选仍不等于确认事实，正式线索仍须走既有人工审核状态机。
+
+审核请求为 `action`、非空 `reason` 和完整的 `candidate` 对象。`candidate` 始终包含 `content_summary`、`occurred_at`、`location_text`、`source_text`、`action_candidates`、`missing_fields` 与 `source_excerpt`；其中无法支持的值必须为 `null` 或空数组，不得用模型推测补齐。提交审核时，服务端会从已持久化的受控原文重新生成 `source_excerpt`，并根据实际空值重新计算 `missing_fields`，不信任客户端传入的这两个派生字段。对已审核草稿或并发变更的旧版本返回 `409`。
 
 `GET /api/cases/{case_id}/pois` 只允许 `commander` 和 `volunteer`，且客户端只能选择医院、派出所、公交站、市场或社区服务中心等白名单类别。中心坐标只能由服务端从当前角色可见的任务点或指挥已确认地点选取；单次查询固定为 3 km、单页、最多 10 项。高德 Web 服务的 key 仅保存在服务端；HTTP 或业务状态失败时，响应将标记为 `degraded` 并给出固定的虚构非坐标回退结果，绝不泄露 key、上游 URL 或案件中心坐标。
 
-`GET /api/cases/{case_id}/summary-drafts`、`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。指挥完成一条线索的人工审核后，服务端会自动创建一份 `pending_review` 摘要草稿；页面只显示最新待审核草稿，指挥只需发布或驳回。`POST` 保留为内部重生成能力，而不是普通页面入口。生命周期包含 `draft`、`pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次提交、审核、发布或撤回都记录操作者、理由、时间和版本；发布会将该案件既有的已发布版本标为 `superseded`。当前 AI 网关只完成提供方合规路由和协议请求构造，尚未执行外部模型推理，因此摘要一律使用同一受控来源范围的确定性降级草稿；未来实际推理的所有提供方失效时也沿用该降级路径。降级不会阻塞线索审核，草稿仍必须人工审核后才能发布，且不会被标记为某个 AI 模型的输出。只有服务端依据受控来源范围生成的 `pending_review` 草稿可发布；自由文本草稿仅限内部使用，审核阶段不可用请求内容覆盖草稿，从而避免把未审核线索、内部任务或健康字段发布给非必要角色。
+`GET /api/cases/{case_id}/summary-drafts`、`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。指挥完成一条线索的人工审核后，服务端会自动创建一份 `pending_review` 摘要草稿；指挥也可以基于同一服务端来源范围编辑内容并创建新的待审核版本。生命周期包含 `pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次审核、发布或撤回都记录操作者、理由和时间；发布会将该案件既有的已发布版本标为 `superseded`。Gateway 会在合规路由后执行 Provider 请求，且摘要输出必须经过长度与来源范围校验；提供方失效、超时或输出无效时使用同一受控来源范围的确定性降级草稿。降级不会阻塞线索审核，草稿仍必须人工审核后才能发布，且不会被标记为某个 AI 模型的输出。
 
-`POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available only after a case reaches `resolved` or `closed`. The server creates an internal `draft` from allowlisted status and count metadata for confirmed clues and completed tasks, persists its explicit `source_scope`, and marks `deidentification_status` as `manual_review_required`. It does not copy raw clue text, attachments, health notes, contacts, exact locations, routes, or task results. This endpoint does not publish, index, export, or print material; a separate authorized de-identification, review, and withdrawal workflow is required before any later reuse.
+`POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available only after a case reaches `resolved` or `closed`. The server creates an internal placeholder `draft` plus a separately protected, administrator-reviewable material version scoped to confirmed clue and completed-task review material, then marks `deidentification_status` as `manual_review_required`. The placeholder contains no raw material and nothing is sent to AI at this stage. This endpoint does not publish, index, export, or print material; a separate authorized de-identification, review, and withdrawal workflow is required before any later reuse.
 
 `POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
 
@@ -312,8 +317,17 @@ Example:
 
 ## 归档脱敏与经验案例审核
 
-归档草稿始终从仅含状态和计数元数据的 `draft` 开始；原始聊天、完整身份、联系方式、病史、精确地点/轨迹、附件、线索正文和任务结果文本不进入草稿。`POST /api/admin/archive-drafts/{draft_id}/deidentify` 与 `PATCH /api/admin/archive-drafts/{draft_id}/review` 均仅对具有 `admin` capability 的账号开放，且不会因该 capability 自动获得源案件的读取权限。
+归档草稿从不包含原始材料的 `draft` 占位内容开始；同时，服务端建立一份受权限保护的待脱敏 review material，范围限于已确认线索和已完成任务的复盘材料。原始聊天、完整身份、联系方式、病史、精确地点/轨迹、附件和未审核线索始终不进入该材料。`POST /api/admin/archive-drafts/{draft_id}/deidentify` 与 `PATCH /api/admin/archive-drafts/{draft_id}/review` 均仅对具有 `admin` capability 的账号开放，且不会因该 capability 自动获得源案件的读取权限。
 
-`POST /api/admin/archive-drafts/{draft_id}/deidentify` 只接受人工 `confirm` 或 `reject` 结果和长度受限的理由。它不接受替换文本、原始材料或“自动完全脱敏”的声明。确认会把草稿转为 `pending_review` 和 `deidentified`；拒绝会转为 `rejected`，不能发布。每次结果记录操作者、时间、版本和理由长度，审计不保存理由原文。
+`POST /api/admin/archive-drafts/{draft_id}/deidentify` 只接受人工 `confirm` 或 `reject` 结果、长度受限的理由，以及在确认时提交的人工脱敏文本。确认会创建新的已脱敏材料版本，再以该版本作为唯一允许交给 AI 的输入，并把草稿转为 `pending_review` 和 `deidentified`；拒绝会转为 `rejected`，不能发布。每次结果记录操作者、时间、版本和理由长度，审计不保存理由原文。
 
 `PATCH /api/admin/archive-drafts/{draft_id}/review` 只允许已确认脱敏的 `pending_review` 草稿 `publish` 或 `reject`，以及将 `published` 草稿 `withdraw`。发布仅把该受控版本标记为 `learning_resource`；当前不会创建知识问答/RAG 索引、导出、打印、公开读取或跨案件读取接口。撤回立即将用途恢复为 `internal_archive` 并标记 `withdrawn`，同时保留版本和审计历史；拒绝或撤回绝不修改或删除原案件。
+# Controlled AI draft endpoints
+
+The following authenticated endpoints produce only drafts; none confirms a clue, publishes a summary, dispatches a task, or inserts material into a knowledge base automatically.
+
+Family intake now has a separate first-confirmation path: `POST /api/intake-sessions/{session_id}/ai-initial-review` stores a family-only initial-review draft and never creates a case. `GET /api/intake-sessions/{session_id}/ai-initial-review` returns the current result. The family must acknowledge every displayed issue through `POST /api/intake-sessions/{session_id}/ai-initial-review/acknowledge` before the existing `/confirm` endpoint performs the second confirmation and creates the case. Model failures, policy mismatches, and invalid JSON use the deterministic rule-check fallback; no fallback result confirms a fact or location.
+
+- `GET /api/intake-sessions/{session_id}/ai-follow-up` returns one optional, skippable AI follow-up question or the static-question fallback. `GET /api/intake-sessions/{session_id}/answer-revisions` lists immutable answers for the session creator; `POST /api/intake-sessions/{session_id}/answers/{field}/restore` restores a selected answer by creating a new revision.
+- `PATCH /api/cases/{case_id}/clue-drafts/{draft_id}/review` accepts `field_decisions` for `content_summary`, `occurred_at`, `location_text`, `source_text`, and `action_candidates`. Decisions are `accept`, `edit`, or `clear`; only an accepted draft is promoted to a normal pending-review clue.
+- `GET /api/cases/{case_id}/summary-drafts/versions` lists immutable summary versions. `GET /api/cases/{case_id}/summary-drafts/{from_id}/diff/{to_id}` returns the readable line-level added/removed difference for two versions.

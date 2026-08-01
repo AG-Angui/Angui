@@ -218,16 +218,43 @@ export interface ClueDraft {
   content: string;
   source_type: PublicClueSourceType;
   raw_record_reference: string | null;
+  source_record_id: string | null;
   occurred_at: string | null;
   location_text: string | null;
   uncertainty_notice: string;
   template_version: string;
   provider_model: string | null;
   degradation_status: string;
+  candidate: ClueDraftCandidate;
+  review_status: "pending_review" | "accepted" | "rejected";
+  reviewed_at: string | null;
+  review_reason: string | null;
+  version: number;
+  promoted_clue_id: string | null;
+}
+export interface ClueDraftCandidate {
+  content_summary: string | null;
+  occurred_at: string | null;
+  location_text: string | null;
+  source_text: string | null;
+  action_candidates: string[];
+  missing_fields: string[];
+  source_excerpt: string;
+  field_sources: Record<
+    string,
+    { reference: string | null; excerpt: string | null }
+  >;
+}
+export interface ClueDraftFieldDecision {
+  action: "accept" | "edit" | "clear";
+  value?: string | null;
+  reason?: string | null;
 }
 export interface SummaryDraft {
   id: string;
   case_id: string;
+  parent_draft_id: string | null;
+  version: number;
   status:
     | "draft"
     | "pending_review"
@@ -312,6 +339,31 @@ export interface CaseSummary {
     due_at: string;
   }>;
   safety_reminders: string[];
+}
+export interface SummaryDraftDiff {
+  from_version: number;
+  to_version: number;
+  added: string[];
+  removed: string[];
+}
+export interface ArchiveDraft {
+  id: string;
+  case_id: string;
+  status: "draft" | "pending_review" | "published" | "rejected" | "withdrawn";
+  content: string;
+  source_scope: string[];
+  review_material_id: string | null;
+  deidentification_status:
+    "manual_review_required" | "deidentified" | "rejected";
+  template_version: string;
+  provider_model: string | null;
+  version: number;
+  usage_scope: "internal_archive" | "learning_resource";
+  retention_status: "retained" | "withdrawn";
+  deidentified_at: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 export type TaskStatus =
   | "pending_claim"
@@ -677,15 +729,65 @@ export function submitTaskFeedback(
 export function createClueDraft(
   token: string,
   caseId: string,
-  payload: {
-    text: string;
-    source_type?: PublicClueSourceType;
-    raw_record_reference?: string;
-  },
+  payload: { source_record_id: string },
 ): Promise<ClueDraft[]> {
   return apiRequest<ClueDraft[]>(
     `/cases/${caseId}/clue-drafts`,
     { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export interface CaseSourceRecord {
+  id: string;
+  case_id: string;
+  record_type: "message" | "phone_record" | "field_feedback";
+  content: string;
+  occurred_at: string | null;
+  source_reference: string | null;
+  created_at: string;
+}
+
+export function createCaseSourceRecord(
+  token: string,
+  caseId: string,
+  payload: Omit<CaseSourceRecord, "id" | "case_id" | "created_at">,
+): Promise<CaseSourceRecord> {
+  return apiRequest(
+    `/cases/${caseId}/source-records`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export function listCaseSourceRecords(
+  token: string,
+  caseId: string,
+): Promise<CaseSourceRecord[]> {
+  return apiRequest(`/cases/${caseId}/source-records`, {}, token);
+}
+
+export function listClueDrafts(
+  token: string,
+  caseId: string,
+): Promise<ClueDraft[]> {
+  return apiRequest<ClueDraft[]>(`/cases/${caseId}/clue-drafts`, {}, token);
+}
+
+export function reviewClueDraft(
+  token: string,
+  caseId: string,
+  draftId: string,
+  payload: {
+    action: "accept" | "reject";
+    reason: string;
+    candidate: ClueDraftCandidate;
+    field_decisions: Record<string, ClueDraftFieldDecision>;
+  },
+): Promise<ClueDraft> {
+  return apiRequest<ClueDraft>(
+    `/cases/${caseId}/clue-drafts/${draftId}/review`,
+    { method: "PATCH", body: JSON.stringify(payload) },
     token,
   );
 }
@@ -729,6 +831,75 @@ export function reviewSummaryDraft(
   return apiRequest<SummaryDraft>(
     `/cases/${caseId}/summary-drafts/${draftId}/review`,
     { method: "PATCH", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export function listSummaryDraftVersions(
+  token: string,
+  caseId: string,
+): Promise<{ items: SummaryDraft[] }> {
+  return apiRequest(`/cases/${caseId}/summary-drafts/versions`, {}, token);
+}
+
+export function diffSummaryDraftVersions(
+  token: string,
+  caseId: string,
+  fromId: string,
+  toId: string,
+): Promise<SummaryDraftDiff> {
+  return apiRequest(
+    `/cases/${caseId}/summary-drafts/${fromId}/diff/${toId}`,
+    {},
+    token,
+  );
+}
+
+export function createArchiveDraft(
+  token: string,
+  caseId: string,
+): Promise<ArchiveDraft> {
+  return apiRequest(
+    `/cases/${caseId}/archive-drafts`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function deidentifyArchiveDraft(
+  token: string,
+  draftId: string,
+  payload: {
+    outcome: "confirm" | "reject";
+    reason: string;
+    deidentified_material?: string;
+  },
+): Promise<ArchiveDraft> {
+  return apiRequest(
+    `/admin/archive-drafts/${draftId}/deidentify`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+export function listAdminArchiveDrafts(token: string): Promise<ArchiveDraft[]> {
+  return apiRequest<ArchiveDraft[]>("/admin/archive-drafts", {}, token);
+}
+
+export function reviewArchiveDraft(
+  token: string,
+  draftId: string,
+  payload: { action: "publish" | "reject" | "withdraw"; reason: string },
+): Promise<ArchiveDraft> {
+  return apiRequest(
+    `/admin/archive-drafts/${draftId}/review`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
     token,
   );
 }

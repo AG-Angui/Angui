@@ -426,17 +426,31 @@ pub async fn create_clue(
     case_id: &str,
     request: CreateClueRequest,
 ) -> Result<ClueResponse, ApiError> {
-    validate_clue_request(&request)?;
     let transaction = db.begin().await?;
+    let response = create_clue_in_transaction(&transaction, auth, case_id, request).await?;
+    transaction.commit().await?;
+    Ok(response)
+}
+
+/// Creates a pending-review clue inside an existing transaction. AI-draft
+/// promotion uses this to ensure accepting a draft, creating its formal clue,
+/// recording the promotion link, and writing both audit events are atomic.
+pub(crate) async fn create_clue_in_transaction<C: ConnectionTrait>(
+    db: &C,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    request: CreateClueRequest,
+) -> Result<ClueResponse, ApiError> {
+    validate_clue_request(&request)?;
     require_case_role(
-        &transaction,
+        db,
         &auth.id,
         case_id,
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
     let case_model = cases::Entity::find_by_id(case_id)
-        .one(&transaction)
+        .one(db)
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
 
@@ -477,12 +491,12 @@ pub async fn create_clue(
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp.clone()),
     }
-    .insert(&transaction)
+    .insert(db)
     .await?;
 
     for attachment_id in &request.attachment_ids {
         let attachment = case_attachments::Entity::find_by_id(attachment_id)
-            .one(&transaction)
+            .one(db)
             .await?
             .filter(|attachment| attachment.case_id == case_id)
             .ok_or_else(|| {
@@ -500,7 +514,7 @@ pub async fn create_clue(
             attachment_id: Set(attachment_id.clone()),
             created_at: Set(timestamp.clone()),
         }
-        .insert(&transaction)
+        .insert(db)
         .await?;
     }
 
@@ -510,11 +524,11 @@ pub async fn create_clue(
         reviewed_by_user_id: Set(None),
         reviewed_at: Set(None),
     }
-    .insert(&transaction)
+    .insert(db)
     .await?;
 
     write_audit(
-        &transaction,
+        db,
         Some(case_id.to_owned()),
         auth,
         "clue.submitted",
@@ -524,7 +538,6 @@ pub async fn create_clue(
     )
     .await?;
 
-    transaction.commit().await?;
     Ok(ClueResponse::new(
         clue_model,
         Some(attribution),

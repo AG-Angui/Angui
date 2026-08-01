@@ -19,13 +19,11 @@ describe("apiRequest", () => {
     async (status, code, message) => {
       vi.stubGlobal(
         "fetch",
-        vi
-          .fn()
-          .mockResolvedValue(
-            jsonResponse(status, {
-              error: { code, message: "internal state detail" },
-            }),
-          ),
+        vi.fn().mockResolvedValue(
+          jsonResponse(status, {
+            error: { code, message: "internal state detail" },
+          }),
+        ),
       );
 
       await expect(apiRequest("/cases/example")).rejects.toMatchObject({

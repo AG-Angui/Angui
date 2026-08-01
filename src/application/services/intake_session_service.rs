@@ -9,18 +9,27 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, cases, intake_answer_revisions, intake_question_definitions,
-        intake_session_answers, intake_sessions,
+        audit_events, cases, intake_answer_revisions, intake_profile_drafts,
+        intake_question_definitions, intake_session_answers, intake_sessions,
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, ConfirmIntakeSessionRequest, ConfirmIntakeSessionResponse,
-        CreateCaseRequest, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakePhaseProgress,
-        IntakeProfileDraft, IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields,
-        IntakeQuestion, IntakeSessionResponse, IntakeStructuredFacts, SubmitIntakeAnswerRequest,
-        SubmitIntakeAnswerResponse,
+        AcknowledgeIntakeAiInitialReviewRequest, AuthenticatedUser, ConfirmIntakeSessionRequest,
+        ConfirmIntakeSessionResponse, ConfirmedIntakeProfile, CreateCaseRequest,
+        CreateIntakeSessionRequest, IntakeAiFollowUp, IntakeAiFollowUpResponse,
+        IntakeAiInitialReviewIssue, IntakeAiInitialReviewResponse, IntakeAnswerRevisionResponse,
+        IntakeInitialAnswers, IntakePhaseProgress, IntakeProfileDraft,
+        IntakeProfileDraftDiffResponse, IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields,
+        IntakeProfileDraftVersionsResponse, IntakeQuestion, IntakeSessionResponse,
+        IntakeStructuredFacts, RestoreIntakeAnswerRequest, RestoreIntakeProfileDraftRequest,
+        ReviewIntakeProfileDraftRequest, StartIntakeAiInitialReviewRequest,
+        SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
+};
+
+use crate::ai_gateway::{
+    AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel,
 };
 
 pub async fn create_intake_session(
@@ -66,6 +75,10 @@ pub async fn create_intake_session(
         answers_json: Set(answers_json),
         assessment_json: Set("[]".to_owned()),
         structured_answers_json: Set("{}".to_owned()),
+        ai_initial_review_status: Set("not_started".to_owned()),
+        ai_initial_review_json: Set("[]".to_owned()),
+        ai_initial_review_profile_json: Set(None),
+        ai_initial_reviewed_at: Set(None),
         confirmed_by_user_id: Set(None),
         confirmed_at: Set(None),
         created_at: Set(timestamp.clone()),
@@ -248,6 +261,13 @@ pub async fn submit_intake_answer_with_map(
         Set(serde_json::to_string(&structured_answers).map_err(|_| ApiError::Internal)?);
     updated_session.assessment_json =
         Set(serde_json::to_string(&assessments).map_err(|_| ApiError::Internal)?);
+    // A correction changes the exact material seen by the initial review. Do
+    // not let a family reuse acknowledgements that were made against the old
+    // values or profile snapshot.
+    updated_session.ai_initial_review_status = Set("not_started".to_owned());
+    updated_session.ai_initial_review_json = Set("[]".to_owned());
+    updated_session.ai_initial_review_profile_json = Set(None);
+    updated_session.ai_initial_reviewed_at = Set(None);
     updated_session.updated_at = Set(timestamp);
     let updated_session = updated_session.update(&transaction).await?;
 
@@ -287,6 +307,14 @@ pub async fn get_intake_profile_draft(
         .await?
         .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
     require_session_creator(&session, auth)?;
+    if let Some(draft) = intake_profile_drafts::Entity::find()
+        .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+        .order_by_desc(intake_profile_drafts::Column::Version)
+        .one(db)
+        .await?
+    {
+        return profile_draft_from_model(draft);
+    }
     let questions = questions_for_version(db, session.question_set_version).await?;
     let answers = parse_answers(&session)?;
     let stored_answers = intake_session_answers::Entity::find()
@@ -301,9 +329,14 @@ pub async fn get_intake_profile_draft(
         .collect();
 
     Ok(IntakeProfileDraft {
+        id: "unpersisted-family-draft".to_owned(),
         status: "draft".to_owned(),
         source_scope: "family_provided intake answers from this session only".to_owned(),
         generated_at: session.updated_at.clone(),
+        provider_model: None,
+        template_version: "intake-profile-family-draft-v1".to_owned(),
+        degradation_status: "model_generation_pending".to_owned(),
+        version: 0,
         requires_human_confirmation: true,
         profile: IntakeProfileDraftFields {
             physical_description: answers.basic_information.clone(),
@@ -322,6 +355,498 @@ pub async fn get_intake_profile_draft(
         confirmation_blocked_reasons,
         direction_hypotheses: direction_hypotheses(&answers, &session.updated_at),
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileExtractionOutput {
+    profile: IntakeProfileDraftFields,
+    field_sources: std::collections::BTreeMap<String, ProfileFieldSource>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileFieldSource {
+    source_field: String,
+    source_excerpt: String,
+}
+
+/// Produces a versioned candidate from the family's immutable answer snapshot.
+/// It can never alter answers or create a case; all returned values remain a
+/// family-confirmed draft until the existing second confirmation flow.
+pub async fn generate_intake_profile_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    gateway: &crate::ai_gateway::AiGateway,
+) -> Result<IntakeProfileDraft, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    if session.case_id.is_some() || session.status == "confirmed" {
+        return Err(ApiError::Conflict(
+            "confirmed intake sessions cannot generate a profile candidate".to_owned(),
+        ));
+    }
+    let answers = parse_answers(&session)?;
+    let input = serde_json::to_string(&json!({"family_answers": answers}))
+        .map_err(|_| ApiError::Internal)?;
+    let request = AiRequest {
+        capability: AiCapability::StructuredExtraction, data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft, data_region: "CN".to_owned(),
+        system_instruction: Some("Return JSON only using the supplied schema. Extract concise profile candidates only from supplied family answers. For each non-empty candidate give its source answer field and an exact supporting excerpt. Keep unknown fields null. Do not diagnose, confirm facts, infer current or future location, add facts, issue instructions, or change answers.".to_owned()),
+        output_schema: Some(profile_extraction_schema()), output_schema_name: Some("intake_profile_candidate".to_owned()), input,
+        requested_output_tokens: 900, template_version: "intake-profile-extraction-v1".to_owned(),
+        input_scope_reference: "intake-session-family-answers-only".to_owned(), redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+    };
+    let execution = gateway.execute(&request).await;
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&request, &execution);
+    let (profile, metadata, provider_model, degradation_status, _audit_status) = match execution {
+        AiExecutionResult::Completed { route, output, .. } => {
+            match gateway.decode_json::<ProfileExtractionOutput>(&output) {
+                Ok(out) => match validate_profile_extraction(out, &answers) {
+                    Ok((profile, metadata)) => (
+                        profile,
+                        metadata,
+                        Some(route.model),
+                        "manual_review_required".to_owned(),
+                        AiTaskStatus::Completed,
+                    ),
+                    Err(_) => profile_fallback(&answers, &session),
+                },
+                Err(_) => profile_fallback(&answers, &session),
+            }
+        }
+        AiExecutionResult::Degraded { .. } => profile_fallback(&answers, &session),
+        AiExecutionResult::Failed { .. } => profile_fallback(&answers, &session),
+    };
+    let timestamp = now();
+    let transaction = db.begin().await?;
+    let latest = intake_profile_drafts::Entity::find()
+        .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+        .order_by_desc(intake_profile_drafts::Column::Version)
+        .one(&transaction)
+        .await?;
+    let version = latest.as_ref().map_or(1, |value| value.version + 1);
+    let model = intake_profile_drafts::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        session_id: Set(session_id.to_owned()),
+        version: Set(version),
+        parent_draft_id: Set(latest.map(|value| value.id)),
+        profile_json: Set(serde_json::to_string(&profile).map_err(|_| ApiError::Internal)?),
+        field_metadata_json: Set(serde_json::to_string(&metadata).map_err(|_| ApiError::Internal)?),
+        status: Set("draft".to_owned()),
+        degradation_status: Set(degradation_status),
+        provider_model: Set(provider_model),
+        template_version: Set("intake-profile-extraction-v1".to_owned()),
+        generated_at: Set(timestamp.clone()),
+        confirmed_by_user_id: Set(None),
+        confirmed_at: Set(None),
+        created_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+    crate::ai_gateway::persist_execution_audits(&transaction, &execution_audits, &auth.id, None)
+        .await?;
+    write_audit(&transaction, auth, "intake_profile_draft.generated", session_id.to_owned(), Some(json!({"version": version, "degradation_status": model.degradation_status, "provider_configured": model.provider_model.is_some()}))).await?;
+    transaction.commit().await?;
+    profile_draft_from_model(model)
+}
+
+/// Runs the controlled initial review after the family's first confirmation.
+/// The result remains a family-only draft and cannot create a case, change an
+/// answer, or make a location/fact conclusion. The exact reviewed profile is
+/// saved so the later second confirmation cannot silently submit different
+/// content.
+pub async fn start_ai_initial_review(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: StartIntakeAiInitialReviewRequest,
+    gateway: &crate::ai_gateway::AiGateway,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    if session.case_id.is_some() || session.status == "confirmed" {
+        return Err(ApiError::Conflict(
+            "a confirmed intake session cannot be reviewed again".to_owned(),
+        ));
+    }
+    if !matches!(
+        session.status.as_str(),
+        "ready_for_confirmation" | "awaiting_family_review" | "ready_for_second_confirmation"
+    ) {
+        return Err(ApiError::Conflict(
+            "complete the required intake answers before starting initial review".to_owned(),
+        ));
+    }
+
+    let answers = parse_answers(&session)?;
+    let assessments = parse_assessments(&session)?;
+    let input = serde_json::to_string(&json!({
+        "family_answers": answers,
+        "family_reviewed_profile": request.profile,
+        "rule_consistency_checks": assessments,
+        "review_task": "Identify only ambiguous, incomplete, or internally inconsistent family-provided information that needs the family's confirmation."
+    }))
+    .map_err(|_| ApiError::Internal)?;
+    let reviewed_at = now();
+    let ai_request = AiRequest {
+        capability: AiCapability::Inquiry,
+        data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft,
+        data_region: "CN".to_owned(),
+        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family text. `field` must be one of the supplied family answer field names or `profile`. `source_fields` must name only supplied fields. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
+        output_schema: Some(initial_review_schema()),
+        output_schema_name: Some("intake_initial_review".to_owned()),
+        input,
+        requested_output_tokens: 700,
+        template_version: "intake-initial-review-ai-v1".to_owned(),
+        input_scope_reference: "intake-session-authorized-family-review".to_owned(),
+        redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+    };
+    let execution = gateway.execute(&ai_request).await;
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+    let (issues, review_status, _audit_status) = match execution {
+        AiExecutionResult::Completed { output, .. } => {
+            match gateway.decode_json::<InitialReviewModelOutput>(&output) {
+                Ok(output) => match validate_initial_review_output(output, &answers) {
+                    Ok(issues) => (
+                        issues,
+                        "available_pending".to_owned(),
+                        AiTaskStatus::Completed,
+                    ),
+                    Err(_) => (
+                        rule_based_initial_review_issues(&assessments),
+                        "rule_based_fallback_pending".to_owned(),
+                        AiTaskStatus::Failed,
+                    ),
+                },
+                Err(_) => (
+                    rule_based_initial_review_issues(&assessments),
+                    "rule_based_fallback_pending".to_owned(),
+                    AiTaskStatus::Failed,
+                ),
+            }
+        }
+        AiExecutionResult::Degraded { .. } => (
+            rule_based_initial_review_issues(&assessments),
+            "rule_based_fallback_pending".to_owned(),
+            AiTaskStatus::Degraded,
+        ),
+        AiExecutionResult::Failed { .. } => (
+            rule_based_initial_review_issues(&assessments),
+            "rule_based_fallback_pending".to_owned(),
+            AiTaskStatus::Failed,
+        ),
+    };
+
+    let transaction = db.begin().await?;
+    let current = intake_sessions::Entity::find_by_id(session_id)
+        .lock_exclusive()
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&current, auth)?;
+    if current.updated_at != session.updated_at
+        || current.case_id.is_some()
+        || current.status == "confirmed"
+    {
+        return Err(ApiError::Conflict(
+            "intake answers changed while the initial review was running; start it again"
+                .to_owned(),
+        ));
+    }
+    let profile_json = serde_json::to_string(&request.profile).map_err(|_| ApiError::Internal)?;
+    let issues_json = serde_json::to_string(&issues).map_err(|_| ApiError::Internal)?;
+    let mut updated = current.into_active_model();
+    updated.status = Set("awaiting_family_review".to_owned());
+    updated.ai_initial_review_status = Set(review_status);
+    updated.ai_initial_review_json = Set(issues_json);
+    updated.ai_initial_review_profile_json = Set(Some(profile_json));
+    updated.ai_initial_reviewed_at = Set(Some(reviewed_at.clone()));
+    updated.updated_at = Set(reviewed_at.clone());
+    let updated = updated.update(&transaction).await?;
+    crate::ai_gateway::persist_execution_audits(&transaction, &execution_audits, &auth.id, None)
+        .await?;
+    write_audit(
+        &transaction,
+        auth,
+        "intake_session.ai_initial_review_completed",
+        session_id.to_owned(),
+        Some(json!({
+            "review_status": updated.ai_initial_review_status,
+            "issue_count": issues.len(),
+            "has_blocking_rule_checks": assessments.iter().any(|item| item.severity == "blocking"),
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    initial_review_response(&updated)
+}
+
+pub async fn get_ai_initial_review(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    initial_review_response(&session)
+}
+
+pub async fn acknowledge_ai_initial_review(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: AcknowledgeIntakeAiInitialReviewRequest,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    require_operational_member(auth)?;
+    if !request.human_confirmed {
+        return Err(ApiError::Validation(
+            "human_confirmed must be true before the second confirmation".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .lock_exclusive()
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    if session.status != "awaiting_family_review" {
+        return Err(ApiError::Conflict(
+            "this intake session is not awaiting family review acknowledgement".to_owned(),
+        ));
+    }
+    let issues = parse_initial_review_issues(&session)?;
+    let mut expected = issues
+        .iter()
+        .map(|issue| issue.id.clone())
+        .collect::<Vec<_>>();
+    expected.sort();
+    let mut submitted = request.confirmed_issue_ids;
+    submitted.sort();
+    submitted.dedup();
+    if submitted != expected {
+        return Err(ApiError::Validation(
+            "confirm every displayed initial-review item, or correct an answer and run initial review again"
+                .to_owned(),
+        ));
+    }
+    let assessments = parse_assessments(&session)?;
+    let next_review_status = acknowledged_review_status(&session.ai_initial_review_status);
+    let mut updated = session.into_active_model();
+    updated.status = Set("ready_for_second_confirmation".to_owned());
+    updated.ai_initial_review_status = Set(next_review_status);
+    updated.updated_at = Set(now());
+    let updated = updated.update(&transaction).await?;
+    write_audit(
+        &transaction,
+        auth,
+        "intake_session.ai_initial_review_acknowledged",
+        session_id.to_owned(),
+        Some(json!({
+            "issue_count": issues.len(),
+            "has_blocking_rule_checks": assessments.iter().any(|item| item.severity == "blocking"),
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    initial_review_response(&updated)
+}
+
+pub async fn get_ai_follow_up(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    gateway: &crate::ai_gateway::AiGateway,
+) -> Result<IntakeAiFollowUpResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let questions = questions_for_version(db, session.question_set_version).await?;
+    let answers = parse_answers(&session)?;
+    let missing = missing_fields(&answers, &questions);
+    let fallback = next_question_for_phase(
+        &questions,
+        &missing,
+        &IntakePhaseProgress::for_answers(&answers),
+    );
+    let Some(fallback) = fallback else {
+        return Ok(IntakeAiFollowUpResponse {
+            question: None,
+            degradation_status: "rule_based_complete".to_owned(),
+            generated_at: now(),
+        });
+    };
+    let input = serde_json::to_string(&serde_json::json!({
+        "answers": answers,
+        "missing_fields": missing,
+        "fallback_field": fallback.field.clone(),
+    }))
+    .map_err(|_| ApiError::Internal)?;
+    let ai_request = AiRequest {
+        capability: AiCapability::Inquiry,
+        data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft,
+        data_region: "CN".to_owned(),
+        system_instruction: Some("Return JSON only: {field,prompt,purpose,missing_fields,skippable}. Ask one optional factual follow-up for a listed missing field. Do not infer a location, diagnosis, action, or emergency conclusion.".to_owned()),
+        output_schema: Some(follow_up_schema()),
+        output_schema_name: Some("intake_follow_up".to_owned()),
+        input,
+        requested_output_tokens: 220,
+        template_version: "intake-follow-up-ai-v1".to_owned(),
+        input_scope_reference: "intake-session-authorized-answers".to_owned(),
+        redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+    };
+    let execution = gateway.execute(&ai_request).await;
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+    let (question, degradation_status, _audit_status) = match execution {
+        AiExecutionResult::Completed { output, .. } => {
+            match gateway.decode_json::<IntakeAiFollowUp>(&output) {
+                Ok(question) if valid_follow_up(&question, &missing, &questions) => (
+                    Some(normalize_follow_up(question)),
+                    "available".to_owned(),
+                    AiTaskStatus::Completed,
+                ),
+                _ => (
+                    Some(static_follow_up(fallback, missing.clone())),
+                    "rule_based_fallback".to_owned(),
+                    AiTaskStatus::Failed,
+                ),
+            }
+        }
+        AiExecutionResult::Degraded { .. } => (
+            Some(static_follow_up(fallback, missing.clone())),
+            "rule_based_fallback".to_owned(),
+            AiTaskStatus::Degraded,
+        ),
+        AiExecutionResult::Failed { .. } => (
+            Some(static_follow_up(fallback, missing.clone())),
+            "rule_based_fallback".to_owned(),
+            AiTaskStatus::Failed,
+        ),
+    };
+    crate::ai_gateway::persist_execution_audits(db, &execution_audits, &auth.id, None).await?;
+    Ok(IntakeAiFollowUpResponse {
+        question,
+        degradation_status,
+        generated_at: now(),
+    })
+}
+
+pub async fn list_answer_revisions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<Vec<IntakeAnswerRevisionResponse>, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    Ok(intake_answer_revisions::Entity::find()
+        .filter(intake_answer_revisions::Column::SessionId.eq(session_id))
+        .order_by_asc(intake_answer_revisions::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|revision| IntakeAnswerRevisionResponse {
+            id: revision.id,
+            field: revision.field_code,
+            answer: revision.raw_answer,
+            revision_kind: revision.revision_kind,
+            created_at: revision.created_at,
+        })
+        .collect())
+}
+
+pub async fn restore_answer_revision(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    field: &str,
+    request: RestoreIntakeAnswerRequest,
+    answer_hard_max: usize,
+) -> Result<SubmitIntakeAnswerResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let revision = intake_answer_revisions::Entity::find_by_id(request.revision_id)
+        .one(db)
+        .await?
+        .filter(|revision| revision.session_id == session_id && revision.field_code == field)
+        .ok_or_else(|| ApiError::NotFound("intake answer revision was not found".to_owned()))?;
+    submit_intake_answer(
+        db,
+        auth,
+        session_id,
+        SubmitIntakeAnswerRequest {
+            field: field.to_owned(),
+            answer: revision.raw_answer,
+            replace: true,
+            structured: None,
+        },
+        answer_hard_max,
+    )
+    .await
+}
+
+fn static_follow_up(question: IntakeQuestion, missing_fields: Vec<String>) -> IntakeAiFollowUp {
+    IntakeAiFollowUp {
+        field: question.field,
+        prompt: question.prompt,
+        purpose: "Collect a missing factual field for human review.".to_owned(),
+        missing_fields,
+        skippable: true,
+    }
+}
+
+fn valid_follow_up(
+    question: &IntakeAiFollowUp,
+    missing: &[String],
+    questions: &[intake_question_definitions::Model],
+) -> bool {
+    question.skippable
+        && missing.contains(&question.field)
+        && questions
+            .iter()
+            .any(|definition| definition.field_code == question.field)
+        && !question.prompt.trim().is_empty()
+        && question.prompt.chars().count() <= 500
+        && !question.purpose.trim().is_empty()
+        && question.purpose.chars().count() <= 300
+        && question
+            .missing_fields
+            .iter()
+            .all(|field| missing.contains(field))
+}
+
+fn normalize_follow_up(mut question: IntakeAiFollowUp) -> IntakeAiFollowUp {
+    question.prompt = question.prompt.trim().chars().take(500).collect();
+    question.purpose = question.purpose.trim().chars().take(300).collect();
+    question.missing_fields.sort();
+    question.missing_fields.dedup();
+    question
 }
 
 fn profile_draft_field_metadata(
@@ -378,9 +903,309 @@ fn profile_draft_field_metadata(
             generated_at: stored
                 .map(|answer| answer.generated_at.clone())
                 .unwrap_or_else(|| session.created_at.clone()),
+            source_excerpt: value.clone(),
+            provider_model: stored.and_then(|answer| answer.model.clone()),
+            template_version: stored
+                .and_then(|answer| answer.template_version.clone())
+                .unwrap_or_else(|| "intake-profile-family-draft-v1".to_owned()),
         })
     })
     .collect()
+}
+
+pub async fn list_intake_profile_draft_versions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<IntakeProfileDraftVersionsResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    Ok(IntakeProfileDraftVersionsResponse {
+        items: intake_profile_drafts::Entity::find()
+            .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+            .order_by_desc(intake_profile_drafts::Column::Version)
+            .all(db)
+            .await?
+            .into_iter()
+            .map(profile_draft_from_model)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+pub async fn diff_intake_profile_drafts(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    from_id: &str,
+    to_id: &str,
+) -> Result<IntakeProfileDraftDiffResponse, ApiError> {
+    let _ = list_intake_profile_draft_versions(db, auth, session_id).await?;
+    let from = intake_profile_drafts::Entity::find_by_id(from_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("profile draft version was not found".to_owned()))?;
+    let from = profile_draft_from_model(from)?;
+    let to = intake_profile_drafts::Entity::find_by_id(to_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("profile draft version was not found".to_owned()))?;
+    let to = profile_draft_from_model(to)?;
+    let mut changed_fields = Vec::new();
+    for field in [
+        "physical_description",
+        "clothing_description",
+        "health_notes",
+        "mobility_notes",
+        "transportation_ability",
+        "frequent_locations",
+        "last_seen_information",
+        "behavior_habits",
+        "suspicious_motive",
+    ] {
+        if serde_json::to_value(&from.profile)
+            .ok()
+            .and_then(|value| value.get(field).cloned())
+            != serde_json::to_value(&to.profile)
+                .ok()
+                .and_then(|value| value.get(field).cloned())
+        {
+            changed_fields.push(field.to_owned());
+        }
+    }
+    Ok(IntakeProfileDraftDiffResponse {
+        from_version: from.version,
+        to_version: to.version,
+        changed_fields,
+    })
+}
+
+pub async fn review_intake_profile_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    draft_id: &str,
+    request: ReviewIntakeProfileDraftRequest,
+) -> Result<IntakeProfileDraft, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let action = request.action.trim().to_lowercase();
+    if !matches!(action.as_str(), "confirm" | "reject") {
+        return Err(ApiError::Validation(
+            "action must be confirm or reject".to_owned(),
+        ));
+    }
+    validate_review_reason(request.reason)?;
+    let draft = intake_profile_drafts::Entity::find_by_id(draft_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id && item.status == "draft")
+        .ok_or_else(|| ApiError::Conflict("profile draft is not awaiting review".to_owned()))?;
+    let mut active = draft.into_active_model();
+    active.status = Set(if action == "confirm" {
+        "confirmed".to_owned()
+    } else {
+        "superseded".to_owned()
+    });
+    active.confirmed_by_user_id = Set(Some(auth.id.clone()));
+    active.confirmed_at = Set(Some(now()));
+    let model = active.update(db).await?;
+    profile_draft_from_model(model)
+}
+
+pub async fn restore_intake_profile_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: RestoreIntakeProfileDraftRequest,
+) -> Result<IntakeProfileDraft, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    validate_review_reason(request.reason)?;
+    let source = intake_profile_drafts::Entity::find_by_id(&request.draft_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("profile draft version was not found".to_owned()))?;
+    let version = intake_profile_drafts::Entity::find()
+        .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+        .order_by_desc(intake_profile_drafts::Column::Version)
+        .one(db)
+        .await?
+        .map_or(1, |item| item.version + 1);
+    let timestamp = now();
+    let model = intake_profile_drafts::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        session_id: Set(session_id.to_owned()),
+        version: Set(version),
+        parent_draft_id: Set(Some(source.id)),
+        profile_json: Set(source.profile_json),
+        field_metadata_json: Set(source.field_metadata_json),
+        status: Set("draft".to_owned()),
+        degradation_status: Set("restored_human_review_required".to_owned()),
+        provider_model: Set(None),
+        template_version: Set("intake-profile-restored-v1".to_owned()),
+        generated_at: Set(timestamp.clone()),
+        confirmed_by_user_id: Set(None),
+        confirmed_at: Set(None),
+        created_at: Set(timestamp),
+    }
+    .insert(db)
+    .await?;
+    profile_draft_from_model(model)
+}
+
+fn validate_review_reason(reason: String) -> Result<(), ApiError> {
+    let length = reason.trim().chars().count();
+    if !(1..=1_000).contains(&length) {
+        return Err(ApiError::Validation(
+            "reason must contain 1 to 1000 characters".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn profile_draft_from_model(
+    model: intake_profile_drafts::Model,
+) -> Result<IntakeProfileDraft, ApiError> {
+    Ok(IntakeProfileDraft {
+        id: model.id,
+        status: model.status,
+        source_scope: "family_provided intake answers from this session only".to_owned(),
+        generated_at: model.generated_at,
+        provider_model: model.provider_model,
+        template_version: model.template_version,
+        degradation_status: model.degradation_status,
+        version: model.version,
+        requires_human_confirmation: true,
+        profile: serde_json::from_str(&model.profile_json).map_err(|_| ApiError::Internal)?,
+        field_metadata: serde_json::from_str(&model.field_metadata_json)
+            .map_err(|_| ApiError::Internal)?,
+        missing_fields: Vec::new(),
+        assessments: Vec::new(),
+        confirmation_blocked_reasons: Vec::new(),
+        direction_hypotheses: Vec::new(),
+    })
+}
+
+fn profile_fallback(
+    answers: &IntakeInitialAnswers,
+    session: &intake_sessions::Model,
+) -> (
+    IntakeProfileDraftFields,
+    Vec<IntakeProfileDraftFieldMetadata>,
+    Option<String>,
+    String,
+    AiTaskStatus,
+) {
+    let fields = IntakeProfileDraftFields {
+        physical_description: answers.basic_information.clone(),
+        clothing_description: answers.belongings.clone(),
+        health_notes: answers.health_status.clone(),
+        mobility_notes: answers.health_status.clone(),
+        transportation_ability: answers.transport_ability.clone(),
+        frequent_locations: answers.frequent_locations.clone(),
+        last_seen_information: answers.last_seen.clone(),
+        behavior_habits: answers.behavior_habits.clone(),
+        suspicious_motive: answers.suspicious_motive.clone(),
+    };
+    let metadata = profile_draft_field_metadata(answers, &[], session)
+        .into_iter()
+        .map(|mut item| {
+            item.source = "family_provided_fallback".to_owned();
+            item.template_version = "intake-profile-family-fallback-v1".to_owned();
+            item
+        })
+        .collect();
+    (
+        fields,
+        metadata,
+        None,
+        "rule_based_fallback".to_owned(),
+        AiTaskStatus::Degraded,
+    )
+}
+
+fn validate_profile_extraction(
+    output: ProfileExtractionOutput,
+    answers: &IntakeInitialAnswers,
+) -> Result<
+    (
+        IntakeProfileDraftFields,
+        Vec<IntakeProfileDraftFieldMetadata>,
+    ),
+    (),
+> {
+    let allowed = [
+        "basic_information",
+        "belongings",
+        "health_status",
+        "transport_ability",
+        "frequent_locations",
+        "last_seen",
+        "behavior_habits",
+        "suspicious_motive",
+    ];
+    let values = [
+        ("physical_description", &output.profile.physical_description),
+        ("clothing_description", &output.profile.clothing_description),
+        ("health_notes", &output.profile.health_notes),
+        ("mobility_notes", &output.profile.mobility_notes),
+        (
+            "transportation_ability",
+            &output.profile.transportation_ability,
+        ),
+        ("frequent_locations", &output.profile.frequent_locations),
+        (
+            "last_seen_information",
+            &output.profile.last_seen_information,
+        ),
+        ("behavior_habits", &output.profile.behavior_habits),
+        ("suspicious_motive", &output.profile.suspicious_motive),
+    ];
+    let mut metadata = Vec::new();
+    for (field, value) in values {
+        if value.as_ref().is_some_and(|value| !value.trim().is_empty()) {
+            let source = output.field_sources.get(field).ok_or(())?;
+            if !allowed.contains(&source.source_field.as_str())
+                || source.source_excerpt.trim().is_empty()
+            {
+                return Err(());
+            }
+            let answer = answer_for(answers, &source.source_field).ok_or(())?;
+            if !answer.contains(source.source_excerpt.trim()) {
+                return Err(());
+            }
+            metadata.push(IntakeProfileDraftFieldMetadata {
+                field: field.to_owned(),
+                source_field: source.source_field.clone(),
+                source: "ai_extracted".to_owned(),
+                status: "draft".to_owned(),
+                generated_at: now(),
+                source_excerpt: Some(source.source_excerpt.trim().to_owned()),
+                provider_model: None,
+                template_version: "intake-profile-extraction-v1".to_owned(),
+            });
+        }
+    }
+    Ok((output.profile, metadata))
+}
+
+fn profile_extraction_schema() -> serde_json::Value {
+    json!({"type":"object","additionalProperties":false,"required":["profile","field_sources"],"properties":{"profile":{"type":"object","additionalProperties":false,"required":["physical_description","clothing_description","health_notes","mobility_notes","transportation_ability","frequent_locations","last_seen_information","behavior_habits","suspicious_motive"],"properties":{"physical_description":{"type":["string","null"]},"clothing_description":{"type":["string","null"]},"health_notes":{"type":["string","null"]},"mobility_notes":{"type":["string","null"]},"transportation_ability":{"type":["string","null"]},"frequent_locations":{"type":["string","null"]},"last_seen_information":{"type":["string","null"]},"behavior_habits":{"type":["string","null"]},"suspicious_motive":{"type":["string","null"]}}},"field_sources":{"type":"object","additionalProperties":{"type":"object","additionalProperties":false,"required":["source_field","source_excerpt"],"properties":{"source_field":{"type":"string"},"source_excerpt":{"type":"string"}}}}}})
 }
 
 pub async fn confirm_intake_session(
@@ -392,9 +1217,10 @@ pub async fn confirm_intake_session(
     require_operational_member(auth)?;
     if !request.human_confirmed {
         return Err(ApiError::Validation(
-            "human_confirmed must be true before creating a case".to_owned(),
+            "human_confirmed must be true before the second confirmation creates a case".to_owned(),
         ));
     }
+    let submitted_profile = request.profile.clone();
     let case_request = case_request_from_confirmed_profile(request);
     let transaction = db.begin().await?;
     let session = intake_sessions::Entity::find_by_id(session_id)
@@ -412,9 +1238,27 @@ pub async fn confirm_intake_session(
         transaction.commit().await?;
         return Ok(confirmed_response(case_model, session.confirmed_at));
     }
-    if session.status != "ready_for_confirmation" {
+    if session.status != "ready_for_second_confirmation" {
         return Err(ApiError::Conflict(
-            "intake session is not ready for confirmation".to_owned(),
+            "complete the initial review and family acknowledgement before the second confirmation"
+                .to_owned(),
+        ));
+    }
+    let reviewed_profile = session
+        .ai_initial_review_profile_json
+        .as_deref()
+        .ok_or_else(|| {
+            ApiError::Conflict(
+                "the initial review profile is unavailable; start initial review again".to_owned(),
+            )
+        })
+        .and_then(|profile| {
+            serde_json::from_str::<ConfirmedIntakeProfile>(profile).map_err(|_| ApiError::Internal)
+        })?;
+    if reviewed_profile != submitted_profile {
+        return Err(ApiError::Conflict(
+            "profile values changed after initial review; review the updated information again"
+                .to_owned(),
         ));
     }
     let assessments = parse_assessments(&session)?;
@@ -478,12 +1322,173 @@ pub async fn confirm_intake_session(
         auth,
         "intake_session.confirmed",
         session_id.to_owned(),
-        Some(json!({ "case_id": case_model.id, "confirmation_status": "human_confirmed" })),
+        Some(json!({
+            "case_id": case_model.id,
+            "confirmation_status": "human_confirmed_after_ai_initial_review"
+        })),
     )
     .await?;
 
     transaction.commit().await?;
     Ok(confirmed_response(case_model, Some(timestamp)))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialReviewModelOutput {
+    issues: Vec<InitialReviewModelIssue>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialReviewModelIssue {
+    field: String,
+    severity: String,
+    evidence_summary: String,
+    clarification_question: String,
+    source_fields: Vec<String>,
+}
+
+fn initial_review_response(
+    session: &intake_sessions::Model,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    let issues = parse_initial_review_issues(session)?;
+    let blocking_assessments = parse_assessments(session)?
+        .into_iter()
+        .filter(|assessment| assessment.severity == "blocking")
+        .collect::<Vec<_>>();
+    let degradation_status = if session
+        .ai_initial_review_status
+        .starts_with("rule_based_fallback")
+    {
+        "rule_based_fallback"
+    } else if session.ai_initial_review_status == "not_started" {
+        "not_started"
+    } else {
+        "available"
+    };
+    Ok(IntakeAiInitialReviewResponse {
+        session_id: session.id.clone(),
+        status: session.status.clone(),
+        degradation_status: degradation_status.to_owned(),
+        issues,
+        blocking_assessments,
+        generated_at: session
+            .ai_initial_reviewed_at
+            .clone()
+            .unwrap_or_else(|| session.updated_at.clone()),
+        requires_family_acknowledgement: session.status == "awaiting_family_review",
+        ready_for_second_confirmation: session.status == "ready_for_second_confirmation",
+    })
+}
+
+fn parse_initial_review_issues(
+    session: &intake_sessions::Model,
+) -> Result<Vec<IntakeAiInitialReviewIssue>, ApiError> {
+    serde_json::from_str(&session.ai_initial_review_json).map_err(|_| ApiError::Internal)
+}
+
+fn acknowledged_review_status(status: &str) -> String {
+    match status {
+        "available_pending" => "available_acknowledged".to_owned(),
+        "rule_based_fallback_pending" => "rule_based_fallback_acknowledged".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn validate_initial_review_output(
+    output: InitialReviewModelOutput,
+    answers: &IntakeInitialAnswers,
+) -> Result<Vec<IntakeAiInitialReviewIssue>, ApiError> {
+    if output.issues.len() > 12 {
+        return Err(ApiError::Validation(
+            "initial review returned too many issues".to_owned(),
+        ));
+    }
+    let allowed_fields = [
+        "basic_information",
+        "health_status",
+        "behavior_habits",
+        "last_seen",
+        "frequent_locations",
+        "belongings",
+        "transport_ability",
+        "follow_up_clues",
+        "suspicious_motive",
+        "profile",
+    ]
+    .into_iter()
+    .filter(|field| *field == "profile" || answer_for(answers, field).is_some())
+    .collect::<std::collections::HashSet<_>>();
+    let mut seen = std::collections::HashSet::new();
+    output
+        .issues
+        .into_iter()
+        .map(|candidate| {
+            let field = candidate.field.trim().to_owned();
+            let severity = candidate.severity.trim().to_owned();
+            let evidence_summary = candidate.evidence_summary.trim().to_owned();
+            let clarification_question = candidate.clarification_question.trim().to_owned();
+            let mut source_fields = candidate
+                .source_fields
+                .into_iter()
+                .map(|value| value.trim().to_owned())
+                .collect::<Vec<_>>();
+            source_fields.sort();
+            source_fields.dedup();
+            if !allowed_fields.contains(field.as_str())
+                || !matches!(severity.as_str(), "needs_confirmation" | "warning")
+                || evidence_summary.is_empty()
+                || evidence_summary.chars().count() > 360
+                || clarification_question.is_empty()
+                || clarification_question.chars().count() > 300
+                || source_fields.is_empty()
+                || source_fields.len() > 4
+                || source_fields
+                    .iter()
+                    .any(|source| !allowed_fields.contains(source.as_str()))
+            {
+                return Err(ApiError::Validation(
+                    "initial review output did not match the approved schema".to_owned(),
+                ));
+            }
+            let fingerprint = format!(
+                "{field}|{severity}|{evidence_summary}|{clarification_question}|{}",
+                source_fields.join("|")
+            );
+            if !seen.insert(fingerprint) {
+                return Err(ApiError::Validation(
+                    "initial review output contained duplicate issues".to_owned(),
+                ));
+            }
+            Ok(IntakeAiInitialReviewIssue {
+                id: Uuid::new_v4().to_string(),
+                field,
+                severity,
+                evidence_summary,
+                clarification_question,
+                source_fields,
+            })
+        })
+        .collect()
+}
+
+fn rule_based_initial_review_issues(
+    assessments: &[crate::models::IntakeAssessment],
+) -> Vec<IntakeAiInitialReviewIssue> {
+    assessments
+        .iter()
+        .filter(|assessment| assessment.severity != "blocking")
+        .take(12)
+        .map(|assessment| IntakeAiInitialReviewIssue {
+            id: Uuid::new_v4().to_string(),
+            field: assessment.field_path.clone(),
+            severity: "needs_confirmation".to_owned(),
+            evidence_summary: assessment.evidence_summary.clone(),
+            clarification_question: assessment.suggested_action.clone(),
+            source_fields: vec![assessment.field_path.clone()],
+        })
+        .collect()
 }
 
 fn require_operational_member(auth: &AuthenticatedUser) -> Result<(), ApiError> {
@@ -586,7 +1591,7 @@ fn confirmed_response(
         case_id: case_model.id,
         case_code: case_model.case_code,
         status: case_model.status,
-        confirmation_status: "human_confirmed".to_owned(),
+        confirmation_status: "human_confirmed_after_ai_initial_review".to_owned(),
         confirmed_at: confirmed_at.unwrap_or(case_model.updated_at),
     }
 }
@@ -865,6 +1870,46 @@ fn direction_hypotheses(
         uncertainty_notice: "This is an unverified direction candidate derived from family-provided draft answers. It is not a fact, task, or publication decision.".to_owned(),
         description: format!("Consider verifying reported frequent locations: {frequent_locations}"),
     }]
+}
+
+fn initial_review_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": { "type": "string" },
+                        "severity": { "type": "string", "enum": ["needs_confirmation", "warning"] },
+                        "evidence_summary": { "type": "string" },
+                        "clarification_question": { "type": "string" },
+                        "source_fields": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["field", "severity", "evidence_summary", "clarification_question", "source_fields"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["issues"],
+        "additionalProperties": false
+    })
+}
+
+fn follow_up_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "field": { "type": "string" },
+            "prompt": { "type": "string" },
+            "purpose": { "type": "string" },
+            "missing_fields": { "type": "array", "items": { "type": "string" } },
+            "skippable": { "type": "boolean" }
+        },
+        "required": ["field", "prompt", "purpose", "missing_fields", "skippable"],
+        "additionalProperties": false
+    })
 }
 
 fn now() -> String {

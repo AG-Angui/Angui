@@ -160,6 +160,40 @@ async fn post_confirm_creates_one_active_case_from_human_confirmed_overrides() {
     let token = context.token(FAMILY).await;
     let app = crate::init_api_app!(&context);
 
+    let initial_review = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/ai-initial-review"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({ "profile": confirmation_json()["profile"].clone() }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(initial_review.status(), StatusCode::CREATED);
+    let initial_body: Value = test::read_body_json(initial_review).await;
+    assert_eq!(initial_body["status"], "awaiting_family_review");
+    assert_eq!(initial_body["degradation_status"], "rule_based_fallback");
+
+    let acknowledgement = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/ai-initial-review/acknowledge"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({ "human_confirmed": true, "confirmed_issue_ids": [] }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(acknowledgement.status(), StatusCode::OK);
+    let acknowledgement_body: Value = test::read_body_json(acknowledgement).await;
+    assert_eq!(
+        acknowledgement_body["status"],
+        "ready_for_second_confirmation"
+    );
+
     let first = test::call_service(
         &app,
         test::TestRequest::post()
@@ -172,7 +206,10 @@ async fn post_confirm_creates_one_active_case_from_human_confirmed_overrides() {
     assert_eq!(first.status(), StatusCode::CREATED);
     let first_body: Value = test::read_body_json(first).await;
     assert_eq!(first_body["status"], "active");
-    assert_eq!(first_body["confirmation_status"], "human_confirmed");
+    assert_eq!(
+        first_body["confirmation_status"],
+        "human_confirmed_after_ai_initial_review"
+    );
     let case_id = first_body["case_id"]
         .as_str()
         .expect("response includes case id")
@@ -235,19 +272,42 @@ async fn post_confirm_accepts_the_two_runtime_required_profile_fields() {
     let session_id = ready_session(&context).await;
     let token = context.token(FAMILY).await;
     let app = crate::init_api_app!(&context);
+    let profile = json!({
+        "display_name": "Minimal fictional elder",
+        "last_seen_location": "Fictional community gate"
+    });
+
+    let initial_review = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/ai-initial-review"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({ "profile": profile.clone() }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(initial_review.status(), StatusCode::CREATED);
+    let acknowledgement = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/ai-initial-review/acknowledge"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({ "human_confirmed": true, "confirmed_issue_ids": [] }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(acknowledgement.status(), StatusCode::OK);
 
     let response = test::call_service(
         &app,
         test::TestRequest::post()
             .uri(&format!("/api/intake-sessions/{session_id}/confirm"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
-            .set_json(json!({
-                "human_confirmed": true,
-                "profile": {
-                    "display_name": "Minimal fictional elder",
-                    "last_seen_location": "Fictional community gate"
-                }
-            }))
+            .set_json(json!({ "human_confirmed": true, "profile": profile }))
             .to_request(),
     )
     .await;
@@ -287,12 +347,41 @@ async fn post_confirm_requires_creator_human_confirmation_and_valid_profile_with
     .await;
     assert_error(not_confirmed, StatusCode::BAD_REQUEST, "validation_error").await;
 
+    let invalid_profile = json!({
+        "display_name": "Fictional",
+        "last_seen_location": ""
+    });
+    let initial_review = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/ai-initial-review"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(json!({ "profile": invalid_profile.clone() }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(initial_review.status(), StatusCode::CREATED);
+    let acknowledgement = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/ai-initial-review/acknowledge"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(json!({ "human_confirmed": true, "confirmed_issue_ids": [] }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(acknowledgement.status(), StatusCode::OK);
+
     let invalid = test::call_service(
         &app,
         test::TestRequest::post()
             .uri(&format!("/api/intake-sessions/{session_id}/confirm"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
-            .set_json(json!({ "human_confirmed": true, "profile": { "display_name": "Fictional", "last_seen_location": "" } }))
+            .set_json(json!({ "human_confirmed": true, "profile": invalid_profile }))
             .to_request(),
     )
     .await;

@@ -114,6 +114,7 @@ pub struct UpdateAdminUserStatusRequest {
 pub struct DeidentifyArchiveDraftRequest {
     pub outcome: String,
     pub reason: String,
+    pub deidentified_material: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,7 +230,26 @@ pub struct ConfirmIntakeSessionRequest {
     pub human_confirmed: bool,
 }
 
+/// Starts the family-visible AI initial review. It does not create a case or
+/// change any submitted answer; the supplied profile is kept as the exact
+/// snapshot that must be submitted at the later second confirmation.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartIntakeAiInitialReviewRequest {
+    pub profile: ConfirmedIntakeProfile,
+}
+
+/// The family must explicitly acknowledge every AI-raised item before the
+/// second confirmation. A blocking deterministic consistency check cannot be
+/// acknowledged away and still requires an actual correction.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgeIntakeAiInitialReviewRequest {
+    pub confirmed_issue_ids: Vec<String>,
+    pub human_confirmed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfirmedIntakeProfile {
     pub display_name: String,
@@ -240,6 +260,29 @@ pub struct ConfirmedIntakeProfile {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeAiInitialReviewIssue {
+    pub id: String,
+    pub field: String,
+    pub severity: String,
+    pub evidence_summary: String,
+    pub clarification_question: String,
+    pub source_fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeAiInitialReviewResponse {
+    pub session_id: String,
+    pub status: String,
+    pub degradation_status: String,
+    pub issues: Vec<IntakeAiInitialReviewIssue>,
+    pub blocking_assessments: Vec<IntakeAssessment>,
+    pub generated_at: String,
+    pub requires_family_acknowledgement: bool,
+    pub ready_for_second_confirmation: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -276,6 +319,7 @@ pub struct IntakeSessionResponse {
     pub phase_transition_ready: bool,
     pub next_question: Option<IntakeQuestion>,
     pub guidance_mode: String,
+    pub ai_initial_review_status: String,
     pub privacy_notice: String,
     pub created_at: String,
     pub updated_at: String,
@@ -301,6 +345,7 @@ impl IntakeSessionResponse {
             phase_transition_ready: phase.phase_transition_ready,
             next_question,
             guidance_mode: "rule_based".to_owned(),
+            ai_initial_review_status: model.ai_initial_review_status,
             privacy_notice: "Answers are visible only to the session creator and, after case authorization, the case's authorized commanders. They are unconfirmed drafts and are not copied into audit metadata.".to_owned(),
             created_at: model.created_at,
             updated_at: model.updated_at,
@@ -342,9 +387,14 @@ pub struct IntakeRouteEstimate {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct IntakeProfileDraft {
+    pub id: String,
     pub status: String,
     pub source_scope: String,
     pub generated_at: String,
+    pub provider_model: Option<String>,
+    pub template_version: String,
+    pub degradation_status: String,
+    pub version: i32,
     pub requires_human_confirmation: bool,
     pub profile: IntakeProfileDraftFields,
     pub field_metadata: Vec<IntakeProfileDraftFieldMetadata>,
@@ -357,16 +407,19 @@ pub struct IntakeProfileDraft {
 /// Provenance for a non-empty field in an unconfirmed intake profile draft.
 /// The value itself remains in `profile`; this metadata lets clients display
 /// the draft's origin without treating it as a confirmed case fact.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IntakeProfileDraftFieldMetadata {
     pub field: String,
     pub source_field: String,
     pub source: String,
     pub status: String,
     pub generated_at: String,
+    pub source_excerpt: Option<String>,
+    pub provider_model: Option<String>,
+    pub template_version: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IntakeProfileDraftFields {
     pub physical_description: Option<String>,
     pub clothing_description: Option<String>,
@@ -411,6 +464,7 @@ pub struct SubmitIntakeAnswerResponse {
     pub assessments: Vec<IntakeAssessment>,
     pub next_question: Option<IntakeQuestion>,
     pub guidance_mode: String,
+    pub ai_initial_review_status: String,
     pub privacy_notice: String,
     pub updated_at: String,
 }
@@ -447,6 +501,7 @@ impl SubmitIntakeAnswerResponse {
             next_question,
             assessments,
             guidance_mode: "rule_based".to_owned(),
+            ai_initial_review_status: session.ai_initial_review_status,
             privacy_notice: "Answers and candidate fields are unconfirmed drafts. They remain visible only to the session creator and are not copied into audit metadata.".to_owned(),
             updated_at: session.updated_at,
         }
@@ -897,9 +952,53 @@ pub struct CaseSummaryTask {
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CreateClueDraftRequest {
-    pub text: String,
-    pub source_type: Option<String>,
-    pub raw_record_reference: Option<String>,
+    pub source_record_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewIntakeProfileDraftRequest {
+    pub action: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreIntakeProfileDraftRequest {
+    pub draft_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeProfileDraftVersionsResponse {
+    pub items: Vec<IntakeProfileDraft>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeProfileDraftDiffResponse {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub changed_fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCaseSourceRecordRequest {
+    pub record_type: String,
+    pub content: String,
+    pub occurred_at: Option<String>,
+    pub source_reference: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CaseSourceRecordResponse {
+    pub id: String,
+    pub case_id: String,
+    pub record_type: String,
+    pub content: String,
+    pub occurred_at: Option<String>,
+    pub source_reference: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -910,12 +1009,90 @@ pub struct ClueDraftResponse {
     pub content: String,
     pub source_type: String,
     pub raw_record_reference: Option<String>,
+    pub source_record_id: Option<String>,
     pub occurred_at: Option<String>,
     pub location_text: Option<String>,
     pub uncertainty_notice: String,
     pub template_version: String,
     pub provider_model: Option<String>,
     pub degradation_status: String,
+    pub candidate: ClueDraftCandidate,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub review_reason: Option<String>,
+    pub version: i32,
+    pub promoted_clue_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeAiFollowUp {
+    pub field: String,
+    pub prompt: String,
+    pub purpose: String,
+    pub missing_fields: Vec<String>,
+    pub skippable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeAiFollowUpResponse {
+    pub question: Option<IntakeAiFollowUp>,
+    pub degradation_status: String,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeAnswerRevisionResponse {
+    pub id: String,
+    pub field: String,
+    pub answer: String,
+    pub revision_kind: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreIntakeAnswerRequest {
+    pub revision_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClueDraftCandidate {
+    pub content_summary: Option<String>,
+    pub occurred_at: Option<String>,
+    pub location_text: Option<String>,
+    pub source_text: Option<String>,
+    pub action_candidates: Vec<String>,
+    pub missing_fields: Vec<String>,
+    pub source_excerpt: String,
+    #[serde(default)]
+    pub field_sources: std::collections::BTreeMap<String, ClueDraftFieldSource>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClueDraftFieldSource {
+    pub reference: Option<String>,
+    pub excerpt: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewClueDraftRequest {
+    pub action: String,
+    pub reason: String,
+    pub candidate: ClueDraftCandidate,
+    #[serde(default)]
+    pub field_decisions: std::collections::BTreeMap<String, ClueDraftFieldDecision>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClueDraftFieldDecision {
+    pub action: String,
+    pub value: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -953,6 +1130,8 @@ pub struct ReviewSummaryDraftRequest {
 pub struct SummaryDraftResponse {
     pub id: String,
     pub case_id: String,
+    pub parent_draft_id: Option<String>,
+    pub version: i32,
     pub status: String,
     pub content: String,
     pub source_scope: Vec<String>,
@@ -967,12 +1146,26 @@ pub struct SummaryDraftResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SummaryDraftVersionResponse {
+    pub items: Vec<SummaryDraftResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SummaryDraftDiffResponse {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ArchiveDraftResponse {
     pub id: String,
     pub case_id: String,
     pub status: String,
     pub content: String,
     pub source_scope: Vec<String>,
+    pub review_material_id: Option<String>,
     pub deidentification_status: String,
     pub template_version: String,
     pub provider_model: Option<String>,

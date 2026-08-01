@@ -10,14 +10,27 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
+  acknowledgeIntakeAiInitialReview,
   confirmIntakeSession,
   createIntakeSession,
+  getIntakeAiInitialReview,
+  getIntakeAiFollowUp,
   getIntakeDraft,
+  generateIntakeDraft,
+  diffIntakeDraftVersions,
+  listIntakeDraftVersions,
+  reviewIntakeDraft,
+  restoreIntakeDraft,
+  listIntakeAnswerRevisions,
+  restoreIntakeAnswerRevision,
+  startIntakeAiInitialReview,
   submitIntakeAnswer,
 } from "../api/intake";
 import type {
   ConfirmedIntakeProfile,
+  IntakeAiInitialReviewResponse,
   IntakeAssessment,
+  IntakeAnswerRevision,
   IntakeDraft,
   IntakeDraftProfile,
   IntakeProfileDraftFieldMetadata,
@@ -54,24 +67,36 @@ const defaultQuestionPrompts: Record<string, string> = {
   basic_information: "请填写可供家属核对的基本信息。",
   health_status: "请补充健康、认知、行动能力或用药方面需要记录的情况。",
   behavior_habits: "请描述有助于后续核实线索的日常习惯、偏好或行为特点。",
-  last_seen: "请说明最后出现的时间和地点；如有不确定的交通方式或同行人，也请标明。",
+  last_seen:
+    "请说明最后出现的时间和地点；如有不确定的交通方式或同行人，也请标明。",
   frequent_locations: "请补充常去地点，并避免填写与寻找无关的私人住址。",
-  suspicious_motive: "是否有需要人工谨慎核实的可能原因、计划或担忧？不确定时可标记为未知。",
+  suspicious_motive:
+    "是否有需要人工谨慎核实的可能原因、计划或担忧？不确定时可标记为未知。",
   belongings: "请描述当时携带的衣着、包、手机、证件或其他随身物品。",
-  transport_ability: "请说明可能的独立出行方式，包括步行、车辆、公共交通及同行人情况。",
+  transport_ability:
+    "请说明可能的独立出行方式，包括步行、车辆、公共交通及同行人情况。",
   follow_up_clues: "是否有之后获得、但仍需要人工核实的信息或线索？",
 };
 
 const legacyDefaultQuestionPrompts: Record<string, string> = {
-  basic_information: "Please describe the person using information your family can verify.",
-  health_status: "What health, cognitive, mobility, or medication concerns should be recorded as unconfirmed draft information?",
-  behavior_habits: "What routines, preferences, or behaviors may help verify future leads?",
-  last_seen: "When and where was the person last seen? Include uncertainty in time, place, transport, or companions.",
-  frequent_locations: "Which places do they commonly visit? Please avoid unrelated private addresses.",
-  suspicious_motive: "Are there any possible reasons, plans, or concerns that need careful human follow-up? Mark unknown when unsure.",
-  belongings: "What clothing, bags, phone, identification, or other belongings were they carrying?",
-  transport_ability: "How might they travel independently? Include walking, vehicle, public transport, and companion uncertainty.",
-  follow_up_clues: "Is there later information or a lead that still needs human verification?",
+  basic_information:
+    "Please describe the person using information your family can verify.",
+  health_status:
+    "What health, cognitive, mobility, or medication concerns should be recorded as unconfirmed draft information?",
+  behavior_habits:
+    "What routines, preferences, or behaviors may help verify future leads?",
+  last_seen:
+    "When and where was the person last seen? Include uncertainty in time, place, transport, or companions.",
+  frequent_locations:
+    "Which places do they commonly visit? Please avoid unrelated private addresses.",
+  suspicious_motive:
+    "Are there any possible reasons, plans, or concerns that need careful human follow-up? Mark unknown when unsure.",
+  belongings:
+    "What clothing, bags, phone, identification, or other belongings were they carrying?",
+  transport_ability:
+    "How might they travel independently? Include walking, vehicle, public transport, and companion uncertainty.",
+  follow_up_clues:
+    "Is there later information or a lead that still needs human verification?",
 };
 
 const blankProfile: ConfirmedIntakeProfile = {
@@ -96,6 +121,7 @@ type StoredIntakeSession = Pick<
   | "phase_transition_ready"
   | "next_question"
   | "guidance_mode"
+  | "ai_initial_review_status"
   | "privacy_notice"
 >;
 
@@ -141,10 +167,29 @@ export function FamilyIntakeForm({
     useState<IntakeProfileDraftFieldMetadata | null>(null);
   const [editAnswer, setEditAnswer] = useState("");
   const [confirmReviewOpen, setConfirmReviewOpen] = useState(false);
+  const [initialReview, setInitialReview] =
+    useState<IntakeAiInitialReviewResponse | null>(null);
+  const [confirmedInitialReviewIssues, setConfirmedInitialReviewIssues] =
+    useState<string[]>([]);
+  const [answerRevisions, setAnswerRevisions] = useState<
+    IntakeAnswerRevision[]
+  >([]);
+  const [profileVersions, setProfileVersions] = useState<IntakeDraft[]>([]);
+  const [comparison, setComparison] = useState<{
+    from: string;
+    to: string;
+    fields: string[];
+  } | null>(null);
   const [isReviewingBasicInformation, setIsReviewingBasicInformation] =
     useState(false);
   const [busyAction, setBusyAction] = useState<
-    "begin" | "answer" | "replace" | "confirm" | null
+    | "begin"
+    | "answer"
+    | "replace"
+    | "initial_review"
+    | "acknowledge_initial_review"
+    | "confirm"
+    | null
   >(null);
   const [error, setError] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
@@ -169,6 +214,13 @@ export function FamilyIntakeForm({
         const nextDraft = await getIntakeDraft(token, sessionId);
         setDraft(nextDraft);
         setAssessments(nextDraft.assessments);
+        void Promise.resolve()
+          .then(() => listIntakeAnswerRevisions(token, sessionId))
+          .then(setAnswerRevisions)
+          .catch(() => setAnswerRevisions([]));
+        void listIntakeDraftVersions(token, sessionId)
+          .then((value) => setProfileVersions(value.items))
+          .catch(() => setProfileVersions([]));
         if (initializeProfile)
           setProfile(profileFromDraft(nextDraft, basicInformationForProfile));
         return nextDraft;
@@ -207,8 +259,30 @@ export function FamilyIntakeForm({
       setSession(stored.session);
       setAnswer(stored.answer);
       setBasicInformation(stored.basicInformation);
-      if (stored.session.status === "ready_for_confirmation") {
+      if (
+        [
+          "ready_for_confirmation",
+          "awaiting_family_review",
+          "ready_for_second_confirmation",
+        ].includes(stored.session.status)
+      ) {
         void loadDraft(stored.session.id, true, stored.basicInformation);
+      }
+      if (
+        ["awaiting_family_review", "ready_for_second_confirmation"].includes(
+          stored.session.status,
+        )
+      ) {
+        void getIntakeAiInitialReview(token, stored.session.id)
+          .then((review) => {
+            setInitialReview(review);
+            setConfirmedInitialReviewIssues(
+              review.ready_for_second_confirmation
+                ? review.issues.map((item) => item.id)
+                : [],
+            );
+          })
+          .catch((cause) => setError(messageFrom(cause)));
       }
     }
     setHasHydrated(true);
@@ -246,6 +320,8 @@ export function FamilyIntakeForm({
       const nextSession = await createIntakeSession(token);
       setSession(nextSession);
       setDraft(null);
+      setInitialReview(null);
+      setConfirmedInitialReviewIssues([]);
       setAssessments([]);
       setAnswer("");
       setBasicInformation(blankBasicInformation);
@@ -275,8 +351,26 @@ export function FamilyIntakeForm({
         replace,
       });
       const next = sessionFromAnswerResponse(response);
-      setSession(next);
-      if (next.phase !== "phase_two") setIsReviewingBasicInformation(false);
+      const guidance = await getIntakeAiFollowUp(token, next.id);
+      const guidedSession = guidance.question
+        ? {
+            ...next,
+            next_question: {
+              field: guidance.question.field,
+              prompt: guidance.question.prompt,
+              required: false,
+            },
+            guidance_mode:
+              guidance.degradation_status === "available"
+                ? ("ai_assisted" as const)
+                : ("rule_based" as const),
+          }
+        : next;
+      setSession(guidedSession);
+      setInitialReview(null);
+      setConfirmedInitialReviewIssues([]);
+      if (guidedSession.phase !== "phase_two")
+        setIsReviewingBasicInformation(false);
       setAssessments(response.assessments);
       if (replace) {
         if (draft) {
@@ -285,7 +379,7 @@ export function FamilyIntakeForm({
             .map((item) => item.field);
           setEditSource(null);
           setEditAnswer("");
-          const refreshed = await loadDraft(next.id, false);
+          const refreshed = await loadDraft(guidedSession.id, false);
           if (refreshed)
             setProfile((current) =>
               syncProfileFields(current, refreshed, replacedFields),
@@ -294,7 +388,7 @@ export function FamilyIntakeForm({
       } else {
         setAnswer("");
         if (next.status === "ready_for_confirmation") {
-          await loadDraft(next.id, true, basicInformation);
+          await loadDraft(guidedSession.id, true, basicInformation);
         }
       }
       return true;
@@ -350,8 +444,8 @@ export function FamilyIntakeForm({
       setError("请先确认姓名或称呼，以及最后出现地点。");
       return;
     }
-    if (!confirmReviewOpen) {
-      setConfirmReviewOpen(true);
+    if (!initialReview?.ready_for_second_confirmation) {
+      setError("请先完成 AI 初步审核和家属疑点确认，再进行二次确认提交。");
       return;
     }
 
@@ -374,6 +468,89 @@ export function FamilyIntakeForm({
     } finally {
       setBusyAction(null);
     }
+  }
+
+  async function restoreRevision(revision: IntakeAnswerRevision) {
+    if (!token || !session) return;
+    setBusyAction("replace");
+    setError("");
+    try {
+      const response = await restoreIntakeAnswerRevision(
+        token,
+        session.id,
+        revision.field,
+        revision.id,
+      );
+      const nextSession = sessionFromAnswerResponse(response);
+      setSession(nextSession);
+      setInitialReview(null);
+      setConfirmedInitialReviewIssues([]);
+      const refreshed = await loadDraft(nextSession.id, true, basicInformation);
+      if (refreshed) setProfile(profileFromDraft(refreshed, basicInformation));
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function startInitialReview() {
+    if (!token || !session || !draft) return;
+    if (draft.confirmation_blocked_reasons.length > 0) {
+      setError("请先修正阻断性的规则核对项，再提交 AI 初步审核。");
+      return;
+    }
+    setBusyAction("initial_review");
+    setError("");
+    try {
+      const review = await startIntakeAiInitialReview(
+        token,
+        session.id,
+        normalizedProfile(profile),
+      );
+      setInitialReview(review);
+      setConfirmedInitialReviewIssues([]);
+      setSession((current) =>
+        current ? { ...current, status: review.status } : current,
+      );
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function acknowledgeInitialReview() {
+    if (!token || !session || !initialReview) return;
+    if (confirmedInitialReviewIssues.length !== initialReview.issues.length) {
+      setError("请逐项确认所有标注内容，或返回修改问询后重新初审。");
+      return;
+    }
+    setBusyAction("acknowledge_initial_review");
+    setError("");
+    try {
+      const review = await acknowledgeIntakeAiInitialReview(
+        token,
+        session.id,
+        confirmedInitialReviewIssues,
+      );
+      setInitialReview(review);
+      setSession((current) =>
+        current ? { ...current, status: review.status } : current,
+      );
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function toggleInitialReviewIssue(issueId: string) {
+    setConfirmedInitialReviewIssues((current) =>
+      current.includes(issueId)
+        ? current.filter((item) => item !== issueId)
+        : [...current, issueId],
+    );
   }
 
   function openSourceEditor(source: IntakeProfileDraftFieldMetadata) {
@@ -489,6 +666,285 @@ export function FamilyIntakeForm({
         {error && <Alert>{error}</Alert>}
         <AssessmentList items={displayedAssessments} />
         <DraftProfileReview draft={draft} onEditSource={openSourceEditor} />
+        {!editSource && (
+          <section className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="m-0 text-sm font-bold text-slate-950">
+                AI 画像草稿版本
+              </h3>
+              <Button
+                size="sm"
+                variant="ghost"
+                isDisabled={isBusy}
+                onPress={() =>
+                  void (async () => {
+                    if (!token || !session) return;
+                    const next = await generateIntakeDraft(token, session.id);
+                    setDraft(next);
+                    setProfile(profileFromDraft(next, basicInformation));
+                    setProfileVersions((current) => [next, ...current]);
+                  })()
+                }
+              >
+                生成新版本
+              </Button>
+            </div>
+            {profileVersions.length === 0 ? (
+              <p className="mb-0 mt-2 text-xs text-slate-600">
+                尚未生成 AI 画像候选；当前内容仍来自家属原始回答。
+              </p>
+            ) : (
+              <ul className="mb-0 mt-3 space-y-2 p-0">
+                {profileVersions.slice(0, 8).map((version) => (
+                  <li
+                    key={version.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white p-3"
+                  >
+                    <span className="text-xs text-slate-700">
+                      v{version.version} · {version.status} ·{" "}
+                      {version.degradation_status}
+                    </span>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        isDisabled={isBusy || version.status !== "draft"}
+                        onPress={() =>
+                          void (async () => {
+                            if (!token || !session) return;
+                            const updated = await reviewIntakeDraft(
+                              token,
+                              session.id,
+                              version.id,
+                              "confirm",
+                              "family confirmed profile candidate",
+                            );
+                            setDraft(updated);
+                            setProfileVersions((items) =>
+                              items.map((item) =>
+                                item.id === updated.id ? updated : item,
+                              ),
+                            );
+                          })()
+                        }
+                      >
+                        确认
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        isDisabled={isBusy}
+                        onPress={() =>
+                          void (async () => {
+                            if (!token || !session) return;
+                            const restored = await restoreIntakeDraft(
+                              token,
+                              session.id,
+                              version.id,
+                              "family restored this candidate for another review",
+                            );
+                            setDraft(restored);
+                            setProfile(
+                              profileFromDraft(restored, basicInformation),
+                            );
+                            setProfileVersions((items) => [restored, ...items]);
+                          })()
+                        }
+                      >
+                        恢复
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+        {!editSource && profileVersions.length > 0 && (
+          <section
+            className="mt-3 rounded-md border border-slate-200 bg-white p-4"
+            aria-label="画像草稿版本操作"
+          >
+            <h3 className="m-0 text-sm font-bold text-slate-950">
+              版本确认、拒绝与比较
+            </h3>
+            <div className="mt-3 grid gap-2">
+              {profileVersions.slice(0, 8).map((version) => (
+                <div
+                  key={`actions-${version.id}`}
+                  className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-2 last:border-0"
+                >
+                  <label className="flex items-center gap-2 text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={
+                        comparison?.from === version.id ||
+                        comparison?.to === version.id
+                      }
+                      onChange={() =>
+                        setComparison((current) =>
+                          current?.from === version.id
+                            ? { ...current, from: "" }
+                            : current?.to === version.id
+                              ? { ...current, to: "" }
+                              : !current?.from
+                                ? { from: version.id, to: "", fields: [] }
+                                : {
+                                    from: current.from,
+                                    to: version.id,
+                                    fields: [],
+                                  },
+                        )
+                      }
+                    />
+                    v{version.version}
+                  </label>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={isBusy || version.status !== "draft"}
+                      onPress={() =>
+                        void (async () => {
+                          if (!token || !session) return;
+                          const updated = await reviewIntakeDraft(
+                            token,
+                            session.id,
+                            version.id,
+                            "reject",
+                            "family rejected profile candidate",
+                          );
+                          setProfileVersions((items) =>
+                            items.map((item) =>
+                              item.id === updated.id ? updated : item,
+                            ),
+                          );
+                        })()
+                      }
+                    >
+                      拒绝
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={isBusy}
+                      onPress={() =>
+                        void (async () => {
+                          if (!token || !session) return;
+                          const restored = await restoreIntakeDraft(
+                            token,
+                            session.id,
+                            version.id,
+                            "family restored this candidate for another review",
+                          );
+                          setDraft(restored);
+                          setProfile(
+                            profileFromDraft(restored, basicInformation),
+                          );
+                          setProfileVersions((items) => [restored, ...items]);
+                        })()
+                      }
+                    >
+                      恢复
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Button
+              className="mt-3"
+              size="sm"
+              variant="secondary"
+              isDisabled={
+                !token ||
+                !session ||
+                !comparison?.from ||
+                !comparison?.to ||
+                comparison.from === comparison.to ||
+                isBusy
+              }
+              onPress={() =>
+                void (async () => {
+                  if (
+                    !token ||
+                    !session ||
+                    !comparison?.from ||
+                    !comparison?.to
+                  )
+                    return;
+                  const diff = await diffIntakeDraftVersions(
+                    token,
+                    session.id,
+                    comparison.from,
+                    comparison.to,
+                  );
+                  setComparison({
+                    from: comparison.from,
+                    to: comparison.to,
+                    fields: diff.changed_fields,
+                  });
+                })()
+              }
+            >
+              比较所选版本
+            </Button>
+            {comparison?.fields.length ? (
+              <p className="mb-0 mt-2 text-xs text-slate-700">
+                变化字段：{comparison.fields.join("、")}
+              </p>
+            ) : comparison?.from && comparison?.to ? (
+              <p className="mb-0 mt-2 text-xs text-slate-500">
+                选择比较后将显示变更字段；无结果表示字段值一致。
+              </p>
+            ) : null}
+          </section>
+        )}
+        {answerRevisions.length > 0 && !editSource && (
+          <section
+            className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-4"
+            aria-labelledby="answer-history-title"
+          >
+            <h3
+              id="answer-history-title"
+              className="m-0 text-sm font-bold text-slate-950"
+            >
+              问询修订历史
+            </h3>
+            <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">
+              恢复旧版本会使当前 AI 初审失效，系统会重新生成画像并要求再次初审。
+            </p>
+            <ul className="mb-0 mt-3 space-y-2 p-0">
+              {answerRevisions
+                .slice()
+                .reverse()
+                .slice(0, 12)
+                .map((revision) => (
+                  <li
+                    key={revision.id}
+                    className="flex flex-col gap-2 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <strong className="text-xs text-slate-900">
+                        {questionLabels[revision.field] ?? revision.field} ·{" "}
+                        {revision.revision_kind}
+                      </strong>
+                      <p className="mb-0 mt-1 line-clamp-2 text-xs leading-5 text-slate-600">
+                        {revision.answer}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={isBusy}
+                      onPress={() => void restoreRevision(revision)}
+                    >
+                      恢复此版本
+                    </Button>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        )}
 
         {draft.direction_hypotheses.length > 0 && (
           <section
@@ -611,8 +1067,15 @@ export function FamilyIntakeForm({
               profile={profile}
               onChange={(nextProfile) => {
                 setProfile(nextProfile);
-                setConfirmReviewOpen(false);
+                setInitialReview(null);
+                setConfirmedInitialReviewIssues([]);
               }}
+            />
+            <InitialReviewPanel
+              review={initialReview}
+              isReviewing={busyAction === "initial_review"}
+              confirmedIssueIds={confirmedInitialReviewIssues}
+              onToggleIssue={toggleInitialReviewIssue}
             />
             {confirmReviewOpen && (
               <div
@@ -657,14 +1120,38 @@ export function FamilyIntakeForm({
             <div className="mt-5 flex flex-wrap gap-2">
               <Button
                 variant="primary"
-                onPress={() => void confirmCase()}
+                onPress={() => {
+                  if (!initialReview) {
+                    void startInitialReview();
+                  } else if (initialReview.requires_family_acknowledgement) {
+                    void acknowledgeInitialReview();
+                  } else {
+                    void confirmCase();
+                  }
+                }}
                 isDisabled={
                   isBusy ||
                   confirmReviewOpen ||
-                  draft.confirmation_blocked_reasons.length > 0
+                  draft.confirmation_blocked_reasons.length > 0 ||
+                  (initialReview?.requires_family_acknowledgement === true &&
+                    confirmedInitialReviewIssues.length !==
+                      initialReview.issues.length)
                 }
               >
-                {confirmReviewOpen ? "请完成二次确认" : "人工确认并创建案件"}
+                {busyAction === "initial_review" && (
+                  <Spinner size="sm" aria-label="正在进行 AI 初步审核" />
+                )}
+                {busyAction === "acknowledge_initial_review" && (
+                  <Spinner size="sm" aria-label="正在确认初审标注" />
+                )}
+                {busyAction === "confirm" && (
+                  <Spinner size="sm" aria-label="正在提交指挥端" />
+                )}
+                {!initialReview
+                  ? "首次确认并进行 AI 初步审核"
+                  : initialReview.requires_family_acknowledgement
+                    ? "确认初审标注"
+                    : "二次确认并提交指挥端"}
               </Button>
               <Button
                 variant="ghost"
@@ -713,8 +1200,8 @@ export function FamilyIntakeForm({
   const currentLabel = isReviewingPhaseOne
     ? "基本情况（编辑）"
     : question
-    ? (questionLabels[question.field] ?? question.field)
-    : "正在整理草稿";
+      ? (questionLabels[question.field] ?? question.field)
+      : "正在整理草稿";
 
   return (
     <section
@@ -833,7 +1320,9 @@ export function FamilyIntakeForm({
                 <Spinner
                   size="sm"
                   aria-label={
-                    isReviewingPhaseOne ? "正在保存基本情况更正" : "正在保存答案"
+                    isReviewingPhaseOne
+                      ? "正在保存基本情况更正"
+                      : "正在保存答案"
                   }
                 />
               )}
@@ -882,6 +1371,117 @@ export function FamilyIntakeForm({
           >
             重新获取草稿
           </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function InitialReviewPanel({
+  review,
+  isReviewing,
+  confirmedIssueIds,
+  onToggleIssue,
+}: {
+  review: IntakeAiInitialReviewResponse | null;
+  isReviewing: boolean;
+  confirmedIssueIds: string[];
+  onToggleIssue: (issueId: string) => void;
+}) {
+  if (!review) {
+    return (
+      <div
+        className="mt-4 rounded-md border border-brand-100 bg-brand-50 p-3 text-sm leading-6 text-slate-700"
+        role={isReviewing ? "status" : undefined}
+      >
+        {isReviewing ? (
+          <span className="flex items-center gap-2">
+            <Spinner size="sm" aria-label="正在进行 AI 初步审核" />
+            正在进行 AI
+            初步审核，请稍候；审核完成前不会创建案件或向指挥端提交资料。
+          </span>
+        ) : (
+          "首次确认后，系统会进行 AI 初步审核。它只标注需要您核对的疑点，不能确认事实、修改资料或判断位置。"
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <section
+      className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4"
+      aria-labelledby="initial-review-title"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3
+            id="initial-review-title"
+            className="m-0 text-base font-bold text-slate-950"
+          >
+            AI 初步审核结果
+          </h3>
+          <p className="mb-0 mt-1 text-sm leading-6 text-slate-700">
+            {review.degradation_status === "rule_based_fallback"
+              ? "AI 服务不可用或输出未通过校验，已使用规则一致性检查回退。"
+              : "以下内容仅是待家属确认的提醒，不是事实结论、位置判断或行动指令。"}
+          </p>
+        </div>
+        <Chip size="sm" variant="soft">
+          <Chip.Label>
+            {review.ready_for_second_confirmation
+              ? "已完成家属确认"
+              : "等待家属确认"}
+          </Chip.Label>
+        </Chip>
+      </div>
+
+      {review.blocking_assessments.length > 0 && (
+        <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-900">
+          <strong>需要先修正的规则核对项</strong>
+          {review.blocking_assessments.map((item) => (
+            <p
+              key={`${item.field_path}-${item.conflict_type}`}
+              className="mb-0 mt-2"
+            >
+              {item.evidence_summary} {item.suggested_action}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {review.issues.length === 0 ? (
+        <p className="mb-0 mt-3 text-sm leading-6 text-slate-700">
+          未发现需要额外确认的 AI
+          疑点。请确认后进行二次提交；这不代表资料已经被系统认定为真实无误。
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-3">
+          {review.issues.map((item) => {
+            const checked = confirmedIssueIds.includes(item.id);
+            return (
+              <label
+                key={item.id}
+                className="flex cursor-pointer gap-3 rounded-md border border-amber-200 bg-white p-3 text-sm leading-6 text-slate-700"
+              >
+                <input
+                  className="mt-1 h-4 w-4 shrink-0"
+                  type="checkbox"
+                  checked={checked}
+                  disabled={review.ready_for_second_confirmation}
+                  onChange={() => onToggleIssue(item.id)}
+                />
+                <span>
+                  <strong className="block text-slate-950">
+                    {questionLabels[item.field] ?? item.field}
+                  </strong>
+                  <span className="block">{item.evidence_summary}</span>
+                  <span className="mt-1 block text-slate-900">
+                    请确认：{item.clarification_question}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
         </div>
       )}
     </section>
@@ -1297,6 +1897,7 @@ function sessionFromAnswerResponse(
     phase_transition_ready: response.phase_transition_ready,
     next_question: response.next_question,
     guidance_mode: response.guidance_mode,
+    ai_initial_review_status: response.ai_initial_review_status,
     privacy_notice: response.privacy_notice,
   };
 }
@@ -1389,6 +1990,7 @@ function toStoredSession(session: IntakeSession): StoredIntakeSession {
     phase_transition_ready: session.phase_transition_ready,
     next_question: session.next_question,
     guidance_mode: session.guidance_mode,
+    ai_initial_review_status: session.ai_initial_review_status,
     privacy_notice: session.privacy_notice,
   };
 }
@@ -1401,7 +2003,14 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
     const session = parsed.session;
     if (!session || typeof session.id !== "string")
       return discardStoredState(storageKey);
-    if (!["collecting", "ready_for_confirmation"].includes(session.status))
+    if (
+      ![
+        "collecting",
+        "ready_for_confirmation",
+        "awaiting_family_review",
+        "ready_for_second_confirmation",
+      ].includes(session.status)
+    )
       return discardStoredState(storageKey);
     if (!["phase_one", "phase_two"].includes(session.phase))
       return discardStoredState(storageKey);
@@ -1421,7 +2030,16 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
         typeof session.next_question.required !== "boolean")
     )
       return discardStoredState(storageKey);
-    if (!session.next_question && session.status !== "ready_for_confirmation")
+    if (
+      !session.next_question &&
+      ![
+        "ready_for_confirmation",
+        "awaiting_family_review",
+        "ready_for_second_confirmation",
+      ].includes(session.status)
+    )
+      return discardStoredState(storageKey);
+    if (typeof session.ai_initial_review_status !== "string")
       return discardStoredState(storageKey);
     return {
       session: session as StoredIntakeSession,

@@ -68,9 +68,7 @@ type WorkspaceCase = {
 type ClueDraft = { content: string; location: string };
 
 function messageFrom(cause: unknown) {
-  return cause instanceof Error
-    ? cause.message
-    : "操作未能完成，请稍后重试。";
+  return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
 }
 function localNow() {
   return new Date().toISOString();
@@ -365,7 +363,8 @@ export function VolunteerWorkspacePage() {
                   locations[task.id].map((item) => (
                     <li key={item.volunteer_user_id}>
                       {item.volunteer_user_id}: {item.latitude.toFixed(5)},{" "}
-                      {item.longitude.toFixed(5)}（精度约 {item.accuracy_meters} 米）
+                      {item.longitude.toFixed(5)}（精度约 {item.accuracy_meters}{" "}
+                      米）
                     </li>
                   ))
                 )}
@@ -403,8 +402,7 @@ export function VolunteerWorkspacePage() {
                       accuracy <= 0
                     ) {
                       setFailure({
-                        message:
-                          "请填写有效的经纬度和大于 0 的定位精度。",
+                        message: "请填写有效的经纬度和大于 0 的定位精度。",
                         retry: null,
                       });
                       return;
@@ -514,7 +512,7 @@ export function VolunteerWorkspacePage() {
                     执行反馈
                   </h4>
                   <TextArea
-                      aria-label="执行反馈"
+                    aria-label="执行反馈"
                     value={feedback[task.id] ?? ""}
                     rows={3}
                     maxLength={4000}
@@ -780,9 +778,7 @@ export function VolunteerWorkspacePage() {
                         <option value="police">公安机关</option>
                         <option value="transit">交通站点</option>
                         <option value="market">市场</option>
-                        <option value="community_service">
-                          社区服务
-                        </option>
+                        <option value="community_service">社区服务</option>
                       </select>
                       <Button
                         size="sm"
@@ -816,7 +812,8 @@ export function VolunteerWorkspacePage() {
                     {pois[workspace.detail.id] && (
                       <div className="mt-3 rounded-md border border-slate-200 p-3 text-sm text-slate-700">
                         <p className="m-0 text-xs text-slate-500">
-                          数据来源：{poiSourceLabel(pois[workspace.detail.id].source)}
+                          数据来源：
+                          {poiSourceLabel(pois[workspace.detail.id].source)}
                           {pois[workspace.detail.id].fallback_message
                             ? ` · ${pois[workspace.detail.id].fallback_message}`
                             : ""}

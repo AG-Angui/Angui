@@ -296,8 +296,8 @@ paths:
     post:
       tags: [Intake sessions]
       operationId: confirmIntakeSession
-      summary: Human-confirm a profile and create the formal case
-      description: The session creator submits family-reviewed final values. Only display_name and last_seen_location are required by the current service; all other profile fields are optional overrides. Creation of the case, elder profile, family membership, `case.created` audit event, and session link is one transaction. A successful repeat is idempotent and returns the linked case's current status.
+      summary: Second human confirmation creates the formal case
+      description: This endpoint is available only after the session creator has started the family-visible initial review and acknowledged every displayed non-blocking item. The submitted profile must exactly match the reviewed snapshot. AI output remains an unconfirmed draft; it cannot create, publish, dispatch, or confirm anything. Creation of the case, elder profile, family membership, `case.created` audit event, and session link is one transaction. A successful repeat is idempotent and returns the linked case's current status.
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -327,6 +327,70 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /api/intake-sessions/{session_id}/ai-initial-review:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    get:
+      tags: [Intake sessions]
+      operationId: getIntakeAiInitialReview
+      summary: Get the family-only initial-review draft
+      description: Only the session creator can read this sensitive review. It contains reviewable uncertainty prompts, never confirmed facts or location conclusions.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Current initial-review draft, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeAiInitialReviewResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Intake sessions]
+      operationId: startIntakeAiInitialReview
+      summary: Start the family-visible AI initial review
+      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartIntakeAiInitialReviewRequest" }
+      responses:
+        "201": { description: Family review draft created, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeAiInitialReviewResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/intake-sessions/{session_id}/ai-initial-review/acknowledge:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    post:
+      tags: [Intake sessions]
+      operationId: acknowledgeIntakeAiInitialReview
+      summary: Acknowledge each displayed initial-review item
+      description: The session creator must submit exactly the currently displayed issue IDs. Blocking deterministic consistency checks cannot be acknowledged away and require correction before second confirmation.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AcknowledgeIntakeAiInitialReviewRequest" }
+      responses:
+        "200": { description: Family acknowledgement recorded, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeAiInitialReviewResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /api/cases:
     get:
@@ -1013,6 +1077,20 @@ paths:
 
   /api/cases/{case_id}/clue-drafts:
     parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: listClueDrafts
+      summary: Resume commander clue-draft review queue
+      description: Returns persisted structured-extraction drafts for the case so review can resume after a page refresh. It never promotes a draft or confirms a fact.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Persisted clue drafts, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ClueDraft" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     post:
       tags: [Cases]
       operationId: createClueDrafts
@@ -1030,6 +1108,28 @@ paths:
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/clue-drafts/{draft_id}/review:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }, { name: draft_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [Cases]
+      operationId: reviewClueDraft
+      summary: Human-review structured clue candidates without confirming a fact
+      description: Commander-only. Accepts or rejects a persisted clue draft and records a reason. Accepting a candidate does not create a confirmed clue.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReviewClueDraftRequest" } } }
+      responses:
+        "200": { description: Reviewed clue draft, content: { application/json: { schema: { $ref: "#/components/schemas/ClueDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/cases/{case_id}/pois:
     parameters: [{ $ref: "#/components/parameters/CaseId" }]
@@ -1060,7 +1160,7 @@ paths:
       tags: [Cases]
       operationId: getLatestSummaryDraft
       summary: Get the latest pending automated summary draft
-      description: Commander only. A pending-review draft is created automatically after a commander completes a clue review. The response is null when there is no draft awaiting review. A deterministic, source-scoped fallback is used when AI generation is unavailable, and it is still subject to the same human review before publication.
+      description: Commander only. A pending-review draft is created automatically after a commander completes a clue review. The response is null when there is no draft awaiting review. AI candidates are source-checked five-part JSON (`confirmed_information`, `pending_verification`, `excluded_directions`, `safety_reminders`, `uncertainty_notice`); transport failure, invalid JSON, or semantic validation use a deterministic source-scoped fallback, which is still subject to the same human review before publication.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
@@ -1074,7 +1174,7 @@ paths:
       tags: [Cases]
       operationId: createSummaryDraft
       summary: Create a commander-only summary draft
-      description: Internal re-generation endpoint. Ordinary summary drafts are created automatically after a commander completes a clue review. Server-generated drafts are built from the commander's authorized summary scope and start in pending_review; when all AI providers are unavailable, a deterministic source-scoped fallback is generated instead. Free-form commander drafts remain internal and are not publication eligible.
+      description: Internal re-generation endpoint. Ordinary summary drafts are created automatically after a commander completes a clue review. Server-generated drafts are built from the commander's authorized summary scope and start in pending_review; the Gateway permits at most two total HTTP calls per execution (one JSON repair or one compliant provider failover, never both), then uses a deterministic source-scoped fallback on failure. Free-form commander drafts remain internal and are not publication eligible.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
@@ -1086,6 +1186,41 @@ paths:
         "201": { description: Versioned internal summary draft, content: { application/json: { schema: { $ref: "#/components/schemas/SummaryDraft" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/summary-drafts/versions:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: listSummaryDraftVersions
+      summary: List commander-visible summary draft versions
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Summary draft history, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: "#/components/schemas/SummaryDraft" } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/summary-drafts/{from_id}/diff/{to_id}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+      - { name: from_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: to_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Cases]
+      operationId: diffSummaryDraftVersions
+      summary: Compare two immutable summary draft versions
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Line-level summary draft difference, content: { application/json: { schema: { type: object, required: [from_version, to_version, added, removed], properties: { from_version: { type: integer }, to_version: { type: integer }, added: { type: array, items: { type: string } }, removed: { type: array, items: { type: string } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /api/cases/{case_id}/summary-drafts/{draft_id}/review:
@@ -1490,6 +1625,21 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/archive-drafts:
+    get:
+      tags: [Admin]
+      operationId: listAdminArchiveDrafts
+      summary: List controlled archive drafts awaiting or retaining administrator review
+      description: Admin capability only. Returns lifecycle metadata and controlled draft content; it does not expose source chats, exact trajectories, attachments, or unreviewed clues.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Controlled archive drafts, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ArchiveDraft" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /api/admin/archive-drafts/{draft_id}/deidentify:
     parameters:
@@ -1996,7 +2146,7 @@ components:
     SubmitIntakeAnswerResponse:
       type: object
       additionalProperties: false
-      required: [session_id, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, privacy_notice, updated_at]
+      required: [session_id, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, ai_initial_review_status, privacy_notice, updated_at]
       properties:
         session_id: { type: string, format: uuid }
         status: { type: string, enum: [collecting, ready_for_confirmation] }
@@ -2026,6 +2176,7 @@ components:
             - $ref: "#/components/schemas/IntakeQuestion"
             - type: "null"
         guidance_mode: { type: string, const: rule_based }
+        ai_initial_review_status: { type: string }
         privacy_notice: { type: string }
         updated_at: { type: string, format: date-time }
 
@@ -2105,6 +2256,56 @@ components:
         human_confirmed: { type: boolean, const: true }
         profile: { $ref: "#/components/schemas/ConfirmedIntakeProfile" }
 
+    StartIntakeAiInitialReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [profile]
+      properties:
+        profile: { $ref: "#/components/schemas/ConfirmedIntakeProfile" }
+
+    AcknowledgeIntakeAiInitialReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [human_confirmed, confirmed_issue_ids]
+      properties:
+        human_confirmed: { type: boolean, const: true }
+        confirmed_issue_ids:
+          type: array
+          items: { type: string, format: uuid }
+          uniqueItems: true
+
+    IntakeAiInitialReviewIssue:
+      type: object
+      additionalProperties: false
+      required: [id, field, severity, evidence_summary, clarification_question, source_fields]
+      properties:
+        id: { type: string, format: uuid }
+        field: { type: string }
+        severity: { type: string, enum: [needs_confirmation, warning] }
+        evidence_summary: { type: string, maxLength: 360 }
+        clarification_question: { type: string, maxLength: 300 }
+        source_fields:
+          type: array
+          items: { type: string }
+
+    IntakeAiInitialReviewResponse:
+      type: object
+      additionalProperties: false
+      required: [session_id, status, degradation_status, issues, blocking_assessments, generated_at, requires_family_acknowledgement, ready_for_second_confirmation]
+      properties:
+        session_id: { type: string, format: uuid }
+        status: { type: string, enum: [collecting, ready_for_confirmation, awaiting_family_review, ready_for_second_confirmation, confirmed, closed] }
+        degradation_status: { type: string, enum: [available, rule_based_fallback, not_started] }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/IntakeAiInitialReviewIssue" }
+        blocking_assessments:
+          type: array
+          items: { $ref: "#/components/schemas/IntakeAssessment" }
+        generated_at: { type: string, format: date-time }
+        requires_family_acknowledgement: { type: boolean }
+        ready_for_second_confirmation: { type: boolean }
+
     ConfirmedIntakeProfile:
       type: object
       additionalProperties: false
@@ -2129,7 +2330,7 @@ components:
         status:
           $ref: "#/components/schemas/CaseStatus"
           description: Active on first confirmation; an idempotent retry returns the linked case's current status.
-        confirmation_status: { type: string, const: human_confirmed }
+        confirmation_status: { type: string, const: human_confirmed_after_ai_initial_review }
         confirmed_at: { type: string, format: date-time }
 
     IntakeQuestion:
@@ -2144,10 +2345,10 @@ components:
     IntakeSession:
       type: object
       additionalProperties: false
-      required: [id, status, question_set_version, initial_answers, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, next_question, guidance_mode, privacy_notice, created_at, updated_at]
+      required: [id, status, question_set_version, initial_answers, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, next_question, guidance_mode, ai_initial_review_status, privacy_notice, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
-        status: { type: string, enum: [collecting, ready_for_confirmation] }
+        status: { type: string, enum: [collecting, ready_for_confirmation, awaiting_family_review, ready_for_second_confirmation, confirmed, closed] }
         question_set_version: { type: integer, minimum: 1 }
         initial_answers: { $ref: "#/components/schemas/IntakeInitialAnswers" }
         missing_fields:
@@ -2166,6 +2367,7 @@ components:
             - $ref: "#/components/schemas/IntakeQuestion"
             - type: "null"
         guidance_mode: { type: string, const: rule_based }
+        ai_initial_review_status: { type: string }
         privacy_notice: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -2861,21 +3063,24 @@ components:
     CreateClueDraftRequest:
       type: object
       additionalProperties: false
-      required: [text]
+      required: [source_record_id]
       properties:
-        text: { type: string, minLength: 1, maxLength: 4000 }
-        source_type: { type: string, enum: [manual_report, field_report], default: manual_report }
-        raw_record_reference: { type: string, minLength: 1, maxLength: 500 }
+        source_record_id: { type: string, format: uuid, description: Server-owned case source record. }
 
     ClueDraft:
       type: object
       additionalProperties: false
-      required: [id, case_id, status, content, source_type, uncertainty_notice, template_version, provider_model, degradation_status]
+      required: [id, case_id, status, content, source_type, uncertainty_notice, template_version, provider_model, degradation_status, candidate, review_status, version]
       properties:
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
         status: { type: string, enum: [draft, pending_review] }
         content: { type: string }
+        candidate: { $ref: "#/components/schemas/ClueDraftCandidate" }
+        review_status: { type: string, enum: [pending_review, accepted, rejected] }
+        reviewed_at: { type: string, format: date-time, nullable: true }
+        review_reason: { type: string, nullable: true }
+        version: { type: integer, minimum: 1 }
         source_type: { type: string, enum: [manual_report, field_report] }
         raw_record_reference: { type: [string, "null"] }
         occurred_at: { type: [string, "null"], format: date-time }
@@ -2884,6 +3089,65 @@ components:
         template_version: { type: string }
         provider_model: { type: [string, "null"] }
         degradation_status: { type: string, enum: [manual_review_required, rule_based_fallback] }
+
+    ClueDraftCandidate:
+      type: object
+      additionalProperties: false
+      description: >-
+        A non-factual field proposal produced from a controlled source record. Null or
+        empty candidate values mean that a person must supply or verify the field;
+        they must not be inferred by a client.
+      required: [content_summary, occurred_at, location_text, source_text, action_candidates, missing_fields, source_excerpt]
+      properties:
+        content_summary:
+          type: [string, "null"]
+          maxLength: 1000
+          description: Short draft summary only; it is not a confirmed statement.
+        occurred_at:
+          type: [string, "null"]
+          maxLength: 80
+          description: Candidate time as supplied or extracted; null means human completion is required.
+        location_text:
+          type: [string, "null"]
+          maxLength: 500
+          description: Candidate textual location only; the API does not make a location conclusion.
+        source_text:
+          type: [string, "null"]
+          maxLength: 300
+          description: Candidate source attribution; null means human verification is required.
+        action_candidates:
+          type: array
+          maxItems: 8
+          items: { type: string, minLength: 1, maxLength: 300 }
+          description: Proposed follow-up actions, requiring human review before use.
+        missing_fields:
+          type: array
+          uniqueItems: true
+          items: { type: string, enum: [occurred_at, location_text, source_text, action_candidates] }
+          description: Fields still requiring human completion or verification.
+        source_excerpt:
+          type: string
+          maxLength: 500
+          description: Server-derived excerpt of the original controlled text. During review, any submitted value is ignored and recomputed by the server.
+
+    ReviewClueDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason, candidate]
+      properties:
+        action:
+          type: string
+          enum: [accept, reject]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Mandatory human review rationale retained in the audit trail.
+        candidate:
+          allOf: [{ $ref: "#/components/schemas/ClueDraftCandidate" }]
+          description: >-
+            Human-corrected candidate. The service normalizes missing_fields and
+            derives source_excerpt from the persisted controlled text.
 
     CasePoi:
       type: object
@@ -2911,7 +3175,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        content: { type: string, minLength: 1, maxLength: 12000, description: Internal-only commander draft content; it is never publication eligible. }
+        content: { type: string, minLength: 1, maxLength: 12000, description: Optional commander edit that creates a new pending-review internal version; it cannot publish without the separate human review action. }
 
     ReviewSummaryDraftRequest:
       type: object
@@ -2948,11 +3212,11 @@ components:
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
         status: { type: string, enum: [draft, pending_review, published, rejected, withdrawn] }
-        content: { type: string, description: Internal deterministic draft content containing no raw case materials. }
-        source_scope: { type: array, items: { type: string, enum: [confirmed_clue_metadata, completed_task_metadata] } }
+        content: { type: string, description: Initial drafts contain no raw case materials. After an administrator confirms de-identification, a reviewed, de-identified organization draft may replace it. }
+        source_scope: { type: array, items: { type: string, enum: [confirmed_clue_review_material, completed_task_review_material] } }
         deidentification_status: { type: string, enum: [manual_review_required, deidentified, rejected] }
         template_version: { type: string }
-        provider_model: { type: [string, "null"], description: Always null for the rule-based draft generator. }
+        provider_model: { type: [string, "null"], description: Null before administrator-confirmed de-identification; otherwise the audited model identifier for a reviewed organization draft. }
         version: { type: integer, minimum: 1 }
         usage_scope: { type: string, enum: [internal_archive, learning_resource] }
         retention_status: { type: string, enum: [retained, withdrawn] }
@@ -2968,6 +3232,11 @@ components:
       properties:
         outcome: { type: string, enum: [confirm, reject] }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+        deidentified_material:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 12000
+          description: Required when outcome is confirm. Human-supplied de-identified material; it is the only archive material eligible for AI organization.
 
     ReviewArchiveDraftRequest:
       type: object

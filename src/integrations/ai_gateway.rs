@@ -1,9 +1,9 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, env, sync::Arc, time::Duration};
 
 use chrono::{SecondsFormat, Utc};
 use http::Request as HttpRequest;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, Set};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -102,6 +102,12 @@ pub struct AiRequest {
     pub purpose: AiPurpose,
     pub data_region: String,
     pub system_instruction: Option<String>,
+    /// Provider-neutral JSON Schema for a structured model result. Providers
+    /// that expose a native constrained-output feature receive this schema;
+    /// every result is still validated again by the calling service.
+    pub output_schema: Option<Value>,
+    /// Stable schema name used by providers that require a named contract.
+    pub output_schema_name: Option<String>,
     pub input: String,
     pub requested_output_tokens: usize,
     pub template_version: String,
@@ -210,6 +216,65 @@ pub enum AiTaskStatus {
     Failed,
 }
 
+/// The result of one provider execution. Business services must treat every
+/// non-completed result as a signal to use their deterministic or manual path.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AiExecutionResult {
+    Completed {
+        route: ProviderRoute,
+        output: String,
+        attempts: Vec<AiExecutionAttempt>,
+    },
+    Degraded {
+        status: DegradationStatus,
+        reason: DegradationReason,
+        attempts: Vec<AiExecutionAttempt>,
+    },
+    Failed {
+        route: ProviderRoute,
+        attempts: Vec<AiExecutionAttempt>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AiExecutionAttempt {
+    pub number: u8,
+    pub role: &'static str,
+    pub route: ProviderRoute,
+    pub status: AiTaskStatus,
+    pub failure_kind: Option<&'static str>,
+}
+
+impl AiExecutionResult {
+    pub fn decision(&self) -> GatewayDecision {
+        match self {
+            Self::Completed { route, .. } | Self::Failed { route, .. } => {
+                GatewayDecision::Routed(route.clone())
+            }
+            Self::Degraded { status, reason, .. } => GatewayDecision::Degraded {
+                status: *status,
+                reason: *reason,
+            },
+        }
+    }
+
+    pub fn audit_status(&self) -> AiTaskStatus {
+        match self {
+            Self::Completed { .. } => AiTaskStatus::Completed,
+            Self::Degraded { .. } => AiTaskStatus::Degraded,
+            Self::Failed { .. } => AiTaskStatus::Failed,
+        }
+    }
+
+    pub fn attempts(&self) -> &[AiExecutionAttempt] {
+        match self {
+            Self::Completed { attempts, .. }
+            | Self::Degraded { attempts, .. }
+            | Self::Failed { attempts, .. } => attempts,
+        }
+    }
+}
+
 impl AiTaskStatus {
     fn as_str(self) -> &'static str {
         match self {
@@ -233,6 +298,9 @@ pub struct AiExecutionAudit {
     pub input_hash: String,
     pub redaction_policy_version: String,
     pub status: AiTaskStatus,
+    pub attempt_number: u8,
+    pub attempt_role: &'static str,
+    pub failure_kind: Option<&'static str>,
 }
 
 impl AiExecutionAudit {
@@ -257,6 +325,9 @@ impl AiExecutionAudit {
             input_hash: hex::encode(Sha256::digest(request.input.as_bytes())),
             redaction_policy_version: request.redaction_policy_version.clone(),
             status,
+            attempt_number: 1,
+            attempt_role: "final",
+            failure_kind: None,
         }
     }
 
@@ -269,8 +340,34 @@ impl AiExecutionAudit {
             "input_hash": self.input_hash,
             "redaction_policy_version": self.redaction_policy_version,
             "status": self.status.as_str(),
+            "attempt_number": self.attempt_number,
+            "attempt_role": self.attempt_role,
+            "failure_kind": self.failure_kind,
         })
     }
+}
+
+pub fn execution_attempt_audits(
+    request: &AiRequest,
+    result: &AiExecutionResult,
+) -> Vec<AiExecutionAudit> {
+    result
+        .attempts()
+        .iter()
+        .map(|attempt| AiExecutionAudit {
+            id: Uuid::new_v4().to_string(),
+            provider_id: Some(attempt.route.provider_id.clone()),
+            model: Some(attempt.route.model.clone()),
+            template_version: request.template_version.clone(),
+            input_scope_reference: request.input_scope_reference.clone(),
+            input_hash: hex::encode(Sha256::digest(request.input.as_bytes())),
+            redaction_policy_version: request.redaction_policy_version.clone(),
+            status: attempt.status,
+            attempt_number: attempt.number,
+            attempt_role: attempt.role,
+            failure_kind: attempt.failure_kind,
+        })
+        .collect()
 }
 
 pub async fn persist_execution_audit<C: ConnectionTrait>(
@@ -294,6 +391,18 @@ pub async fn persist_execution_audit<C: ConnectionTrait>(
     Ok(())
 }
 
+pub async fn persist_execution_audits<C: ConnectionTrait>(
+    db: &C,
+    audits: &[AiExecutionAudit],
+    actor: &str,
+    case_id: Option<&str>,
+) -> Result<(), sea_orm::DbErr> {
+    for audit in audits {
+        persist_execution_audit(db, audit, actor, case_id).await?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum AiGatewayError {
     #[error("invalid AI provider configuration: {0}")]
@@ -302,6 +411,16 @@ pub enum AiGatewayError {
     EmptyRequest,
     #[error("invalid native AI request: {0}")]
     InvalidNativeRequest(String),
+    #[error("AI provider environment variable {0} is unavailable")]
+    MissingRuntimeConfiguration(String),
+    #[error("AI provider response was invalid")]
+    InvalidProviderResponse,
+    #[error("AI provider request failed permanently")]
+    PermanentProviderFailure,
+    #[error("AI provider request failed transiently")]
+    TransientProviderFailure,
+    #[error("AI provider output was invalid")]
+    InvalidStructuredOutput,
 }
 
 /// Provider adapters only produce protocol requests. A later transport layer
@@ -339,11 +458,14 @@ impl AiProvider for ProtocolProvider {
                     name: "authorization",
                     value: credential,
                 }],
-                body: json!({
-                    "model": self.config.model,
-                    "messages": openai_messages(instructions, request.input.as_str()),
-                    "max_tokens": max_tokens,
-                }),
+                body: openai_chat_body(
+                    json!({
+                        "model": self.config.model,
+                        "messages": openai_messages(instructions, request.input.as_str()),
+                        "max_tokens": max_tokens,
+                    }),
+                    request,
+                ),
             },
             ProviderProtocol::OpenAiResponses => ProviderHttpRequest {
                 method: "POST",
@@ -361,7 +483,7 @@ impl AiProvider for ProtocolProvider {
                     if let Some(reasoning_effort) = self.config.reasoning_effort {
                         body["reasoning"] = json!({ "effort": reasoning_effort });
                     }
-                    body
+                    add_openai_responses_schema(body, request)
                 },
             },
             ProviderProtocol::AnthropicMessages => ProviderHttpRequest {
@@ -395,6 +517,10 @@ impl AiProvider for ProtocolProvider {
                 if !instructions.is_empty() {
                     body["systemInstruction"] = json!({ "parts": [{ "text": instructions }] });
                 }
+                if let Some(schema) = &request.output_schema {
+                    body["generationConfig"]["responseMimeType"] = json!("application/json");
+                    body["generationConfig"]["responseJsonSchema"] = schema.clone();
+                }
                 ProviderHttpRequest {
                     method: "POST",
                     path: format!("/v1beta/models/{}:generateContent", self.config.model),
@@ -408,6 +534,25 @@ impl AiProvider for ProtocolProvider {
         };
         Ok(request)
     }
+}
+
+fn openai_chat_body(mut body: Value, request: &AiRequest) -> Value {
+    if let (Some(schema), Some(name)) = (&request.output_schema, &request.output_schema_name) {
+        body["response_format"] = json!({
+            "type": "json_schema",
+            "json_schema": { "name": name, "strict": true, "schema": schema },
+        });
+    }
+    body
+}
+
+fn add_openai_responses_schema(mut body: Value, request: &AiRequest) -> Value {
+    if let (Some(schema), Some(name)) = (&request.output_schema, &request.output_schema_name) {
+        body["text"] = json!({
+            "format": { "type": "json_schema", "name": name, "strict": true, "schema": schema },
+        });
+    }
+    body
 }
 
 fn openai_messages(instructions: &str, input: &str) -> Vec<Value> {
@@ -448,31 +593,10 @@ impl AiGateway {
     }
 
     pub fn route(&self, request: &AiRequest) -> GatewayDecision {
-        let mut candidates: Vec<_> = self
-            .providers
-            .iter()
-            .filter_map(|registered| {
-                let route = registered.provider.route();
-                provider_is_eligible(&registered.config, request).then_some((
-                    route,
-                    registered.config.priority,
-                    registered.config.weight,
-                ))
-            })
-            .collect();
-
-        candidates.sort_by(|left, right| {
-            right
-                .1
-                .cmp(&left.1)
-                .then_with(|| right.2.cmp(&left.2))
-                .then_with(|| left.0.provider_id.cmp(&right.0.provider_id))
-        });
-
-        candidates
+        self.eligible_routes(request)
             .into_iter()
             .next()
-            .map(|(route, _, _)| GatewayDecision::Routed(route))
+            .map(GatewayDecision::Routed)
             .unwrap_or_else(|| {
                 if self.providers.is_empty() {
                     GatewayDecision::Degraded {
@@ -486,6 +610,29 @@ impl AiGateway {
                     }
                 }
             })
+    }
+
+    fn eligible_routes(&self, request: &AiRequest) -> Vec<ProviderRoute> {
+        let mut candidates: Vec<_> = self
+            .providers
+            .iter()
+            .filter_map(|registered| {
+                let route = registered.provider.route();
+                provider_is_eligible(&registered.config, request).then_some((
+                    route,
+                    registered.config.priority,
+                    registered.config.weight,
+                ))
+            })
+            .collect();
+        candidates.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| left.0.provider_id.cmp(&right.0.provider_id))
+        });
+        candidates.into_iter().map(|(route, _, _)| route).collect()
     }
 
     pub fn build_provider_request(
@@ -525,6 +672,264 @@ impl AiGateway {
         self.build_provider_request(route, request)?
             .into_native_request(endpoint, credential)
     }
+
+    /// Executes a policy-approved provider request. All runtime configuration
+    /// is resolved here so application services never handle provider
+    /// credentials, endpoints, or protocol payloads directly.
+    pub async fn execute(&self, request: &AiRequest) -> AiExecutionResult {
+        let decision = self.route(request);
+        let route = match decision {
+            GatewayDecision::Routed(route) => route,
+            GatewayDecision::Degraded { status, reason } => {
+                return AiExecutionResult::Degraded {
+                    status,
+                    reason,
+                    attempts: Vec::new(),
+                };
+            }
+        };
+
+        // One execution has a hard budget of two calls. A syntactically invalid
+        // structured result receives one same-provider repair call; a timeout
+        // or 5xx receives one newly-policy-checked fallback call. The paths are
+        // intentionally mutually exclusive.
+        let mut attempts = Vec::new();
+        match self.execute_route(&route, request).await {
+            Ok(output) => {
+                attempts.push(AiExecutionAttempt {
+                    number: 1,
+                    role: "initial",
+                    route: route.clone(),
+                    status: AiTaskStatus::Completed,
+                    failure_kind: None,
+                });
+                AiExecutionResult::Completed {
+                    route,
+                    output,
+                    attempts,
+                }
+            }
+            Err(AiGatewayError::InvalidStructuredOutput) => {
+                attempts.push(AiExecutionAttempt {
+                    number: 1,
+                    role: "initial",
+                    route: route.clone(),
+                    status: AiTaskStatus::Failed,
+                    failure_kind: Some("invalid_structured_output"),
+                });
+                let repair = repair_request(
+                    request,
+                    "provider output was not valid JSON for the requested schema",
+                );
+                match self.execute_route(&route, &repair).await {
+                    Ok(output) => {
+                        attempts.push(AiExecutionAttempt {
+                            number: 2,
+                            role: "json_repair",
+                            route: route.clone(),
+                            status: AiTaskStatus::Completed,
+                            failure_kind: None,
+                        });
+                        AiExecutionResult::Completed {
+                            route,
+                            output,
+                            attempts,
+                        }
+                    }
+                    Err(error) => {
+                        attempts.push(AiExecutionAttempt {
+                            number: 2,
+                            role: "json_repair",
+                            route: route.clone(),
+                            status: AiTaskStatus::Failed,
+                            failure_kind: Some(failure_kind(&error)),
+                        });
+                        AiExecutionResult::Failed { route, attempts }
+                    }
+                }
+            }
+            Err(AiGatewayError::TransientProviderFailure) if route.allow_fallback => {
+                attempts.push(AiExecutionAttempt {
+                    number: 1,
+                    role: "initial",
+                    route: route.clone(),
+                    status: AiTaskStatus::Failed,
+                    failure_kind: Some("transient_provider_failure"),
+                });
+                let fallback = self
+                    .eligible_routes(request)
+                    .into_iter()
+                    .find(|candidate| candidate.provider_id != route.provider_id);
+                match fallback {
+                    Some(fallback) => match self.execute_route(&fallback, request).await {
+                        Ok(output) => {
+                            attempts.push(AiExecutionAttempt {
+                                number: 2,
+                                role: "provider_failover",
+                                route: fallback.clone(),
+                                status: AiTaskStatus::Completed,
+                                failure_kind: None,
+                            });
+                            AiExecutionResult::Completed {
+                                route: fallback,
+                                output,
+                                attempts,
+                            }
+                        }
+                        Err(error) => {
+                            attempts.push(AiExecutionAttempt {
+                                number: 2,
+                                role: "provider_failover",
+                                route: fallback.clone(),
+                                status: AiTaskStatus::Failed,
+                                failure_kind: Some(failure_kind(&error)),
+                            });
+                            AiExecutionResult::Failed {
+                                route: fallback,
+                                attempts,
+                            }
+                        }
+                    },
+                    None => AiExecutionResult::Failed { route, attempts },
+                }
+            }
+            Err(error) => {
+                attempts.push(AiExecutionAttempt {
+                    number: 1,
+                    role: "initial",
+                    route: route.clone(),
+                    status: AiTaskStatus::Failed,
+                    failure_kind: Some(failure_kind(&error)),
+                });
+                AiExecutionResult::Failed { route, attempts }
+            }
+        }
+    }
+
+    async fn execute_route(
+        &self,
+        route: &ProviderRoute,
+        request: &AiRequest,
+    ) -> Result<String, AiGatewayError> {
+        async {
+            let endpoint = env::var(&route.endpoint_env).map_err(|_| {
+                AiGatewayError::MissingRuntimeConfiguration(route.endpoint_env.clone())
+            })?;
+            let credential = env::var(&route.credential_env).map_err(|_| {
+                AiGatewayError::MissingRuntimeConfiguration(route.credential_env.clone())
+            })?;
+            let native = self.build_native_request(route, request, &endpoint, &credential)?;
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_millis(route.timeout_ms))
+                .build()
+                .map_err(|_| {
+                    AiGatewayError::InvalidNativeRequest(
+                        "failed to build provider client".to_owned(),
+                    )
+                })?;
+            let method =
+                reqwest::Method::from_bytes(native.method().as_str().as_bytes()).map_err(|_| {
+                    AiGatewayError::InvalidNativeRequest(
+                        "unsupported provider HTTP method".to_owned(),
+                    )
+                })?;
+            let mut provider_request = client.request(method, native.uri().to_string());
+            for (name, value) in native.headers() {
+                provider_request = provider_request.header(name.as_str(), value.as_bytes());
+            }
+            let response = provider_request
+                .json(native.body())
+                .send()
+                .await
+                .map_err(|error| {
+                    if error.is_timeout() || error.is_connect() {
+                        AiGatewayError::TransientProviderFailure
+                    } else {
+                        AiGatewayError::PermanentProviderFailure
+                    }
+                })?;
+            if !response.status().is_success() {
+                return Err(if response.status().is_server_error() {
+                    AiGatewayError::TransientProviderFailure
+                } else {
+                    AiGatewayError::PermanentProviderFailure
+                });
+            }
+            let payload = response
+                .json::<Value>()
+                .await
+                .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
+            let output = extract_provider_output(route.protocol, &payload)?;
+            if request.output_schema.is_some() {
+                serde_json::from_str::<Value>(&output)
+                    .map_err(|_| AiGatewayError::InvalidStructuredOutput)?;
+            }
+            Ok(output)
+        }
+        .await
+    }
+
+    pub fn decode_json<T: DeserializeOwned>(&self, output: &str) -> Result<T, AiGatewayError> {
+        serde_json::from_str(output).map_err(|_| AiGatewayError::InvalidStructuredOutput)
+    }
+}
+
+fn failure_kind(error: &AiGatewayError) -> &'static str {
+    match error {
+        AiGatewayError::InvalidStructuredOutput => "invalid_structured_output",
+        AiGatewayError::TransientProviderFailure => "transient_provider_failure",
+        AiGatewayError::PermanentProviderFailure => "permanent_provider_failure",
+        AiGatewayError::MissingRuntimeConfiguration(_) => "missing_runtime_configuration",
+        AiGatewayError::InvalidProviderResponse => "invalid_provider_response",
+        _ => "gateway_error",
+    }
+}
+
+fn repair_request(request: &AiRequest, error: &str) -> AiRequest {
+    AiRequest {
+        capability: request.capability,
+        data_level: request.data_level,
+        purpose: request.purpose,
+        data_region: request.data_region.clone(),
+        system_instruction: Some(format!("Return only valid JSON matching the requested schema. Repair the supplied invalid model output. Error: {error}. Do not add information.")),
+        output_schema: request.output_schema.clone(),
+        output_schema_name: request.output_schema_name.clone(),
+        // Deliberately excludes the original sensitive business input.
+        input: "The preceding model result was invalid. Produce only schema-valid JSON with null or empty values when unsupported.".to_owned(),
+        requested_output_tokens: request.requested_output_tokens.min(240),
+        template_version: format!("{}:json-repair-v1", request.template_version),
+        input_scope_reference: "ai-output-repair-no-business-input".to_owned(),
+        redaction_policy_version: request.redaction_policy_version.clone(),
+    }
+}
+
+fn extract_provider_output(
+    protocol: ProviderProtocol,
+    payload: &Value,
+) -> Result<String, AiGatewayError> {
+    let output = match protocol {
+        ProviderProtocol::OpenAiChatCompletions => payload
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str),
+        ProviderProtocol::OpenAiResponses => payload
+            .get("output_text")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                payload
+                    .pointer("/output/0/content/0/text")
+                    .and_then(Value::as_str)
+            }),
+        ProviderProtocol::AnthropicMessages => {
+            payload.pointer("/content/0/text").and_then(Value::as_str)
+        }
+        ProviderProtocol::GeminiGenerateContent => payload
+            .pointer("/candidates/0/content/parts/0/text")
+            .and_then(Value::as_str),
+    }
+    .map(str::trim)
+    .filter(|output| !output.is_empty())
+    .ok_or(AiGatewayError::InvalidProviderResponse)?;
+    Ok(output.to_owned())
 }
 
 fn route_for(config: &ProviderConfig) -> ProviderRoute {
@@ -643,6 +1048,16 @@ fn is_environment_variable_name(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{Arc, LazyLock, Mutex as StdMutex},
+        thread,
+        time::Duration,
+    };
+
+    static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     fn provider(id: &str, protocol: ProviderProtocol) -> ProviderConfig {
         ProviderConfig {
@@ -675,12 +1090,262 @@ mod tests {
             purpose: AiPurpose::IntakeDraft,
             data_region: "cn-test-1".to_owned(),
             system_instruction: Some("Follow the approved template.".to_owned()),
+            output_schema: None,
+            output_schema_name: None,
             input: "A simulated intake answer".to_owned(),
             requested_output_tokens: 100,
             template_version: "intake-v1".to_owned(),
             input_scope_reference: "intake-session:simulated".to_owned(),
             redaction_policy_version: "redaction-v1".to_owned(),
         }
+    }
+
+    fn mock_responses(responses: Vec<(u16, &'static str)>) -> (String, Arc<StdMutex<usize>>) {
+        mock_responses_with_delays(
+            responses
+                .into_iter()
+                .map(|(status, body)| (status, body, 0))
+                .collect(),
+        )
+    }
+
+    fn mock_responses_with_delays(
+        responses: Vec<(u16, &'static str, u64)>,
+    ) -> (String, Arc<StdMutex<usize>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
+        let endpoint = format!("http://{}", listener.local_addr().expect("mock address"));
+        let calls = Arc::new(StdMutex::new(0usize));
+        let count = Arc::clone(&calls);
+        thread::spawn(move || {
+            for (status, body, delay_ms) in responses {
+                let (mut stream, _) = listener.accept().expect("mock accepts request");
+                let mut buffer = [0_u8; 16_384];
+                let _ = stream.read(&mut buffer);
+                *count.lock().expect("counter lock") += 1;
+                if delay_ms > 0 {
+                    thread::sleep(Duration::from_millis(delay_ms));
+                }
+                let phrase = if status == 200 {
+                    "OK"
+                } else if status >= 500 {
+                    "Service Unavailable"
+                } else {
+                    "Bad Request"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} {phrase}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (endpoint, calls)
+    }
+
+    #[tokio::test]
+    async fn invalid_json_runs_one_repair_request_and_stops_after_two_calls() {
+        let _environment = ENV_LOCK.lock().await;
+        let (endpoint, calls) = mock_responses(vec![
+            (200, r#"{"output_text":"not-json"}"#),
+            (200, r#"{"output_text":"{\"answer\":\"ok\"}"}"#),
+        ]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+        }
+        let mut configuration = provider("repair", ProviderProtocol::OpenAiResponses);
+        configuration.allow_fallback = true;
+        let gateway = AiGateway::from_configurations(vec![configuration]).expect("gateway");
+        let mut request = request();
+        request.output_schema = Some(json!({"type":"object"}));
+        request.output_schema_name = Some("answer".to_owned());
+        let result = gateway.execute(&request).await;
+        assert!(matches!(result, AiExecutionResult::Completed { .. }));
+        assert_eq!(*calls.lock().expect("counter lock"), 2);
+        assert_eq!(
+            result
+                .attempts()
+                .iter()
+                .map(|attempt| attempt.role)
+                .collect::<Vec<_>>(),
+            vec!["initial", "json_repair"]
+        );
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
+    }
+
+    #[tokio::test]
+    async fn client_failure_does_not_retry_or_fail_over() {
+        let _environment = ENV_LOCK.lock().await;
+        let (endpoint, calls) = mock_responses(vec![(400, r#"{"error":"bad request"}"#)]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+        }
+        let mut configuration = provider("client-error", ProviderProtocol::OpenAiResponses);
+        configuration.allow_fallback = true;
+        let gateway = AiGateway::from_configurations(vec![configuration]).expect("gateway");
+        let result = gateway.execute(&request()).await;
+        assert!(matches!(result, AiExecutionResult::Failed { .. }));
+        assert_eq!(*calls.lock().expect("counter lock"), 1);
+        assert_eq!(result.attempts()[0].role, "initial");
+        assert_eq!(
+            result.attempts()[0].failure_kind,
+            Some("permanent_provider_failure")
+        );
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
+    }
+
+    #[tokio::test]
+    async fn server_failure_uses_one_compliant_fallback() {
+        let _environment = ENV_LOCK.lock().await;
+        let (primary_endpoint, primary_calls) =
+            mock_responses(vec![(503, r#"{"error":"temporary"}"#)]);
+        let (fallback_endpoint, fallback_calls) =
+            mock_responses(vec![(200, r#"{"output_text":"ok"}"#)]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", primary_endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+            env::set_var("ANGUI_TEST_AI_FALLBACK_ENDPOINT", fallback_endpoint);
+            env::set_var("ANGUI_TEST_AI_FALLBACK_KEY", "test-key");
+        }
+        let mut primary = provider("primary", ProviderProtocol::OpenAiResponses);
+        primary.allow_fallback = true;
+        primary.priority = 20;
+        let mut fallback = provider("fallback", ProviderProtocol::OpenAiResponses);
+        fallback.endpoint_env = "ANGUI_TEST_AI_FALLBACK_ENDPOINT".to_owned();
+        fallback.credential_env = "ANGUI_TEST_AI_FALLBACK_KEY".to_owned();
+        fallback.priority = 10;
+        let gateway = AiGateway::from_configurations(vec![primary, fallback]).expect("gateway");
+        let result = gateway.execute(&request()).await;
+        assert!(matches!(result, AiExecutionResult::Completed { .. }));
+        assert_eq!(*primary_calls.lock().expect("counter lock"), 1);
+        assert_eq!(*fallback_calls.lock().expect("counter lock"), 1);
+        assert_eq!(
+            result
+                .attempts()
+                .iter()
+                .map(|attempt| attempt.role)
+                .collect::<Vec<_>>(),
+            vec!["initial", "provider_failover"]
+        );
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+            env::remove_var("ANGUI_TEST_AI_FALLBACK_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_FALLBACK_KEY");
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_uses_one_provider_failover_without_third_request() {
+        let _environment = ENV_LOCK.lock().await;
+        let (primary_endpoint, primary_calls) =
+            mock_responses_with_delays(vec![(200, r#"{"output_text":"late"}"#, 120)]);
+        let (fallback_endpoint, fallback_calls) =
+            mock_responses(vec![(200, r#"{"output_text":"ok"}"#)]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", primary_endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+            env::set_var("ANGUI_TEST_AI_FALLBACK_ENDPOINT", fallback_endpoint);
+            env::set_var("ANGUI_TEST_AI_FALLBACK_KEY", "test-key");
+        }
+        let mut primary = provider("timeout-primary", ProviderProtocol::OpenAiResponses);
+        primary.allow_fallback = true;
+        primary.timeout_ms = 20;
+        primary.priority = 20;
+        let mut fallback = provider("timeout-fallback", ProviderProtocol::OpenAiResponses);
+        fallback.endpoint_env = "ANGUI_TEST_AI_FALLBACK_ENDPOINT".to_owned();
+        fallback.credential_env = "ANGUI_TEST_AI_FALLBACK_KEY".to_owned();
+        fallback.priority = 10;
+        let gateway = AiGateway::from_configurations(vec![primary, fallback]).expect("gateway");
+        let result = gateway.execute(&request()).await;
+        assert!(matches!(result, AiExecutionResult::Completed { .. }));
+        assert_eq!(*primary_calls.lock().expect("counter lock"), 1);
+        assert_eq!(*fallback_calls.lock().expect("counter lock"), 1);
+        assert_eq!(
+            result
+                .attempts()
+                .iter()
+                .map(|attempt| attempt.role)
+                .collect::<Vec<_>>(),
+            vec!["initial", "provider_failover"]
+        );
+        assert_eq!(
+            result.attempts()[0].failure_kind,
+            Some("transient_provider_failure")
+        );
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+            env::remove_var("ANGUI_TEST_AI_FALLBACK_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_FALLBACK_KEY");
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_repair_never_makes_a_third_request() {
+        let _environment = ENV_LOCK.lock().await;
+        let (endpoint, calls) = mock_responses(vec![
+            (200, r#"{"output_text":"not-json"}"#),
+            (200, r#"{"output_text":"still-not-json"}"#),
+        ]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+        }
+        let gateway = AiGateway::from_configurations(vec![provider(
+            "repair-fails",
+            ProviderProtocol::OpenAiResponses,
+        )])
+        .expect("gateway");
+        let mut request = request();
+        request.output_schema = Some(json!({"type":"object"}));
+        request.output_schema_name = Some("answer".to_owned());
+        let result = gateway.execute(&request).await;
+        assert!(matches!(result, AiExecutionResult::Failed { .. }));
+        assert_eq!(*calls.lock().expect("counter lock"), 2);
+        assert_eq!(
+            result
+                .attempts()
+                .iter()
+                .map(|attempt| attempt.role)
+                .collect::<Vec<_>>(),
+            vec!["initial", "json_repair"]
+        );
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
+    }
+
+    #[test]
+    fn attempt_audits_never_include_raw_input_or_output() {
+        let route = route_for(&provider("audit", ProviderProtocol::OpenAiResponses));
+        let result = AiExecutionResult::Failed {
+            route: route.clone(),
+            attempts: vec![AiExecutionAttempt {
+                number: 1,
+                role: "initial",
+                route,
+                status: AiTaskStatus::Failed,
+                failure_kind: Some("invalid_structured_output"),
+            }],
+        };
+        let mut request = request();
+        request.input = "sensitive family health and exact location text".to_owned();
+        let audits = execution_attempt_audits(&request, &result);
+        assert_eq!(audits.len(), 1);
+        let metadata = audits[0].metadata_json().to_string();
+        assert!(metadata.contains("attempt_number"));
+        assert!(metadata.contains("invalid_structured_output"));
+        assert!(!metadata.contains(&request.input));
+        assert!(!metadata.contains("model-output-body"));
     }
 
     #[test]
@@ -823,6 +1488,58 @@ mod tests {
                     assert_eq!(outbound.path, "/v1beta/models/test-model:generateContent");
                     assert!(outbound.body.get("systemInstruction").is_some());
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn structured_requests_use_native_schema_controls_when_supported() {
+        for protocol in [
+            ProviderProtocol::OpenAiChatCompletions,
+            ProviderProtocol::OpenAiResponses,
+            ProviderProtocol::GeminiGenerateContent,
+        ] {
+            let gateway = AiGateway::from_configurations(vec![provider("structured", protocol)])
+                .expect("fixture is valid");
+            let route = match gateway.route(&request()) {
+                GatewayDecision::Routed(route) => route,
+                GatewayDecision::Degraded { .. } => panic!("fixture should route"),
+            };
+            let mut structured = request();
+            structured.output_schema = Some(json!({
+                "type": "object",
+                "properties": { "answer": { "type": "string" } },
+                "required": ["answer"],
+                "additionalProperties": false
+            }));
+            structured.output_schema_name = Some("test_answer".to_owned());
+            let outbound = gateway
+                .build_provider_request(&route, &structured)
+                .expect("structured request should be serializable");
+            match protocol {
+                ProviderProtocol::OpenAiChatCompletions => {
+                    assert_eq!(outbound.body["response_format"]["type"], "json_schema");
+                    assert_eq!(
+                        outbound.body["response_format"]["json_schema"]["strict"],
+                        true
+                    );
+                }
+                ProviderProtocol::OpenAiResponses => {
+                    assert_eq!(outbound.body["text"]["format"]["type"], "json_schema");
+                    assert_eq!(outbound.body["text"]["format"]["strict"], true);
+                }
+                ProviderProtocol::GeminiGenerateContent => {
+                    assert_eq!(
+                        outbound.body["generationConfig"]["responseMimeType"],
+                        "application/json"
+                    );
+                    assert!(
+                        outbound.body["generationConfig"]
+                            .get("responseJsonSchema")
+                            .is_some()
+                    );
+                }
+                ProviderProtocol::AnthropicMessages => unreachable!(),
             }
         }
     }

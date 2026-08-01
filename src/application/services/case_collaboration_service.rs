@@ -7,15 +7,21 @@ use sea_orm::{
 use serde_json::json;
 
 use crate::{
-    ai_gateway::{AiCapability, AiPurpose, AiRequest, DataLevel, GatewayDecision},
+    ai_gateway::{AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel},
     amap_service::{Coordinate, PoiSearch},
-    entities::{archive_drafts, case_places, cases, clue_drafts, clues, summary_drafts, tasks},
+    entities::{
+        archive_drafts, archive_review_materials, case_places, case_source_records, cases,
+        clue_drafts, clues, summary_drafts, tasks,
+    },
     error::ApiError,
     models::{
         ArchiveDraftResponse, AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse,
-        CasePublicProgressItem, CasePublicProgressResponse, ClueDraftResponse,
-        CreateClueDraftRequest, CreateSummaryDraftRequest, DeidentifyArchiveDraftRequest,
-        ReviewArchiveDraftRequest, ReviewSummaryDraftRequest, SummaryDraftResponse,
+        CasePublicProgressItem, CasePublicProgressResponse, CaseSourceRecordResponse,
+        ClueDraftCandidate, ClueDraftFieldDecision, ClueDraftResponse,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
+        CreateSummaryDraftRequest, DeidentifyArchiveDraftRequest, ReviewArchiveDraftRequest,
+        ReviewClueDraftRequest, ReviewSummaryDraftRequest, SummaryDraftDiffResponse,
+        SummaryDraftResponse, SummaryDraftVersionResponse,
     },
     roles::{CaseRole, GlobalCapability},
     services::{case_service, case_summary_service, task_service},
@@ -24,10 +30,100 @@ use crate::{
 const DRAFT_TEMPLATE_VERSION: &str = "case-summary-rule-v1";
 const ARCHIVE_DRAFT_TEMPLATE_VERSION: &str = "case-archive-safe-metadata-v1";
 
+pub async fn create_case_source_record(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    request: CreateCaseSourceRecordRequest,
+) -> Result<CaseSourceRecordResponse, ApiError> {
+    case_service::require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let record_type = request.record_type.trim().to_lowercase();
+    if !matches!(
+        record_type.as_str(),
+        "message" | "phone_record" | "field_feedback"
+    ) {
+        return Err(ApiError::Validation(
+            "record_type must be message, phone_record, or field_feedback".to_owned(),
+        ));
+    }
+    let content = required_text("content", request.content, 4_000)?;
+    let timestamp = now();
+    let model = case_source_records::ActiveModel {
+        id: Set(case_service::new_id()),
+        case_id: Set(case_id.to_owned()),
+        record_type: Set(record_type),
+        content: Set(content),
+        occurred_at: Set(trim(request.occurred_at, 40)?),
+        source_reference: Set(trim(request.source_reference, 500)?),
+        created_by_user_id: Set(auth.id.clone()),
+        created_at: Set(timestamp),
+    }
+    .insert(db)
+    .await?;
+    case_service::write_audit(
+        db,
+        Some(case_id.to_owned()),
+        auth,
+        "case_source_record.created",
+        "case_source_record",
+        model.id.clone(),
+        Some(json!({"record_type": model.record_type})),
+    )
+    .await?;
+    Ok(case_source_record_response(model))
+}
+
+pub async fn list_case_source_records(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<CaseSourceRecordResponse>, ApiError> {
+    case_service::require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    Ok(case_source_records::Entity::find()
+        .filter(case_source_records::Column::CaseId.eq(case_id))
+        .order_by_desc(case_source_records::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(case_source_record_response)
+        .collect())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArchiveOrganizationCandidate {
+    timeline: Vec<String>,
+    lessons: Vec<String>,
+    uncertainty: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SummaryCandidate {
+    confirmed_information: Vec<String>,
+    pending_verification: Vec<String>,
+    excluded_directions: Vec<String>,
+    safety_reminders: Vec<String>,
+    uncertainty_notice: String,
+}
+
 pub async fn create_archive_draft(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     case_id: &str,
+    _gateway: &crate::ai_gateway::AiGateway,
 ) -> Result<ArchiveDraftResponse, ApiError> {
     let transaction = db.begin().await?;
     case_service::require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander])
@@ -53,22 +149,64 @@ pub async fn create_archive_draft(
         .count(&transaction)
         .await?;
     let source_scope = vec![
-        "confirmed_clue_metadata".to_owned(),
-        "completed_task_metadata".to_owned(),
+        "confirmed_clue_review_material".to_owned(),
+        "completed_task_review_material".to_owned(),
     ];
+    let confirmed_clue_material = clues::Entity::find()
+        .filter(clues::Column::CaseId.eq(case_id))
+        .filter(clues::Column::Status.eq("confirmed"))
+        .all(&transaction)
+        .await?
+        .into_iter()
+        .map(|clue| format!("confirmed clue: {}", clue.content))
+        .collect::<Vec<_>>();
+    let task_material = tasks::Entity::find()
+        .filter(tasks::Column::CaseId.eq(case_id))
+        .filter(tasks::Column::Status.eq("completed"))
+        .all(&transaction)
+        .await?
+        .into_iter()
+        .map(|task| format!("completed task: {}", task.title))
+        .collect::<Vec<_>>();
+    let raw_material = confirmed_clue_material
+        .into_iter()
+        .chain(task_material)
+        .collect::<Vec<_>>()
+        .join("\n");
     let timestamp = now();
+    let material_version = archive_review_materials::Entity::find()
+        .filter(archive_review_materials::Column::CaseId.eq(case_id))
+        .order_by_desc(archive_review_materials::Column::Version)
+        .one(&transaction)
+        .await?
+        .map_or(1, |existing| existing.version + 1);
+    let material = archive_review_materials::ActiveModel {
+        id: Set(case_service::new_id()),
+        case_id: Set(case_id.to_owned()),
+        version: Set(material_version),
+        parent_material_id: Set(None),
+        content: Set(raw_material),
+        source_scope_json: Set(
+            serde_json::to_string(&source_scope).map_err(|_| ApiError::Internal)?
+        ),
+        status: Set("draft".to_owned()),
+        created_by_user_id: Set(auth.id.clone()),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+        review_reason: Set(None),
+        created_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await?;
     let model = archive_drafts::ActiveModel {
         id: Set(case_service::new_id()),
         case_id: Set(case_id.to_owned()),
         status: Set("draft".to_owned()),
-        content: Set(deterministic_archive_draft_content(
-            &case.status,
-            confirmed_clue_count,
-            completed_task_count,
-        )),
+        content: Set("Awaiting administrator de-identification of the selected review material before AI organization.".to_owned()),
         source_scope_json: Set(
             serde_json::to_string(&source_scope).map_err(|_| ApiError::Internal)?
         ),
+        review_material_id: Set(Some(material.id.clone())),
         deidentification_status: Set("manual_review_required".to_owned()),
         template_version: Set(ARCHIVE_DRAFT_TEMPLATE_VERSION.to_owned()),
         provider_model: Set(None),
@@ -113,6 +251,7 @@ pub async fn deidentify_archive_draft(
     auth: &AuthenticatedUser,
     draft_id: &str,
     request: DeidentifyArchiveDraftRequest,
+    gateway: &crate::ai_gateway::AiGateway,
 ) -> Result<ArchiveDraftResponse, ApiError> {
     require_admin(auth)?;
     let outcome = request.outcome.trim().to_lowercase();
@@ -132,7 +271,6 @@ pub async fn deidentify_archive_draft(
             "archive draft is not awaiting de-identification review".to_owned(),
         ));
     }
-    let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let timestamp = now();
     let next_deidentification_status = if outcome == "confirm" {
         "deidentified"
@@ -144,6 +282,90 @@ pub async fn deidentify_archive_draft(
     } else {
         "rejected"
     };
+    let material_id = existing.review_material_id.clone().ok_or_else(|| {
+        ApiError::Conflict("archive draft is missing its review material".to_owned())
+    })?;
+    let original_material = archive_review_materials::Entity::find_by_id(&material_id)
+        .one(&transaction)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    let (
+        content,
+        provider_model,
+        template_version,
+        _material_status,
+        next_material_id,
+        execution_audit,
+    ) = if outcome == "confirm" {
+        let material_text = required_text(
+            "deidentified_material",
+            request.deidentified_material.unwrap_or_default(),
+            12_000,
+        )?;
+        let material = archive_review_materials::ActiveModel {
+            id: Set(case_service::new_id()),
+            case_id: Set(original_material.case_id.clone()),
+            version: Set(original_material.version + 1),
+            parent_material_id: Set(Some(original_material.id)),
+            content: Set(material_text.clone()),
+            source_scope_json: Set(original_material.source_scope_json.clone()),
+            status: Set("deidentified".to_owned()),
+            created_by_user_id: Set(auth.id.clone()),
+            reviewed_by_user_id: Set(Some(auth.id.clone())),
+            reviewed_at: Set(Some(timestamp.clone())),
+            review_reason: Set(Some(reason.clone())),
+            created_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+        let ai_request = AiRequest { capability: AiCapability::CaseOrganization, data_level: DataLevel::Internal, purpose: AiPurpose::CaseArchiveDraft, data_region: "CN".to_owned(), system_instruction: Some("Return JSON only: {timeline:string[],lessons:string[],uncertainty:string}. Use only this administrator-approved de-identified material. Do not infer identities, exact locations, health details, causes, or operational outcomes.".to_owned()), output_schema: Some(archive_candidate_schema()), output_schema_name: Some("case_archive_candidate".to_owned()), input: serde_json::to_string(&json!({"deidentified_material": material_text})).map_err(|_| ApiError::Internal)?, requested_output_tokens: 500, template_version: "case-archive-ai-v2".to_owned(), input_scope_reference: format!("approved-deidentified-material:{}:v{}", material.id, material.version), redaction_policy_version: "archive-approved-material-v1".to_owned() };
+        let execution = gateway.execute(&ai_request).await;
+        let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+        let (content, provider_model, _audit_status) = match execution {
+            AiExecutionResult::Completed { route, output, .. } => {
+                match gateway.decode_json::<ArchiveOrganizationCandidate>(&output) {
+                    Ok(candidate) if valid_archive_candidate(&candidate) => (
+                        archive_candidate_content(candidate),
+                        Some(route.model),
+                        AiTaskStatus::Completed,
+                    ),
+                    _ => (
+                        deterministic_archive_material_content(&material_text),
+                        None,
+                        AiTaskStatus::Failed,
+                    ),
+                }
+            }
+            AiExecutionResult::Degraded { .. } => (
+                deterministic_archive_material_content(&material_text),
+                None,
+                AiTaskStatus::Degraded,
+            ),
+            AiExecutionResult::Failed { .. } => (
+                deterministic_archive_material_content(&material_text),
+                None,
+                AiTaskStatus::Failed,
+            ),
+        };
+        (
+            content,
+            provider_model,
+            "case-archive-ai-v2".to_owned(),
+            "deidentified",
+            Some(material.id),
+            Some(execution_audits),
+        )
+    } else {
+        (
+            existing.content.clone(),
+            None,
+            existing.template_version.clone(),
+            "rejected",
+            Some(original_material.id),
+            None,
+        )
+    };
+    let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let update = archive_drafts::Entity::update_many()
         .col_expr(archive_drafts::Column::Status, Expr::value(next_status))
         .col_expr(
@@ -161,6 +383,19 @@ pub async fn deidentify_archive_draft(
         .col_expr(
             archive_drafts::Column::DeidentificationReason,
             Expr::value(Some(reason.clone())),
+        )
+        .col_expr(archive_drafts::Column::Content, Expr::value(content))
+        .col_expr(
+            archive_drafts::Column::ProviderModel,
+            Expr::value(provider_model),
+        )
+        .col_expr(
+            archive_drafts::Column::TemplateVersion,
+            Expr::value(template_version),
+        )
+        .col_expr(
+            archive_drafts::Column::ReviewMaterialId,
+            Expr::value(next_material_id),
         )
         .col_expr(archive_drafts::Column::Version, Expr::value(next_version))
         .col_expr(archive_drafts::Column::UpdatedAt, Expr::value(timestamp))
@@ -181,6 +416,15 @@ pub async fn deidentify_archive_draft(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::Internal)?;
+    if let Some(execution_audits) = execution_audit {
+        crate::ai_gateway::persist_execution_audits(
+            &transaction,
+            &execution_audits,
+            &auth.id,
+            Some(&model.case_id),
+        )
+        .await?;
+    }
     case_service::write_audit(
         &transaction,
         Some(model.case_id.clone()),
@@ -314,6 +558,23 @@ pub async fn review_archive_draft(
     archive_draft_response(model)
 }
 
+/// Returns archive drafts for the administrator review queue. This is kept
+/// separate from case membership because administrators perform the final
+/// de-identification and learning-resource approval lifecycle.
+pub async fn list_archive_drafts_for_admin(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<ArchiveDraftResponse>, ApiError> {
+    require_admin(auth)?;
+    archive_drafts::Entity::find()
+        .order_by_desc(archive_drafts::Column::UpdatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(archive_draft_response)
+        .collect()
+}
+
 pub async fn get_public_progress(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -379,33 +640,70 @@ pub async fn create_clue_drafts(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let text = required_text("text", request.text, 4_000)?;
-    let source_type = request
-        .source_type
-        .unwrap_or_else(|| "manual_report".to_owned())
-        .trim()
-        .to_lowercase();
-    if !matches!(source_type.as_str(), "manual_report" | "field_report") {
-        return Err(ApiError::Validation(
-            "source_type must be manual_report or field_report".to_owned(),
+    let source_record = case_source_records::Entity::find_by_id(request.source_record_id.trim())
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("controlled source record was not found".to_owned()))?;
+    if source_record.case_id != case_id {
+        return Err(ApiError::NotFound(
+            "controlled source record was not found".to_owned(),
         ));
     }
-    let decision = gateway.route(&AiRequest {
+    let text = source_record.content.clone();
+    // Existing formal-clue lifecycle exposes only report categories. Preserve
+    // the precise controlled record type on its linked source object.
+    let source_type = if source_record.record_type == "field_feedback" {
+        "field_report".to_owned()
+    } else {
+        "manual_report".to_owned()
+    };
+    let ai_request = AiRequest {
         capability: AiCapability::StructuredExtraction,
         data_level: DataLevel::Collaborative,
         purpose: AiPurpose::ClueDraft,
         data_region: "CN".to_owned(),
-        system_instruction: None,
+        system_instruction: Some("Return JSON only using the supplied schema. Extract only candidate fields explicitly supported by the supplied text. Keep unknown fields null or empty. Do not decide whether a report is true, infer a current or future location, add facts, or issue an action instruction. Include a source excerpt and per-field source excerpts only from the supplied text.".to_owned()),
+        output_schema: Some(clue_candidate_schema()),
+        output_schema_name: Some("clue_draft_candidate".to_owned()),
         input: text.clone(),
         requested_output_tokens: 400,
         template_version: "clue-draft-rule-v1".to_owned(),
         input_scope_reference: "case_authorized_text".to_owned(),
         redaction_policy_version: "case-collaboration-v1".to_owned(),
-    });
-    let (provider_model, degradation_status) = match decision {
-        GatewayDecision::Routed(route) => (Some(route.model), "manual_review_required"),
-        GatewayDecision::Degraded { .. } => (None, "rule_based_fallback"),
     };
+    let execution = gateway.execute(&ai_request).await;
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+    let (candidate, provider_model, degradation_status, _audit_status) = match execution {
+        AiExecutionResult::Completed { route, output, .. } => {
+            match gateway.decode_json::<ClueDraftCandidate>(&output) {
+                Ok(candidate) => (
+                    normalized_candidate(candidate, &text),
+                    Some(route.model),
+                    "manual_review_required",
+                    AiTaskStatus::Completed,
+                ),
+                Err(_) => (
+                    fallback_candidate(&text),
+                    None,
+                    "rule_based_fallback",
+                    AiTaskStatus::Failed,
+                ),
+            }
+        }
+        AiExecutionResult::Degraded { .. } => (
+            fallback_candidate(&text),
+            None,
+            "rule_based_fallback",
+            AiTaskStatus::Degraded,
+        ),
+        AiExecutionResult::Failed { .. } => (
+            fallback_candidate(&text),
+            None,
+            "rule_based_fallback",
+            AiTaskStatus::Failed,
+        ),
+    };
+    let candidate_json = serde_json::to_string(&candidate).map_err(|_| ApiError::Internal)?;
     let timestamp = now();
     let transaction = db.begin().await?;
     let draft = clue_drafts::ActiveModel {
@@ -414,7 +712,8 @@ pub async fn create_clue_drafts(
         status: Set("draft".to_owned()),
         content: Set(text),
         source_type: Set(source_type.clone()),
-        raw_record_reference: Set(trim(request.raw_record_reference, 500)?),
+        raw_record_reference: Set(source_record.source_reference.clone()),
+        source_record_id: Set(Some(source_record.id.clone())),
         uncertainty_notice: Set(
             "This is an unreviewed extraction draft. Confirm time, location, and source before creating a clue."
                 .to_owned(),
@@ -422,11 +721,25 @@ pub async fn create_clue_drafts(
         template_version: Set("clue-draft-rule-v1".to_owned()),
         provider_model: Set(provider_model),
         degradation_status: Set(degradation_status.to_owned()),
+        candidate_json: Set(candidate_json),
+        review_status: Set("pending_review".to_owned()),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+        review_reason: Set(None),
+        version: Set(1),
+        promoted_clue_id: Set(None),
         created_by_user_id: Set(auth.id.clone()),
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp),
     }
     .insert(&transaction)
+    .await?;
+    crate::ai_gateway::persist_execution_audits(
+        &transaction,
+        &execution_audits,
+        &auth.id,
+        Some(case_id),
+    )
     .await?;
     case_service::write_audit(
         &transaction,
@@ -439,7 +752,26 @@ pub async fn create_clue_drafts(
     )
     .await?;
     transaction.commit().await?;
-    Ok(vec![clue_draft_response(draft)])
+    Ok(vec![clue_draft_response(draft)?])
+}
+
+/// Lists durable clue-extraction drafts so a commander can resume review after
+/// a page refresh or a later hand-off. Raw source text remains protected by
+/// the normal case-role check.
+pub async fn list_clue_drafts(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<ClueDraftResponse>, ApiError> {
+    case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    clue_drafts::Entity::find()
+        .filter(clue_drafts::Column::CaseId.eq(case_id))
+        .order_by_desc(clue_drafts::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(clue_draft_response)
+        .collect()
 }
 
 pub async fn create_summary_draft(
@@ -447,32 +779,101 @@ pub async fn create_summary_draft(
     auth: &AuthenticatedUser,
     case_id: &str,
     request: CreateSummaryDraftRequest,
-    _gateway: &crate::ai_gateway::AiGateway,
+    gateway: &crate::ai_gateway::AiGateway,
 ) -> Result<SummaryDraftResponse, ApiError> {
     case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
     let summary = case_summary_service::get_case_summary(db, auth, case_id).await?;
-    let (content, publication_eligible, initial_status) = match request.content {
-        Some(content) => (required_text("content", content, 12_000)?, false, "draft"),
-        None => (
-            deterministic_draft_content(&summary),
-            true,
-            "pending_review",
-        ),
-    };
+    let (content, provider_model, execution_audit, initial_status, publication_eligible) =
+        match request.content {
+            Some(content) => (
+                required_text("content", content, 12_000)?,
+                None,
+                None,
+                "draft",
+                false,
+            ),
+            None => {
+                let input = serde_json::to_string(&summary).map_err(|_| ApiError::Internal)?;
+                let ai_request = AiRequest {
+                capability: AiCapability::CaseSummary,
+                data_level: DataLevel::Internal,
+                purpose: AiPurpose::CaseSummaryDraft,
+                data_region: "CN".to_owned(),
+                system_instruction: Some("Return a concise case-summary draft. Keep unverified information explicitly unverified and do not make location conclusions or task decisions.".to_owned()),
+                output_schema: Some(summary_candidate_schema()),
+                output_schema_name: Some("case_summary_candidate".to_owned()),
+                input,
+                requested_output_tokens: 800,
+                template_version: "case-summary-ai-v1".to_owned(),
+                input_scope_reference: "authorized_case_summary_inputs".to_owned(),
+                redaction_policy_version: "case-summary-v1".to_owned(),
+            };
+                let execution = gateway.execute(&ai_request).await;
+                let execution_audits =
+                    crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+                let (content, provider_model, _audit_status) = match execution {
+                    AiExecutionResult::Completed { route, output, .. } => {
+                        match gateway.decode_json::<SummaryCandidate>(&output).and_then(
+                            |candidate| {
+                                validate_summary_candidate(candidate, &summary).map_err(|_| {
+                                    crate::ai_gateway::AiGatewayError::InvalidStructuredOutput
+                                })
+                            },
+                        ) {
+                            Ok(content) => (content, Some(route.model), AiTaskStatus::Completed),
+                            Err(_) => (
+                                deterministic_draft_content(&summary),
+                                None,
+                                AiTaskStatus::Failed,
+                            ),
+                        }
+                    }
+                    AiExecutionResult::Degraded { .. } => (
+                        deterministic_draft_content(&summary),
+                        None,
+                        AiTaskStatus::Degraded,
+                    ),
+                    AiExecutionResult::Failed { .. } => (
+                        deterministic_draft_content(&summary),
+                        None,
+                        AiTaskStatus::Failed,
+                    ),
+                };
+                (
+                    content,
+                    provider_model,
+                    Some(execution_audits),
+                    "pending_review",
+                    true,
+                )
+            }
+        };
     let timestamp = now();
     let scope = serde_json::to_string(&summary.source_scope).map_err(|_| ApiError::Internal)?;
     let transaction = db.begin().await?;
+    let previous = summary_drafts::Entity::find()
+        .filter(summary_drafts::Column::CaseId.eq(case_id))
+        .order_by_desc(summary_drafts::Column::Version)
+        .one(&transaction)
+        .await?;
+    let version = previous
+        .as_ref()
+        .and_then(|draft| draft.version.checked_add(1))
+        .unwrap_or(1);
     let model = summary_drafts::ActiveModel {
         id: Set(case_service::new_id()),
         case_id: Set(case_id.to_owned()),
+        parent_draft_id: Set(previous.as_ref().map(|draft| draft.id.clone())),
+        version: Set(version),
         status: Set(initial_status.to_owned()),
         content: Set(content),
         source_scope_json: Set(scope),
-        template_version: Set(DRAFT_TEMPLATE_VERSION.to_owned()),
-        // The gateway currently validates and routes provider requests but does
-        // not execute external inference. Never attribute this deterministic
-        // fallback to a model until a transport returns a validated response.
-        provider_model: Set(None),
+        template_version: Set(if provider_model.is_some() {
+            "case-summary-ai-v1".to_owned()
+        } else {
+            DRAFT_TEMPLATE_VERSION.to_owned()
+        }),
+        provider_model: Set(provider_model),
         publication_eligible: Set(publication_eligible),
         generated_by_user_id: Set(auth.id.clone()),
         reviewed_by_user_id: Set(None),
@@ -483,6 +884,15 @@ pub async fn create_summary_draft(
     }
     .insert(&transaction)
     .await?;
+    if let Some(execution_audits) = execution_audit {
+        crate::ai_gateway::persist_execution_audits(
+            &transaction,
+            &execution_audits,
+            &auth.id,
+            Some(case_id),
+        )
+        .await?;
+    }
     case_service::write_audit(
         &transaction,
         Some(case_id.to_owned()),
@@ -490,7 +900,7 @@ pub async fn create_summary_draft(
         "summary_draft.created",
         "summary_draft",
         model.id.clone(),
-        Some(json!({ "status": initial_status, "template_version": DRAFT_TEMPLATE_VERSION, "publication_eligible": publication_eligible })),
+        Some(json!({ "status": model.status, "version": model.version, "parent_draft_id": model.parent_draft_id, "template_version": model.template_version, "publication_eligible": model.publication_eligible })),
     )
     .await?;
     transaction.commit().await?;
@@ -511,6 +921,62 @@ pub async fn get_latest_summary_draft(
         .await?
         .map(response)
         .transpose()
+}
+
+pub async fn list_summary_draft_versions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<SummaryDraftVersionResponse, ApiError> {
+    case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    let items = summary_drafts::Entity::find()
+        .filter(summary_drafts::Column::CaseId.eq(case_id))
+        .order_by_desc(summary_drafts::Column::Version)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(response)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SummaryDraftVersionResponse { items })
+}
+
+pub async fn diff_summary_draft_versions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    from_id: &str,
+    to_id: &str,
+) -> Result<SummaryDraftDiffResponse, ApiError> {
+    case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    let drafts = summary_drafts::Entity::find()
+        .filter(summary_drafts::Column::CaseId.eq(case_id))
+        .filter(summary_drafts::Column::Id.is_in([from_id.to_owned(), to_id.to_owned()]))
+        .all(db)
+        .await?;
+    let from = drafts
+        .iter()
+        .find(|draft| draft.id == from_id)
+        .ok_or_else(|| ApiError::NotFound("source summary version was not found".to_owned()))?;
+    let to = drafts
+        .iter()
+        .find(|draft| draft.id == to_id)
+        .ok_or_else(|| ApiError::NotFound("target summary version was not found".to_owned()))?;
+    let from_lines = from
+        .content
+        .lines()
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    let to_lines = to
+        .content
+        .lines()
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(SummaryDraftDiffResponse {
+        from_version: from.version,
+        to_version: to.version,
+        added: to_lines.difference(&from_lines).cloned().collect(),
+        removed: from_lines.difference(&to_lines).cloned().collect(),
+    })
 }
 
 pub async fn review_summary_draft(
@@ -697,13 +1163,149 @@ fn deterministic_draft_content(summary: &crate::models::CaseSummaryResponse) -> 
     )
 }
 
-fn deterministic_archive_draft_content(
-    case_status: &str,
-    confirmed_clue_count: u64,
-    completed_task_count: u64,
-) -> String {
+fn archive_candidate_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "timeline": { "type": "array", "items": { "type": "string" } },
+            "lessons": { "type": "array", "items": { "type": "string" } },
+            "uncertainty": { "type": "string" }
+        },
+        "required": ["timeline", "lessons", "uncertainty"],
+        "additionalProperties": false
+    })
+}
+
+fn clue_candidate_schema() -> serde_json::Value {
+    let nullable_string = json!({ "type": ["string", "null"] });
+    json!({
+        "type": "object",
+        "properties": {
+            "content_summary": nullable_string,
+            "occurred_at": { "type": ["string", "null"] },
+            "location_text": { "type": ["string", "null"] },
+            "source_text": { "type": ["string", "null"] },
+            "action_candidates": { "type": "array", "items": { "type": "string" } },
+            "missing_fields": { "type": "array", "items": { "type": "string" } },
+            "source_excerpt": { "type": "string" },
+            "field_sources": {
+                "type": "object",
+                "properties": {
+                    "content_summary": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "occurred_at": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "location_text": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "source_text": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "action_candidates": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false }
+                },
+                "required": ["content_summary", "occurred_at", "location_text", "source_text", "action_candidates"],
+                "additionalProperties": false
+            }
+        },
+        "required": ["content_summary", "occurred_at", "location_text", "source_text", "action_candidates", "missing_fields", "source_excerpt", "field_sources"],
+        "additionalProperties": false
+    })
+}
+
+fn summary_candidate_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "confirmed_information": { "type": "array", "items": { "type": "string" } },
+            "pending_verification": { "type": "array", "items": { "type": "string" } },
+            "excluded_directions": { "type": "array", "items": { "type": "string" } },
+            "safety_reminders": { "type": "array", "items": { "type": "string" } },
+            "uncertainty_notice": { "type": "string" }
+        },
+        "required": ["confirmed_information", "pending_verification", "excluded_directions", "safety_reminders", "uncertainty_notice"],
+        "additionalProperties": false
+    })
+}
+
+fn validate_summary_candidate(
+    candidate: SummaryCandidate,
+    summary: &crate::models::CaseSummaryResponse,
+) -> Result<String, ()> {
+    let confirmed = summary
+        .confirmed_clues
+        .iter()
+        .map(|item| item.content.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let pending = summary
+        .pending_verification
+        .iter()
+        .map(|item| item.content.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let bounded = |items: &[String]| {
+        items.len() <= 20
+            && items
+                .iter()
+                .all(|item| !item.trim().is_empty() && item.chars().count() <= 500)
+    };
+    if !bounded(&candidate.confirmed_information)
+        || !bounded(&candidate.pending_verification)
+        || !bounded(&candidate.excluded_directions)
+        || !bounded(&candidate.safety_reminders)
+        || candidate.uncertainty_notice.trim().is_empty()
+        || candidate.uncertainty_notice.chars().count() > 500
+    {
+        return Err(());
+    }
+    if !candidate
+        .confirmed_information
+        .iter()
+        .all(|item| confirmed.contains(item.trim()))
+        || !candidate
+            .pending_verification
+            .iter()
+            .all(|item| pending.contains(item.trim()))
+    {
+        return Err(());
+    }
+    Ok(format!(
+        "Confirmed information:\n- {}\n\nPending verification:\n- {}\n\nExcluded directions:\n- {}\n\nSafety reminders:\n- {}\n\nUncertainty notice: {}",
+        candidate.confirmed_information.join("\n- "),
+        candidate.pending_verification.join("\n- "),
+        candidate.excluded_directions.join("\n- "),
+        candidate.safety_reminders.join("\n- "),
+        candidate.uncertainty_notice.trim()
+    ))
+}
+
+fn deterministic_archive_material_content(material: &str) -> String {
+    let lines = material
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(12)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        "Timeline and retrospective draft require administrator-approved de-identified material."
+            .to_owned()
+    } else {
+        format!(
+            "Timeline candidates (manual review required):\n{}\n\nLessons candidate: preserve uncertainty and do not treat this draft as a knowledge-base entry.",
+            lines.join("\n")
+        )
+    }
+}
+
+fn valid_archive_candidate(candidate: &ArchiveOrganizationCandidate) -> bool {
+    candidate.timeline.len() <= 12
+        && candidate.lessons.len() <= 12
+        && candidate
+            .timeline
+            .iter()
+            .chain(candidate.lessons.iter())
+            .all(|item| !item.trim().is_empty() && item.chars().count() <= 500)
+        && !candidate.uncertainty.trim().is_empty()
+        && candidate.uncertainty.chars().count() <= 500
+}
+
+fn archive_candidate_content(candidate: ArchiveOrganizationCandidate) -> String {
     format!(
-        "Internal archive draft. This record is not de-identified, publishable, indexable, exportable, or printable. Case status: {case_status}. Confirmed clue count: {confirmed_clue_count}. Completed task count: {completed_task_count}. Source scope is limited to counts and status metadata; it excludes raw clues, attachments, health notes, contacts, exact locations, routes, and task result text. Human de-identification and review are required before any separate reuse workflow."
+        "Internal, unreviewed and not-yet-deidentified organization draft. Timeline candidates:\n- {}\nExperience candidates:\n- {}\nUncertainty and correction required: {}\nThis draft is not indexable, exportable, printable, or publishable until an administrator confirms de-identification and review.",
+        candidate.timeline.join("\n- "),
+        candidate.lessons.join("\n- "),
+        candidate.uncertainty.trim(),
     )
 }
 fn required_text(label: &str, value: String, maximum: usize) -> Result<String, ApiError> {
@@ -721,10 +1323,25 @@ fn trim(value: Option<String>, maximum: usize) -> Result<Option<String>, ApiErro
         None => Ok(None),
     }
 }
+
+fn case_source_record_response(model: case_source_records::Model) -> CaseSourceRecordResponse {
+    CaseSourceRecordResponse {
+        id: model.id,
+        case_id: model.case_id,
+        record_type: model.record_type,
+        content: model.content,
+        occurred_at: model.occurred_at,
+        source_reference: model.source_reference,
+        created_at: model.created_at,
+    }
+}
+
 fn response(model: summary_drafts::Model) -> Result<SummaryDraftResponse, ApiError> {
     Ok(SummaryDraftResponse {
         id: model.id,
         case_id: model.case_id,
+        parent_draft_id: model.parent_draft_id,
+        version: model.version,
         status: model.status,
         content: model.content,
         source_scope: serde_json::from_str(&model.source_scope_json)
@@ -748,6 +1365,7 @@ fn archive_draft_response(model: archive_drafts::Model) -> Result<ArchiveDraftRe
         content: model.content,
         source_scope: serde_json::from_str(&model.source_scope_json)
             .map_err(|_| ApiError::Internal)?,
+        review_material_id: model.review_material_id,
         deidentification_status: model.deidentification_status,
         template_version: model.template_version,
         provider_model: model.provider_model,
@@ -770,21 +1388,299 @@ fn require_admin(auth: &AuthenticatedUser) -> Result<(), ApiError> {
         })
 }
 
-fn clue_draft_response(model: clue_drafts::Model) -> ClueDraftResponse {
-    ClueDraftResponse {
+fn clue_draft_response(model: clue_drafts::Model) -> Result<ClueDraftResponse, ApiError> {
+    Ok(ClueDraftResponse {
         id: model.id,
         case_id: model.case_id,
         status: model.status,
         content: model.content,
         source_type: model.source_type,
         raw_record_reference: model.raw_record_reference,
-        occurred_at: None,
-        location_text: None,
+        source_record_id: model.source_record_id,
+        occurred_at: serde_json::from_str::<ClueDraftCandidate>(&model.candidate_json)
+            .map_err(|_| ApiError::Internal)?
+            .occurred_at,
+        location_text: serde_json::from_str::<ClueDraftCandidate>(&model.candidate_json)
+            .map_err(|_| ApiError::Internal)?
+            .location_text,
         uncertainty_notice: model.uncertainty_notice,
         template_version: model.template_version,
         provider_model: model.provider_model,
         degradation_status: model.degradation_status,
+        candidate: serde_json::from_str(&model.candidate_json).map_err(|_| ApiError::Internal)?,
+        review_status: model.review_status,
+        reviewed_at: model.reviewed_at,
+        review_reason: model.review_reason,
+        version: model.version,
+        promoted_clue_id: model.promoted_clue_id,
+    })
+}
+
+pub async fn review_clue_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    draft_id: &str,
+    request: ReviewClueDraftRequest,
+) -> Result<ClueDraftResponse, ApiError> {
+    case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    let action = request.action.trim().to_lowercase();
+    if !matches!(action.as_str(), "accept" | "reject") {
+        return Err(ApiError::Validation(
+            "action must be accept or reject".to_owned(),
+        ));
     }
+    let reason = required_text("reason", request.reason, 1_000)?;
+    let transaction = db.begin().await?;
+    let existing = clue_drafts::Entity::find_by_id(draft_id)
+        .one(&transaction)
+        .await?
+        .filter(|draft| draft.case_id == case_id)
+        .ok_or_else(|| ApiError::NotFound("clue draft was not found".to_owned()))?;
+    if existing.review_status != "pending_review" {
+        return Err(ApiError::Conflict(
+            "clue draft has already been reviewed".to_owned(),
+        ));
+    }
+    let candidate = apply_field_decisions(
+        normalized_candidate(request.candidate, &existing.content),
+        &request.field_decisions,
+    )?;
+    let candidate_json = serde_json::to_string(&candidate).map_err(|_| ApiError::Internal)?;
+    let next_status = if action == "accept" {
+        "accepted"
+    } else {
+        "rejected"
+    };
+    let timestamp = now();
+    let affected = clue_drafts::Entity::update_many()
+        .col_expr(
+            clue_drafts::Column::CandidateJson,
+            Expr::value(candidate_json),
+        )
+        .col_expr(
+            clue_drafts::Column::ReviewStatus,
+            Expr::value(next_status.to_owned()),
+        )
+        .col_expr(
+            clue_drafts::Column::ReviewedByUserId,
+            Expr::value(Some(auth.id.clone())),
+        )
+        .col_expr(
+            clue_drafts::Column::ReviewedAt,
+            Expr::value(Some(timestamp.clone())),
+        )
+        .col_expr(
+            clue_drafts::Column::ReviewReason,
+            Expr::value(Some(reason.clone())),
+        )
+        .col_expr(
+            clue_drafts::Column::Version,
+            Expr::value(existing.version + 1),
+        )
+        .col_expr(clue_drafts::Column::UpdatedAt, Expr::value(timestamp))
+        .filter(clue_drafts::Column::Id.eq(draft_id))
+        .filter(clue_drafts::Column::Version.eq(existing.version))
+        .filter(clue_drafts::Column::ReviewStatus.eq("pending_review"))
+        .exec(&transaction)
+        .await?;
+    if affected.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "clue draft changed during review; reload and try again".to_owned(),
+        ));
+    }
+    let mut updated = clue_drafts::Entity::find_by_id(draft_id)
+        .one(&transaction)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    case_service::write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "clue_draft.reviewed",
+        "clue_draft",
+        updated.id.clone(),
+        Some(json!({
+            "action": action,
+            "version": updated.version,
+            "reason_length": reason.chars().count(),
+            "field_decisions": request.field_decisions.iter().map(|(field, decision)| json!({
+                "field": field,
+                "action": decision.action,
+                "has_value": decision.value.as_ref().is_some_and(|value| !value.trim().is_empty()),
+                "reason_length": decision.reason.as_ref().map(|value| value.chars().count()).unwrap_or(0),
+            })).collect::<Vec<_>>(),
+        })),
+    )
+    .await?;
+    if action == "accept" {
+        let promoted = case_service::create_clue_in_transaction(
+            &transaction,
+            auth,
+            case_id,
+            CreateClueRequest {
+                source: candidate
+                    .source_text
+                    .clone()
+                    .unwrap_or_else(|| "AI structured draft".to_owned())
+                    .chars()
+                    .take(64)
+                    .collect(),
+                content: candidate
+                    .content_summary
+                    .clone()
+                    .unwrap_or_else(|| existing.content.clone()),
+                source_type: Some(existing.source_type.clone()),
+                raw_record_reference: existing.raw_record_reference.clone(),
+                occurred_at: candidate.occurred_at.clone(),
+                location_text: candidate.location_text.clone(),
+                location_precision: candidate
+                    .location_text
+                    .as_ref()
+                    .map(|_| "approximate".to_owned()),
+                next_action: candidate.action_candidates.first().cloned(),
+                linked_task_reference: None,
+                attachment_ids: Vec::new(),
+            },
+        )
+        .await?;
+        let promoted_id = promoted.id.clone();
+        let affected = clue_drafts::Entity::update_many()
+            .col_expr(
+                clue_drafts::Column::PromotedClueId,
+                Expr::value(Some(promoted_id)),
+            )
+            .filter(clue_drafts::Column::Id.eq(draft_id))
+            .filter(clue_drafts::Column::ReviewStatus.eq("accepted"))
+            .exec(&transaction)
+            .await?;
+        if affected.rows_affected != 1 {
+            return Err(ApiError::Conflict(
+                "accepted clue draft changed before promotion could be recorded".to_owned(),
+            ));
+        }
+        case_service::write_audit(
+            &transaction,
+            Some(case_id.to_owned()),
+            auth,
+            "clue_draft.promoted",
+            "clue_draft",
+            draft_id.to_owned(),
+            Some(json!({ "clue_id": promoted.id })),
+        )
+        .await?;
+        updated.promoted_clue_id = Some(promoted.id);
+    }
+    transaction.commit().await?;
+    clue_draft_response(updated)
+}
+
+fn apply_field_decisions(
+    mut candidate: ClueDraftCandidate,
+    decisions: &std::collections::BTreeMap<String, ClueDraftFieldDecision>,
+) -> Result<ClueDraftCandidate, ApiError> {
+    for (field, decision) in decisions {
+        let action = decision.action.trim().to_lowercase();
+        if !matches!(action.as_str(), "accept" | "edit" | "clear") {
+            return Err(ApiError::Validation(format!(
+                "unsupported field decision for {field}"
+            )));
+        }
+        let value = decision
+            .value
+            .clone()
+            .and_then(|value| optional_excerpt(value, 1_000));
+        if action == "edit" && value.is_none() {
+            return Err(ApiError::Validation(format!(
+                "edited field {field} requires a value"
+            )));
+        }
+        match field.as_str() {
+            "content_summary" if action == "clear" => candidate.content_summary = None,
+            "content_summary" if action == "edit" => candidate.content_summary = value,
+            "occurred_at" if action == "clear" => candidate.occurred_at = None,
+            "occurred_at" if action == "edit" => candidate.occurred_at = value,
+            "location_text" if action == "clear" => candidate.location_text = None,
+            "location_text" if action == "edit" => candidate.location_text = value,
+            "source_text" if action == "clear" => candidate.source_text = None,
+            "source_text" if action == "edit" => candidate.source_text = value,
+            "action_candidates" if action == "clear" => candidate.action_candidates = Vec::new(),
+            "action_candidates" if action == "edit" => {
+                candidate.action_candidates = value.into_iter().collect()
+            }
+            "content_summary" | "occurred_at" | "location_text" | "source_text"
+            | "action_candidates" => {}
+            _ => {
+                return Err(ApiError::Validation(format!(
+                    "unsupported candidate field {field}"
+                )));
+            }
+        }
+    }
+    candidate.missing_fields = [
+        ("occurred_at", candidate.occurred_at.is_none()),
+        ("location_text", candidate.location_text.is_none()),
+        ("source_text", candidate.source_text.is_none()),
+        ("action_candidates", candidate.action_candidates.is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field.to_owned()))
+    .collect();
+    Ok(candidate)
+}
+
+fn fallback_candidate(text: &str) -> ClueDraftCandidate {
+    ClueDraftCandidate {
+        missing_fields: vec![
+            "occurred_at".to_owned(),
+            "location_text".to_owned(),
+            "source_text".to_owned(),
+            "action_candidates".to_owned(),
+        ],
+        source_excerpt: excerpt(text, 500),
+        ..Default::default()
+    }
+}
+
+fn normalized_candidate(mut candidate: ClueDraftCandidate, text: &str) -> ClueDraftCandidate {
+    candidate.content_summary = candidate
+        .content_summary
+        .and_then(|value| optional_excerpt(value, 1_000));
+    candidate.occurred_at = candidate
+        .occurred_at
+        .and_then(|value| optional_excerpt(value, 80));
+    candidate.location_text = candidate
+        .location_text
+        .and_then(|value| optional_excerpt(value, 500));
+    candidate.source_text = candidate
+        .source_text
+        .and_then(|value| optional_excerpt(value, 300));
+    candidate.action_candidates = candidate
+        .action_candidates
+        .into_iter()
+        .filter_map(|value| optional_excerpt(value, 300))
+        .take(8)
+        .collect();
+    candidate.missing_fields = [
+        ("occurred_at", candidate.occurred_at.is_none()),
+        ("location_text", candidate.location_text.is_none()),
+        ("source_text", candidate.source_text.is_none()),
+        ("action_candidates", candidate.action_candidates.is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field.to_owned()))
+    .collect();
+    candidate.source_excerpt = excerpt(text, 500);
+    candidate
+}
+
+fn optional_excerpt(value: String, maximum: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| excerpt(value, maximum))
+}
+
+fn excerpt(value: &str, maximum: usize) -> String {
+    value.chars().take(maximum).collect()
 }
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)

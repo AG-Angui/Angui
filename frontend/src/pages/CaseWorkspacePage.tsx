@@ -16,7 +16,10 @@ import {
   acceptCommandCase,
   applyForTask,
   createCasePlace,
+  createCaseSourceRecord,
   createClueDraft,
+  createArchiveDraft,
+  createSummaryDraft,
   createCaseTask,
   getCaseMapView,
   getCaseSummary,
@@ -29,9 +32,14 @@ import {
   getCase,
   getCaseResourceConfiguration,
   listCaseClues,
+  listCaseSourceRecords,
+  listClueDrafts,
+  listSummaryDraftVersions,
+  diffSummaryDraftVersions,
   listCases,
   listCommandIntake,
   reviewClue,
+  reviewClueDraft,
   reviewSummaryDraft,
   updateCaseStatus,
   updateElderProfile,
@@ -62,6 +70,7 @@ import type {
   LocationPrecision,
   PublicClueSourceType,
   SummaryDraft,
+  SummaryDraftDiff,
   PlaceType,
   PlaceVisibility,
 } from "../api/cases";
@@ -161,7 +170,9 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
         setSelectedId((currentId) => {
           const nextId =
             preferredId ??
-            (mode === "commander" ? routeCaseId ?? null : currentId ?? items[0]?.id ?? null);
+            (mode === "commander"
+              ? (routeCaseId ?? null)
+              : (currentId ?? items[0]?.id ?? null));
           if (!nextId) setDetail(null);
           return nextId;
         });
@@ -237,8 +248,14 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
       <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="grid gap-6 lg:grid-cols-[248px_minmax(0,1fr)]">
           <aside className="lg:sticky lg:top-6 lg:self-start">
-            <nav className="border border-slate-200 bg-white p-4" aria-label="案件详情导航">
-              <Link className="text-sm font-medium text-brand-700 hover:underline" to="/command">
+            <nav
+              className="border border-slate-200 bg-white p-4"
+              aria-label="案件详情导航"
+            >
+              <Link
+                className="text-sm font-medium text-brand-700 hover:underline"
+                to="/command"
+              >
                 返回案件列表
               </Link>
               <div className="mt-5 border-y border-slate-200 py-4">
@@ -256,18 +273,44 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                 )}
               </div>
               <div className="mt-4 grid gap-1 text-sm">
-                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-tasks">任务与审核</a>
-                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-clues">态势与线索</a>
-                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-profile">案件资料</a>
-                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-members">协作与成员</a>
+                <a
+                  className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700"
+                  href="#case-tasks"
+                >
+                  任务与审核
+                </a>
+                <a
+                  className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700"
+                  href="#case-clues"
+                >
+                  态势与线索
+                </a>
+                <a
+                  className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700"
+                  href="#case-profile"
+                >
+                  案件资料
+                </a>
+                <a
+                  className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700"
+                  href="#case-members"
+                >
+                  协作与成员
+                </a>
               </div>
             </nav>
           </aside>
-          <main id="case-detail-content" className="min-w-0 border border-slate-200 bg-white">
+          <main
+            id="case-detail-content"
+            className="min-w-0 border border-slate-200 bg-white"
+          >
             {isDetailLoading ? (
               <LoadingState label="正在加载案件详情" />
             ) : detailError ? (
-              <ErrorState message={detailError} onRetry={() => selectedId && void loadDetail(selectedId)} />
+              <ErrorState
+                message={detailError}
+                onRetry={() => selectedId && void loadDetail(selectedId)}
+              />
             ) : detail && resourceConfiguration ? (
               <CaseDetailView
                 detail={detail}
@@ -340,7 +383,9 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
         />
       )}
 
-      <div className={`mt-5 min-h-[560px] overflow-hidden border-y border-slate-200 bg-white ${mode === "commander" ? "" : "grid lg:grid-cols-[310px_minmax(0,1fr)]"}`}>
+      <div
+        className={`mt-5 min-h-[560px] overflow-hidden border-y border-slate-200 bg-white ${mode === "commander" ? "" : "grid lg:grid-cols-[310px_minmax(0,1fr)]"}`}
+      >
         <section
           className="border-b border-slate-200 lg:border-r lg:border-b-0"
           aria-label="案件列表"
@@ -404,31 +449,33 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
           )}
         </section>
 
-        {mode !== "commander" && <section className="min-w-0">
-          {isDetailLoading ? (
-            <LoadingState label="正在加载案件详情" />
-          ) : detailError ? (
-            <ErrorState
-              message={detailError}
-              onRetry={() => selectedId && void loadDetail(selectedId)}
-            />
-          ) : detail && resourceConfiguration ? (
-            <CaseDetailView
-              detail={detail}
-              resourceConfiguration={resourceConfiguration}
-              pendingCount={pendingCount}
-              onChanged={async (message) => {
-                setNotice(message);
-                await loadDetail(detail.id);
-                await loadCases(detail.id);
-              }}
-            />
-          ) : (
-            <div className="flex min-h-96 flex-col items-center justify-center px-6 text-center">
-              <EmptyState icon={FileSearch} title="选择一个案件查看详情" />
-            </div>
-          )}
-        </section>}
+        {mode !== "commander" && (
+          <section className="min-w-0">
+            {isDetailLoading ? (
+              <LoadingState label="正在加载案件详情" />
+            ) : detailError ? (
+              <ErrorState
+                message={detailError}
+                onRetry={() => selectedId && void loadDetail(selectedId)}
+              />
+            ) : detail && resourceConfiguration ? (
+              <CaseDetailView
+                detail={detail}
+                resourceConfiguration={resourceConfiguration}
+                pendingCount={pendingCount}
+                onChanged={async (message) => {
+                  setNotice(message);
+                  await loadDetail(detail.id);
+                  await loadCases(detail.id);
+                }}
+              />
+            ) : (
+              <div className="flex min-h-96 flex-col items-center justify-center px-6 text-center">
+                <EmptyState icon={FileSearch} title="选择一个案件查看详情" />
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </div>
   );
@@ -637,14 +684,22 @@ function CaseDetailView({
       >
         <a
           className="text-brand-700 underline-offset-4 hover:underline"
-          href={detail.access_role === "family" ? "#case-actions" : "#task-board"}
+          href={
+            detail.access_role === "family" ? "#case-actions" : "#task-board"
+          }
         >
           当前行动
         </a>
-        <a className="text-brand-700 underline-offset-4 hover:underline" href="#case-clues">
+        <a
+          className="text-brand-700 underline-offset-4 hover:underline"
+          href="#case-clues"
+        >
           线索与地点
         </a>
-        <a className="text-brand-700 underline-offset-4 hover:underline" href="#case-profile">
+        <a
+          className="text-brand-700 underline-offset-4 hover:underline"
+          href="#case-profile"
+        >
           案件资料
         </a>
       </nav>
@@ -685,7 +740,10 @@ function CaseDetailView({
       </section>
 
       {canEditElderProfile && (
-        <details id="case-profile-editor" className="border-b border-slate-200 bg-brand-50/30">
+        <details
+          id="case-profile-editor"
+          className="border-b border-slate-200 bg-brand-50/30"
+        >
           <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 sm:px-6">
             补充或更正人物资料
           </summary>
@@ -705,7 +763,10 @@ function CaseDetailView({
       )}
 
       {(isCommander || detail.access_role === "family") && (
-        <details id="case-members" className="border-b border-slate-200 bg-slate-50">
+        <details
+          id="case-members"
+          className="border-b border-slate-200 bg-slate-50"
+        >
           <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 sm:px-6">
             案件状态与成员管理
           </summary>
@@ -748,7 +809,9 @@ function CaseDetailView({
                     type="submit"
                     size="sm"
                     variant="secondary"
-                    isDisabled={busy === "status" || nextStatus === detail.status}
+                    isDisabled={
+                      busy === "status" || nextStatus === detail.status
+                    }
                   >
                     保存
                   </Button>
@@ -775,40 +838,40 @@ function CaseDetailView({
                 });
               }}
             >
-            <h3 className="m-0 text-sm font-bold text-slate-950">添加成员</h3>
-            <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
-              <Input
-                type="email"
-                value={memberEmail}
-                maxLength={320}
-                onChange={(event) => setMemberEmail(event.target.value)}
-                placeholder="成员邮箱"
-                fullWidth
-                required
-              />
-              <select
-                aria-label="成员角色"
-                className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm"
-                value={selectedMemberRole}
-                onChange={(event) =>
-                  setMemberRole(event.target.value as CaseRole)
-                }
-              >
-                <option value="family">家属</option>
-                <option value="commander">指挥</option>
-                {isCommander && <option value="volunteer">志愿者</option>}
-              </select>
-              <Button
-                type="submit"
-                size="sm"
-                variant="secondary"
-                isDisabled={busy === "member"}
-                isIconOnly
-                aria-label="添加案件成员"
-              >
-                <UserPlus size={17} />
-              </Button>
-            </div>
+              <h3 className="m-0 text-sm font-bold text-slate-950">添加成员</h3>
+              <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
+                <Input
+                  type="email"
+                  value={memberEmail}
+                  maxLength={320}
+                  onChange={(event) => setMemberEmail(event.target.value)}
+                  placeholder="成员邮箱"
+                  fullWidth
+                  required
+                />
+                <select
+                  aria-label="成员角色"
+                  className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-sm"
+                  value={selectedMemberRole}
+                  onChange={(event) =>
+                    setMemberRole(event.target.value as CaseRole)
+                  }
+                >
+                  <option value="family">家属</option>
+                  <option value="commander">指挥</option>
+                  {isCommander && <option value="volunteer">志愿者</option>}
+                </select>
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="secondary"
+                  isDisabled={busy === "member"}
+                  isIconOnly
+                  aria-label="添加案件成员"
+                >
+                  <UserPlus size={17} />
+                </Button>
+              </div>
             </form>
           </section>
         </details>
@@ -820,7 +883,11 @@ function CaseDetailView({
         </div>
       )}
 
-      <section id="case-clues" className="px-5 py-5 sm:px-6" aria-labelledby="clues-title">
+      <section
+        id="case-clues"
+        className="px-5 py-5 sm:px-6"
+        aria-labelledby="clues-title"
+      >
         <div className="flex items-center justify-between gap-3">
           <h3
             id="clues-title"
@@ -1230,157 +1297,159 @@ function CaseDetailView({
             </summary>
             <form
               className="grid gap-3 border-t border-slate-200 p-3 sm:grid-cols-[minmax(0,1fr)_220px] sm:p-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!token) return;
-              const content = nullable(clueContent);
-              if (!content) {
-                setError("请填写线索内容后再提交。");
-                return;
-              }
-              const location = nullable(clueLocation);
-              if (clueLocationPrecision && !location) {
-                setError("选择地点精度时，请同时填写地点。");
-                return;
-              }
-              void run(
-                "clue",
-                () =>
-                  createClue(token, detail.id, {
-                    source: detail.access_role,
-                    content,
-                    source_type: clueSourceType,
-                    raw_record_reference: nullable(clueRawReference),
-                    occurred_at: toIsoOrNull(clueOccurredAt),
-                    location_text: location,
-                    location_precision: clueLocationPrecision || null,
-                    next_action: nullable(clueNextAction),
-                    attachment_ids: linkedAttachmentIds,
-                  }),
-                "线索已提交并进入人工审核",
-              ).then((succeeded) => {
-                if (succeeded) {
-                  setClueContent("");
-                  setClueLocation("");
-                  setClueOccurredAt("");
-                  setClueSourceType("manual_report");
-                  setClueRawReference("");
-                  setClueLocationPrecision("");
-                  setClueNextAction("");
-                  setLinkedAttachmentIds([]);
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!token) return;
+                const content = nullable(clueContent);
+                if (!content) {
+                  setError("请填写线索内容后再提交。");
+                  return;
                 }
-              });
-            }}
-          >
-            <Field label="线索内容" required>
-              <TextArea
-                value={clueContent}
-                maxLength={4000}
-                onChange={(event) => setClueContent(event.target.value)}
-                rows={3}
-                fullWidth
-                required
-              />
-            </Field>
-            <div className="space-y-3">
-              <Field label="来源类型">
-                <select
-                  className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-                  value={clueSourceType}
-                  onChange={(event) =>
-                    setClueSourceType(
-                      event.target.value as PublicClueSourceType,
-                    )
+                const location = nullable(clueLocation);
+                if (clueLocationPrecision && !location) {
+                  setError("选择地点精度时，请同时填写地点。");
+                  return;
+                }
+                void run(
+                  "clue",
+                  () =>
+                    createClue(token, detail.id, {
+                      source: detail.access_role,
+                      content,
+                      source_type: clueSourceType,
+                      raw_record_reference: nullable(clueRawReference),
+                      occurred_at: toIsoOrNull(clueOccurredAt),
+                      location_text: location,
+                      location_precision: clueLocationPrecision || null,
+                      next_action: nullable(clueNextAction),
+                      attachment_ids: linkedAttachmentIds,
+                    }),
+                  "线索已提交并进入人工审核",
+                ).then((succeeded) => {
+                  if (succeeded) {
+                    setClueContent("");
+                    setClueLocation("");
+                    setClueOccurredAt("");
+                    setClueSourceType("manual_report");
+                    setClueRawReference("");
+                    setClueLocationPrecision("");
+                    setClueNextAction("");
+                    setLinkedAttachmentIds([]);
                   }
-                >
-                  <option value="manual_report">人工上报</option>
-                  <option value="field_report">现场反馈</option>
-                </select>
-              </Field>
-              <Field label="发生时间">
-                <Input
-                  type="datetime-local"
-                  value={clueOccurredAt}
-                  onChange={(event) => setClueOccurredAt(event.target.value)}
+                });
+              }}
+            >
+              <Field label="线索内容" required>
+                <TextArea
+                  value={clueContent}
+                  maxLength={4000}
+                  onChange={(event) => setClueContent(event.target.value)}
+                  rows={3}
                   fullWidth
+                  required
                 />
               </Field>
-              <Field label="地点">
-                <Input
-                  value={clueLocation}
-                  onChange={(event) => setClueLocation(event.target.value)}
-                  fullWidth
-                />
-              </Field>
-              <Field label="地点精度">
-                <select
-                  className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-                  value={clueLocationPrecision}
-                  onChange={(event) =>
-                    setClueLocationPrecision(
-                      event.target.value as LocationPrecision | "",
-                    )
-                  }
-                >
-                  <option value="">未提供</option>
-                  <option value="exact">精确</option>
-                  <option value="approximate">约略</option>
-                  <option value="unknown">未知</option>
-                </select>
-              </Field>
-              <Field label="受控原始记录引用">
-                <Input
-                  value={clueRawReference}
-                  maxLength={500}
-                  onChange={(event) => setClueRawReference(event.target.value)}
-                  fullWidth
-                />
-              </Field>
-              <Field label="下一步动作">
-                <Input
-                  value={clueNextAction}
-                  maxLength={500}
-                  onChange={(event) => setClueNextAction(event.target.value)}
-                  fullWidth
-                />
-              </Field>
-              {detail.attachments.some(
-                (attachment) => attachment.is_own_submission,
-              ) && (
-                <Field label="关联本人附件">
+              <div className="space-y-3">
+                <Field label="来源类型">
                   <select
-                    multiple
-                    className="min-h-20 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-                    value={linkedAttachmentIds}
+                    className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                    value={clueSourceType}
                     onChange={(event) =>
-                      setLinkedAttachmentIds(
-                        Array.from(
-                          event.target.selectedOptions,
-                          (option) => option.value,
-                        ),
+                      setClueSourceType(
+                        event.target.value as PublicClueSourceType,
                       )
                     }
                   >
-                    {detail.attachments
-                      .filter((attachment) => attachment.is_own_submission)
-                      .map((attachment) => (
-                        <option key={attachment.id} value={attachment.id}>
-                          {attachment.original_filename}
-                        </option>
-                      ))}
+                    <option value="manual_report">人工上报</option>
+                    <option value="field_report">现场反馈</option>
                   </select>
                 </Field>
-              )}
-              <Button
-                type="submit"
-                variant="primary"
-                fullWidth
-                isDisabled={busy === "clue"}
-              >
-                <Send size={16} />
-                提交线索
-              </Button>
-            </div>
+                <Field label="发生时间">
+                  <Input
+                    type="datetime-local"
+                    value={clueOccurredAt}
+                    onChange={(event) => setClueOccurredAt(event.target.value)}
+                    fullWidth
+                  />
+                </Field>
+                <Field label="地点">
+                  <Input
+                    value={clueLocation}
+                    onChange={(event) => setClueLocation(event.target.value)}
+                    fullWidth
+                  />
+                </Field>
+                <Field label="地点精度">
+                  <select
+                    className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                    value={clueLocationPrecision}
+                    onChange={(event) =>
+                      setClueLocationPrecision(
+                        event.target.value as LocationPrecision | "",
+                      )
+                    }
+                  >
+                    <option value="">未提供</option>
+                    <option value="exact">精确</option>
+                    <option value="approximate">约略</option>
+                    <option value="unknown">未知</option>
+                  </select>
+                </Field>
+                <Field label="受控原始记录引用">
+                  <Input
+                    value={clueRawReference}
+                    maxLength={500}
+                    onChange={(event) =>
+                      setClueRawReference(event.target.value)
+                    }
+                    fullWidth
+                  />
+                </Field>
+                <Field label="下一步动作">
+                  <Input
+                    value={clueNextAction}
+                    maxLength={500}
+                    onChange={(event) => setClueNextAction(event.target.value)}
+                    fullWidth
+                  />
+                </Field>
+                {detail.attachments.some(
+                  (attachment) => attachment.is_own_submission,
+                ) && (
+                  <Field label="关联本人附件">
+                    <select
+                      multiple
+                      className="min-h-20 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                      value={linkedAttachmentIds}
+                      onChange={(event) =>
+                        setLinkedAttachmentIds(
+                          Array.from(
+                            event.target.selectedOptions,
+                            (option) => option.value,
+                          ),
+                        )
+                      }
+                    >
+                      {detail.attachments
+                        .filter((attachment) => attachment.is_own_submission)
+                        .map((attachment) => (
+                          <option key={attachment.id} value={attachment.id}>
+                            {attachment.original_filename}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                )}
+                <Button
+                  type="submit"
+                  variant="primary"
+                  fullWidth
+                  isDisabled={busy === "clue"}
+                >
+                  <Send size={16} />
+                  提交线索
+                </Button>
+              </div>
             </form>
           </details>
         )}
@@ -1685,8 +1754,8 @@ function RoleActionPanel({
           ? "案件已找到，不能再提交补充信息。"
           : "案件已关闭，不能再提交补充信息。"
         : hasProfileGaps
-        ? "请先补充关键人物资料，再提交新的线索、地点或图片。"
-        : "可补充线索、地点或图片；提交的信息会先进入人工审核。"
+          ? "请先补充关键人物资料，再提交新的线索、地点或图片。"
+          : "可补充线索、地点或图片；提交的信息会先进入人工审核。"
       : "请查看已分配任务与经服务端裁剪后的案件信息。";
   const action = isCommander
     ? "前往任务和审核区"
@@ -1718,7 +1787,10 @@ function RoleActionPanel({
           <p className="m-0 text-xs font-semibold text-emerald-800">
             {isCommander ? "先处理待办，再查看资料" : "根据当前案件状态继续"}
           </p>
-          <h3 id="role-actions-title" className="mb-0 mt-1 text-lg font-bold text-slate-950">
+          <h3
+            id="role-actions-title"
+            className="mb-0 mt-1 text-lg font-bold text-slate-950"
+          >
             {heading}
           </h3>
           <p className="mb-0 mt-1 text-sm leading-6 text-slate-700">
@@ -2510,11 +2582,18 @@ function CaseCollaborationPanel({
     useState<CasePublicProgress | null>(null);
   const [progressError, setProgressError] = useState("");
   const [clueDraftText, setClueDraftText] = useState("");
+  const [clueRecordType, setClueRecordType] = useState<
+    "message" | "phone_record" | "field_feedback"
+  >("message");
   const [clueDrafts, setClueDrafts] = useState<ClueDraft[]>([]);
   const [poiCategory, setPoiCategory] = useState("hospital");
   const [pois, setPois] = useState<CasePois | null>(null);
   const [summaryDraft, setSummaryDraft] = useState<SummaryDraft | null>(null);
+  const [summaryVersions, setSummaryVersions] = useState<SummaryDraft[]>([]);
+  const [summaryDiff, setSummaryDiff] = useState<SummaryDraftDiff | null>(null);
+  const [archiveNotice, setArchiveNotice] = useState("");
   const [summary, setSummary] = useState<CaseSummary | null>(null);
+  const [summaryEdit, setSummaryEdit] = useState("");
   const [reviewReason, setReviewReason] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -2549,12 +2628,32 @@ function CaseCollaborationPanel({
       return;
     }
     try {
-      const [loadedSummary, latestDraft] = await Promise.all([
+      const [loadedSummary, latestDraft, versions] = await Promise.all([
         getCaseSummary(token, detail.id),
         getLatestSummaryDraft(token, detail.id),
+        listSummaryDraftVersions(token, detail.id),
       ]);
       setSummary(loadedSummary);
       setSummaryDraft(latestDraft);
+      setSummaryEdit(latestDraft?.content ?? "");
+      setSummaryVersions(versions.items);
+      setSummaryDiff(null);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    }
+  }, [detail.id, isCommander, token]);
+
+  const loadClueDrafts = useCallback(async () => {
+    if (!token || !isCommander) {
+      setClueDrafts([]);
+      return;
+    }
+    try {
+      const [drafts] = await Promise.all([
+        listClueDrafts(token, detail.id),
+        listCaseSourceRecords(token, detail.id),
+      ]);
+      setClueDrafts(drafts);
     } catch (cause) {
       setError(messageFrom(cause));
     }
@@ -2567,12 +2666,17 @@ function CaseCollaborationPanel({
     setClueDrafts([]);
     setPois(null);
     setSummaryDraft(null);
+    setSummaryVersions([]);
+    setSummaryDiff(null);
+    setArchiveNotice("");
     setSummary(null);
+    setSummaryEdit("");
     setReviewReason("");
     setError("");
     void loadPublicProgress();
     void loadSummary();
-  }, [detail.id, loadPublicProgress, loadSummary]);
+    void loadClueDrafts();
+  }, [detail.id, loadClueDrafts, loadPublicProgress, loadSummary]);
 
   async function run(key: string, action: () => Promise<void>) {
     setBusy(key);
@@ -2741,56 +2845,89 @@ function CaseCollaborationPanel({
 
       {isCommander && (
         <div className="min-w-0">
-        <h3 className="m-0 text-base font-bold text-slate-950">
-          文本整理为待审核线索
-        </h3>
-        <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">
-          只生成可回看的草稿，不会直接创建已确认线索。
-        </p>
-        <TextArea
-          className="mt-3"
-          value={clueDraftText}
-          maxLength={4000}
-          rows={3}
-          placeholder="粘贴需要整理的受控文本"
-          onChange={(event) => setClueDraftText(event.target.value)}
-          fullWidth
-        />
-        <div className="mt-2 flex justify-end">
-          <Button
-            size="sm"
-            variant="secondary"
-            isDisabled={
-              !token || !clueDraftText.trim() || busy === "clue-draft"
-            }
-            onPress={() =>
-              void run("clue-draft", async () => {
-                if (!token) return;
-                const created = await createClueDraft(token, detail.id, {
-                  text: clueDraftText,
-                  source_type: "manual_report",
-                });
-                setClueDrafts(created);
-                setClueDraftText("");
-              })
-            }
-          >
-            生成待审核草稿
-          </Button>
-        </div>
-        {clueDrafts.map((draft) => (
-          <div
-            key={draft.id}
-            className="mt-3 rounded-md border border-amber-200 bg-white p-3"
-          >
-            <p className="m-0 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-              {draft.content}
-            </p>
-            <p className="mb-0 mt-2 text-xs text-amber-800">
-              {draft.uncertainty_notice}
-            </p>
+          <h3 className="m-0 text-base font-bold text-slate-950">
+            文本整理为待审核线索
+          </h3>
+          <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">
+            只生成可回看的草稿，不会直接创建已确认线索。
+          </p>
+          <TextArea
+            className="mt-3"
+            value={clueDraftText}
+            maxLength={4000}
+            rows={3}
+            placeholder="粘贴需要整理的受控文本"
+            onChange={(event) => setClueDraftText(event.target.value)}
+            fullWidth
+          />
+          <div className="mt-2 flex gap-2">
+            {(["message", "phone_record", "field_feedback"] as const).map(
+              (type) => (
+                <Button
+                  key={type}
+                  size="sm"
+                  variant={clueRecordType === type ? "secondary" : "ghost"}
+                  onPress={() => setClueRecordType(type)}
+                >
+                  {type}
+                </Button>
+              ),
+            )}
           </div>
-        ))}
+          <div className="mt-2 flex justify-end">
+            <Button
+              size="sm"
+              variant="secondary"
+              isDisabled={
+                !token || !clueDraftText.trim() || busy === "clue-draft"
+              }
+              onPress={() =>
+                void run("clue-draft", async () => {
+                  if (!token) return;
+                  const record = await createCaseSourceRecord(
+                    token,
+                    detail.id,
+                    {
+                      record_type: clueRecordType,
+                      content: clueDraftText,
+                      occurred_at: null,
+                      source_reference: null,
+                    },
+                  );
+                  const created = await createClueDraft(token, detail.id, {
+                    source_record_id: record.id,
+                  });
+                  setClueDrafts((current) => [...created, ...current]);
+                  setClueDraftText("");
+                })
+              }
+            >
+              生成待审核草稿
+            </Button>
+          </div>
+          {clueDrafts.map((draft) => (
+            <ClueDraftReviewCard
+              key={draft.id}
+              draft={draft}
+              isBusy={busy === `clue-draft:${draft.id}`}
+              onReview={(payload) =>
+                void run(`clue-draft:${draft.id}`, async () => {
+                  if (!token) return;
+                  const reviewed = await reviewClueDraft(
+                    token,
+                    detail.id,
+                    draft.id,
+                    payload,
+                  );
+                  setClueDrafts((current) =>
+                    current.map((item) =>
+                      item.id === reviewed.id ? reviewed : item,
+                    ),
+                  );
+                })
+              }
+            />
+          ))}
         </div>
       )}
 
@@ -2876,6 +3013,38 @@ function CaseCollaborationPanel({
               <p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                 {summaryDraft.content}
               </p>
+              <Field label="编辑为新的待审核版本">
+                <TextArea
+                  value={summaryEdit}
+                  maxLength={12000}
+                  rows={5}
+                  onChange={(event) => setSummaryEdit(event.target.value)}
+                  fullWidth
+                />
+              </Field>
+              <div className="mt-2 flex justify-end">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  isDisabled={
+                    !token || !summaryEdit.trim() || busy === "summary-edit"
+                  }
+                  onPress={() =>
+                    void run("summary-edit", async () => {
+                      if (!token) return;
+                      const created = await createSummaryDraft(
+                        token,
+                        detail.id,
+                        summaryEdit,
+                      );
+                      setSummaryDraft(created);
+                      setSummaryVersions((current) => [created, ...current]);
+                    })
+                  }
+                >
+                  创建待审核版本
+                </Button>
+              </div>
               {summaryDraft.status === "pending_review" && (
                 <>
                   <Field label="审核理由" required>
@@ -2939,6 +3108,181 @@ function CaseCollaborationPanel({
                   </div>
                 </>
               )}
+              {summaryDraft.status === "draft" && (
+                <>
+                  <Field label="提交审核理由" required>
+                    <Input
+                      value={reviewReason}
+                      maxLength={1000}
+                      onChange={(event) => setReviewReason(event.target.value)}
+                      fullWidth
+                    />
+                  </Field>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      isDisabled={
+                        !token ||
+                        !reviewReason.trim() ||
+                        busy === "summary-review"
+                      }
+                      onPress={() =>
+                        void run("summary-review", async () => {
+                          if (!token) return;
+                          const updated = await reviewSummaryDraft(
+                            token,
+                            detail.id,
+                            summaryDraft.id,
+                            { action: "submit", reason: reviewReason },
+                          );
+                          setSummaryDraft(updated);
+                          setSummaryVersions((current) =>
+                            current.map((item) =>
+                              item.id === updated.id ? updated : item,
+                            ),
+                          );
+                        })
+                      }
+                    >
+                      提交审核
+                    </Button>
+                  </div>
+                </>
+              )}
+              {summaryDraft.status === "published" && (
+                <>
+                  <Field label="撤回理由" required>
+                    <Input
+                      value={reviewReason}
+                      maxLength={1000}
+                      onChange={(event) => setReviewReason(event.target.value)}
+                      fullWidth
+                    />
+                  </Field>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={
+                        !token ||
+                        !reviewReason.trim() ||
+                        busy === "summary-review"
+                      }
+                      onPress={() =>
+                        void run("summary-review", async () => {
+                          if (!token) return;
+                          const updated = await reviewSummaryDraft(
+                            token,
+                            detail.id,
+                            summaryDraft.id,
+                            { action: "withdraw", reason: reviewReason },
+                          );
+                          setSummaryDraft(updated);
+                          setSummaryVersions((current) =>
+                            current.map((item) =>
+                              item.id === updated.id ? updated : item,
+                            ),
+                          );
+                        })
+                      }
+                    >
+                      撤回已发布摘要
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {summaryVersions.length > 1 && (
+            <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+              <h4 className="m-0 text-sm font-semibold text-slate-900">
+                版本与差异
+              </h4>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {summaryVersions.map((version) => (
+                  <Button
+                    key={version.id}
+                    size="sm"
+                    variant="ghost"
+                    isDisabled={!token || busy === "summary-diff"}
+                    onPress={() =>
+                      void run("summary-diff", async () => {
+                        if (!token) return;
+                        const previous = summaryVersions.find(
+                          (item) => item.id !== version.id,
+                        );
+                        if (!previous) return;
+                        setSummaryDraft(version);
+                        setSummaryEdit(version.content);
+                        setSummaryDiff(
+                          await diffSummaryDraftVersions(
+                            token,
+                            detail.id,
+                            previous.id,
+                            version.id,
+                          ),
+                        );
+                      })
+                    }
+                  >
+                    v{version.version} ·{" "}
+                    {statusLabels[version.status] ?? version.status}
+                  </Button>
+                ))}
+              </div>
+              {summaryDiff && (
+                <div className="mt-3 grid gap-3 text-xs leading-5 sm:grid-cols-2">
+                  <div>
+                    <strong>新增</strong>
+                    <p className="mb-0 whitespace-pre-wrap">
+                      {summaryDiff.added.join("\n") || "无"}
+                    </p>
+                  </div>
+                  <div>
+                    <strong>移除</strong>
+                    <p className="mb-0 whitespace-pre-wrap">
+                      {summaryDiff.removed.join("\n") || "无"}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {(detail.status === "resolved" || detail.status === "closed") && (
+            <div className="mt-3 rounded-md border border-violet-200 bg-violet-50 p-3">
+              <h4 className="m-0 text-sm font-semibold text-slate-900">
+                案例整理候选
+              </h4>
+              <p className="mb-0 mt-1 text-xs leading-5 text-slate-700">
+                仅使用已确认线索与已完成任务的最小化聚合信息生成草稿；不会自动进入学习库，仍须管理员完成脱敏与版本审核。
+              </p>
+              <div className="mt-2 flex justify-end">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  isDisabled={!token || busy === "archive-draft"}
+                  onPress={() =>
+                    void run("archive-draft", async () => {
+                      if (!token) return;
+                      const archive = await createArchiveDraft(
+                        token,
+                        detail.id,
+                      );
+                      setArchiveNotice(
+                        `已创建案例整理草稿 v${archive.version}，等待管理员脱敏审核。`,
+                      );
+                    })
+                  }
+                >
+                  创建案例整理草稿
+                </Button>
+              </div>
+              {archiveNotice && (
+                <p className="mb-0 mt-2 text-xs text-violet-800">
+                  {archiveNotice}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -2951,6 +3295,223 @@ function CaseCollaborationPanel({
       )}
     </section>
   );
+}
+
+function ClueDraftReviewCard({
+  draft,
+  isBusy,
+  onReview,
+}: {
+  draft: ClueDraft;
+  isBusy: boolean;
+  onReview: (payload: {
+    action: "accept" | "reject";
+    reason: string;
+    candidate: ClueDraft["candidate"];
+    field_decisions: Record<
+      string,
+      {
+        action: "accept" | "edit" | "clear";
+        value?: string | null;
+        reason?: string | null;
+      }
+    >;
+  }) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [candidate, setCandidate] = useState(draft.candidate);
+  useEffect(() => setCandidate(draft.candidate), [draft]);
+  const fields = [
+    ["时间", candidate.occurred_at],
+    ["地点", candidate.location_text],
+    ["来源", candidate.source_text],
+    ["动作候选", candidate.action_candidates.join("；") || null],
+  ];
+
+  return (
+    <div className="mt-3 rounded-md border border-amber-200 bg-white p-3">
+      <p className="m-0 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+        {draft.content}
+      </p>
+      <p className="mb-0 mt-2 text-xs text-amber-800">
+        {draft.uncertainty_notice}
+      </p>
+      <dl className="mb-0 mt-3 grid gap-2 text-sm text-slate-700">
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt className="inline font-medium text-slate-900">{label}：</dt>
+            <dd className="inline">{value || "需要人工补充"}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mb-0 mt-2 text-xs text-slate-500">
+        来源片段：{candidate.source_excerpt}
+      </p>
+      {Object.entries(candidate.field_sources).length > 0 && (
+        <ul className="mb-0 mt-2 space-y-1 p-0 text-xs text-slate-500">
+          {Object.entries(candidate.field_sources).map(([field, source]) => (
+            <li key={field} className="list-none">
+              {field}：{source.excerpt ?? "未提供来源片段"}
+              {source.reference ? `（${source.reference}）` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+      {draft.review_status === "pending_review" ? (
+        <>
+          <Field label="时间候选">
+            <Input
+              value={candidate.occurred_at ?? ""}
+              maxLength={80}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  occurred_at: event.target.value || null,
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="地点候选">
+            <Input
+              value={candidate.location_text ?? ""}
+              maxLength={500}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  location_text: event.target.value || null,
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="来源候选">
+            <Input
+              value={candidate.source_text ?? ""}
+              maxLength={300}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  source_text: event.target.value || null,
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="动作候选（每行一项）">
+            <TextArea
+              value={candidate.action_candidates.join("\n")}
+              maxLength={2400}
+              rows={3}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  action_candidates: event.target.value
+                    .split("\n")
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="草稿审核理由" required>
+            <Input
+              value={reason}
+              maxLength={1000}
+              onChange={(event) => setReason(event.target.value)}
+              fullWidth
+            />
+          </Field>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              isDisabled={!reason.trim() || isBusy}
+              onPress={() =>
+                onReview({
+                  action: "reject",
+                  reason,
+                  candidate,
+                  field_decisions: fieldDecisions(
+                    draft.candidate,
+                    candidate,
+                    reason,
+                  ),
+                })
+              }
+            >
+              拒绝候选
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              isDisabled={!reason.trim() || isBusy}
+              onPress={() =>
+                onReview({
+                  action: "accept",
+                  reason,
+                  candidate,
+                  field_decisions: fieldDecisions(
+                    draft.candidate,
+                    candidate,
+                    reason,
+                  ),
+                })
+              }
+            >
+              人工接受候选
+            </Button>
+          </div>
+        </>
+      ) : (
+        <p className="mb-0 mt-3 text-xs text-slate-600">
+          已{draft.review_status === "accepted" ? "接受" : "拒绝"}
+          ；正式线索仍需按既有流程人工审核。
+        </p>
+      )}
+    </div>
+  );
+}
+
+function fieldDecisions(
+  original: ClueDraft["candidate"],
+  edited: ClueDraft["candidate"],
+  reason: string,
+) {
+  const scalarFields = [
+    "content_summary",
+    "occurred_at",
+    "location_text",
+    "source_text",
+  ] as const;
+  const decisions: Record<
+    string,
+    {
+      action: "accept" | "edit" | "clear";
+      value?: string | null;
+      reason?: string;
+    }
+  > = {};
+  for (const field of scalarFields) {
+    const before = original[field];
+    const after = edited[field];
+    decisions[field] =
+      before === after
+        ? { action: "accept", reason }
+        : after == null || after === ""
+          ? { action: "clear", reason }
+          : { action: "edit", value: after, reason };
+  }
+  const beforeActions = original.action_candidates.join("\n");
+  const afterActions = edited.action_candidates.join("\n");
+  decisions.action_candidates =
+    beforeActions === afterActions
+      ? { action: "accept", reason }
+      : afterActions
+        ? { action: "edit", value: afterActions, reason }
+        : { action: "clear", reason };
+  return decisions;
 }
 
 function ReviewButton({

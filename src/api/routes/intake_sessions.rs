@@ -4,7 +4,9 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AuthenticatedUser, ConfirmIntakeSessionRequest, CreateIntakeSessionRequest,
+        AcknowledgeIntakeAiInitialReviewRequest, AuthenticatedUser, ConfirmIntakeSessionRequest,
+        CreateIntakeSessionRequest, RestoreIntakeAnswerRequest, RestoreIntakeProfileDraftRequest,
+        ReviewIntakeProfileDraftRequest, StartIntakeAiInitialReviewRequest,
         SubmitIntakeAnswerRequest,
     },
     services::intake_session_service,
@@ -23,6 +25,50 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 web::get().to(get_intake_profile_draft),
             )
             .route(
+                "/{session_id}/profile-draft/generate",
+                web::post().to(generate_intake_profile_draft),
+            )
+            .route(
+                "/{session_id}/profile-draft/versions",
+                web::get().to(list_intake_profile_draft_versions),
+            )
+            .route(
+                "/{session_id}/profile-draft/{draft_id}/diff/{to_id}",
+                web::get().to(diff_intake_profile_drafts),
+            )
+            .route(
+                "/{session_id}/profile-draft/{draft_id}/review",
+                web::patch().to(review_intake_profile_draft),
+            )
+            .route(
+                "/{session_id}/profile-draft/restore",
+                web::post().to(restore_intake_profile_draft),
+            )
+            .route(
+                "/{session_id}/ai-follow-up",
+                web::get().to(get_ai_follow_up),
+            )
+            .route(
+                "/{session_id}/ai-initial-review",
+                web::get().to(get_ai_initial_review),
+            )
+            .route(
+                "/{session_id}/ai-initial-review",
+                web::post().to(start_ai_initial_review),
+            )
+            .route(
+                "/{session_id}/ai-initial-review/acknowledge",
+                web::post().to(acknowledge_ai_initial_review),
+            )
+            .route(
+                "/{session_id}/answer-revisions",
+                web::get().to(list_answer_revisions),
+            )
+            .route(
+                "/{session_id}/answers/{field}/restore",
+                web::post().to(restore_answer_revision),
+            )
+            .route(
                 "/{session_id}/confirm",
                 web::post().to(confirm_intake_session),
             ),
@@ -37,6 +83,168 @@ async fn get_intake_profile_draft(
     let draft =
         intake_session_service::get_intake_profile_draft(&state.db, &auth, &session_id).await?;
     Ok(HttpResponse::Ok().json(draft))
+}
+
+async fn generate_intake_profile_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        intake_session_service::generate_intake_profile_draft(
+            &state.db,
+            &auth,
+            &session_id,
+            &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn list_intake_profile_draft_versions(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::list_intake_profile_draft_versions(&state.db, &auth, &session_id)
+            .await?,
+    ))
+}
+async fn diff_intake_profile_drafts(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, from_id, to_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::diff_intake_profile_drafts(
+            &state.db,
+            &auth,
+            &session_id,
+            &from_id,
+            &to_id,
+        )
+        .await?,
+    ))
+}
+async fn review_intake_profile_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    request: web::Json<ReviewIntakeProfileDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, draft_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::review_intake_profile_draft(
+            &state.db,
+            &auth,
+            &session_id,
+            &draft_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+async fn restore_intake_profile_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    request: web::Json<RestoreIntakeProfileDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        intake_session_service::restore_intake_profile_draft(
+            &state.db,
+            &auth,
+            &session_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn get_ai_follow_up(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::get_ai_follow_up(&state.db, &auth, &session_id, &state.ai_gateway)
+            .await?,
+    ))
+}
+
+async fn get_ai_initial_review(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(intake_session_service::get_ai_initial_review(&state.db, &auth, &session_id).await?))
+}
+
+async fn start_ai_initial_review(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    request: web::Json<StartIntakeAiInitialReviewRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        intake_session_service::start_ai_initial_review(
+            &state.db,
+            &auth,
+            &session_id,
+            request.into_inner(),
+            &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn acknowledge_ai_initial_review(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    request: web::Json<AcknowledgeIntakeAiInitialReviewRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::acknowledge_ai_initial_review(
+            &state.db,
+            &auth,
+            &session_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn list_answer_revisions(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(intake_session_service::list_answer_revisions(&state.db, &auth, &session_id).await?))
+}
+
+async fn restore_answer_revision(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    request: web::Json<RestoreIntakeAnswerRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, field) = path.into_inner();
+    Ok(HttpResponse::Created().json(
+        intake_session_service::restore_answer_revision(
+            &state.db,
+            &auth,
+            &session_id,
+            &field,
+            request.into_inner(),
+            state.intake_answer_hard_max,
+        )
+        .await?,
+    ))
 }
 
 async fn confirm_intake_session(

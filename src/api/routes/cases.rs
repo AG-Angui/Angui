@@ -6,7 +6,8 @@ use crate::{
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse, CasePoiQuery,
         CaseResourceConfigurationResponse, CreateCasePlaceRequest, CreateCaseRequest,
-        CreateClueDraftRequest, CreateClueRequest, CreateSummaryDraftRequest, CreateTaskRequest,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
+        CreateSummaryDraftRequest, CreateTaskRequest, ReviewClueDraftRequest,
         ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
         UpdateElderProfileRequest,
     },
@@ -37,7 +38,20 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 "/{case_id}/public-progress",
                 web::get().to(get_public_progress),
             )
+            .route("/{case_id}/clue-drafts", web::get().to(list_clue_drafts))
             .route("/{case_id}/clue-drafts", web::post().to(create_clue_drafts))
+            .route(
+                "/{case_id}/source-records",
+                web::get().to(list_source_records),
+            )
+            .route(
+                "/{case_id}/source-records",
+                web::post().to(create_source_record),
+            )
+            .route(
+                "/{case_id}/clue-drafts/{draft_id}/review",
+                web::patch().to(review_clue_draft),
+            )
             .route("/{case_id}/pois", web::get().to(list_case_pois))
             .route(
                 "/{case_id}/summary-drafts",
@@ -46,6 +60,14 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route(
                 "/{case_id}/summary-drafts",
                 web::post().to(create_summary_draft),
+            )
+            .route(
+                "/{case_id}/summary-drafts/versions",
+                web::get().to(list_summary_draft_versions),
+            )
+            .route(
+                "/{case_id}/summary-drafts/{from_id}/diff/{to_id}",
+                web::get().to(diff_summary_draft_versions),
             )
             .route(
                 "/{case_id}/summary-drafts/{draft_id}/review",
@@ -186,10 +208,43 @@ async fn create_archive_draft(
     case_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     let draft = crate::services::case_collaboration_service::create_archive_draft(
-        &state.db, &auth, &case_id,
+        &state.db,
+        &auth,
+        &case_id,
+        &state.ai_gateway,
     )
     .await?;
     Ok(HttpResponse::Created().json(draft))
+}
+
+async fn create_source_record(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    request: web::Json<CreateCaseSourceRecordRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        crate::services::case_collaboration_service::create_case_source_record(
+            &state.db,
+            &auth,
+            &case_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn list_source_records(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_case_source_records(
+            &state.db, &auth, &case_id,
+        )
+        .await?,
+    ))
 }
 
 async fn download_attachment(
@@ -384,6 +439,36 @@ async fn create_clue_drafts(
     ))
 }
 
+async fn list_clue_drafts(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_clue_drafts(&state.db, &auth, &case_id)
+            .await?,
+    ))
+}
+
+async fn review_clue_draft(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    path: web::Path<(String, String)>,
+    request: web::Json<ReviewClueDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, draft_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::review_clue_draft(
+            &state.db,
+            &auth,
+            &case_id,
+            &draft_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
 async fn list_case_pois(
     state: web::Data<AppState>,
     auth: AuthenticatedUser,
@@ -447,6 +532,33 @@ async fn review_summary_draft(
             &case_id,
             &draft_id,
             request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn list_summary_draft_versions(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_summary_draft_versions(
+            &state.db, &auth, &case_id,
+        )
+        .await?,
+    ))
+}
+
+async fn diff_summary_draft_versions(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    path: web::Path<(String, String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, from_id, to_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::diff_summary_draft_versions(
+            &state.db, &auth, &case_id, &from_id, &to_id,
         )
         .await?,
     ))

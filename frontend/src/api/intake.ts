@@ -8,15 +8,34 @@ export interface IntakeQuestion {
 
 export interface IntakeSession {
   id: string;
-  status: "collecting" | "ready_for_confirmation";
+  status:
+    | "collecting"
+    | "ready_for_confirmation"
+    | "awaiting_family_review"
+    | "ready_for_second_confirmation";
   missing_fields: string[];
   phase: "phase_one" | "phase_two";
   completed_phase_one_fields: string[];
   missing_phase_one_fields: string[];
   phase_transition_ready: boolean;
   next_question: IntakeQuestion | null;
-  guidance_mode: "rule_based";
+  guidance_mode: "rule_based" | "ai_assisted";
+  ai_initial_review_status: string;
   privacy_notice: string;
+}
+
+export interface IntakeAiFollowUp {
+  field: string;
+  prompt: string;
+  purpose: string;
+  missing_fields: string[];
+  skippable: boolean;
+}
+
+export interface IntakeAiFollowUpResponse {
+  question: IntakeAiFollowUp | null;
+  degradation_status: string;
+  generated_at: string;
 }
 
 export type IntakeSessionUpdate = Omit<IntakeSession, "id">;
@@ -86,6 +105,7 @@ export interface IntakeDirectionHypothesis {
 }
 
 export interface IntakeDraft {
+  id: string;
   status: "draft";
   source_scope: string;
   generated_at: string;
@@ -96,6 +116,16 @@ export interface IntakeDraft {
   assessments: IntakeAssessment[];
   confirmation_blocked_reasons: string[];
   direction_hypotheses: IntakeDirectionHypothesis[];
+  provider_model: string | null;
+  template_version: string;
+  degradation_status: string;
+  version: number;
+}
+
+export interface IntakeDraftDiff {
+  from_version: number;
+  to_version: number;
+  changed_fields: string[];
 }
 
 export interface ConfirmedIntakeProfile {
@@ -113,7 +143,8 @@ export interface ConfirmIntakeResponse {
   case_id: string;
   case_code: string;
   status: "active" | "resolved" | "closed";
-  confirmation_status: "human_confirmed";
+  confirmation_status:
+    "human_confirmed" | "human_confirmed_after_ai_initial_review";
   confirmed_at: string;
 }
 
@@ -144,6 +175,168 @@ export function getIntakeDraft(
   return apiRequest<IntakeDraft>(
     `/intake-sessions/${sessionId}/profile-draft`,
     {},
+    token,
+  );
+}
+
+export function generateIntakeDraft(
+  token: string,
+  sessionId: string,
+): Promise<IntakeDraft> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/generate`,
+    { method: "POST" },
+    token,
+  );
+}
+export function listIntakeDraftVersions(
+  token: string,
+  sessionId: string,
+): Promise<{ items: IntakeDraft[] }> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/versions`,
+    {},
+    token,
+  );
+}
+export function diffIntakeDraftVersions(
+  token: string,
+  sessionId: string,
+  fromId: string,
+  toId: string,
+): Promise<IntakeDraftDiff> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/${fromId}/diff/${toId}`,
+    {},
+    token,
+  );
+}
+export function reviewIntakeDraft(
+  token: string,
+  sessionId: string,
+  draftId: string,
+  action: "confirm" | "reject",
+  reason: string,
+): Promise<IntakeDraft> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/${draftId}/review`,
+    { method: "PATCH", body: JSON.stringify({ action, reason }) },
+    token,
+  );
+}
+export function restoreIntakeDraft(
+  token: string,
+  sessionId: string,
+  draftId: string,
+  reason: string,
+): Promise<IntakeDraft> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/restore`,
+    { method: "POST", body: JSON.stringify({ draft_id: draftId, reason }) },
+    token,
+  );
+}
+
+export interface IntakeAiInitialReviewIssue {
+  id: string;
+  field: string;
+  severity: "needs_confirmation" | "warning";
+  evidence_summary: string;
+  clarification_question: string;
+  source_fields: string[];
+}
+
+export interface IntakeAiInitialReviewResponse {
+  session_id: string;
+  status: IntakeSession["status"];
+  degradation_status: "available" | "rule_based_fallback" | "not_started";
+  issues: IntakeAiInitialReviewIssue[];
+  blocking_assessments: IntakeAssessment[];
+  generated_at: string;
+  requires_family_acknowledgement: boolean;
+  ready_for_second_confirmation: boolean;
+}
+
+export interface IntakeAnswerRevision {
+  id: string;
+  field: string;
+  answer: string;
+  revision_kind: string;
+  created_at: string;
+}
+
+export function getIntakeAiFollowUp(
+  token: string,
+  sessionId: string,
+): Promise<IntakeAiFollowUpResponse> {
+  return apiRequest<IntakeAiFollowUpResponse>(
+    `/intake-sessions/${sessionId}/ai-follow-up`,
+    {},
+    token,
+  );
+}
+
+export function getIntakeAiInitialReview(
+  token: string,
+  sessionId: string,
+): Promise<IntakeAiInitialReviewResponse> {
+  return apiRequest<IntakeAiInitialReviewResponse>(
+    `/intake-sessions/${sessionId}/ai-initial-review`,
+    {},
+    token,
+  );
+}
+
+export function startIntakeAiInitialReview(
+  token: string,
+  sessionId: string,
+  profile: ConfirmedIntakeProfile,
+): Promise<IntakeAiInitialReviewResponse> {
+  return apiRequest<IntakeAiInitialReviewResponse>(
+    `/intake-sessions/${sessionId}/ai-initial-review`,
+    { method: "POST", body: JSON.stringify({ profile }) },
+    token,
+  );
+}
+
+export function acknowledgeIntakeAiInitialReview(
+  token: string,
+  sessionId: string,
+  confirmedIssueIds: string[],
+): Promise<IntakeAiInitialReviewResponse> {
+  return apiRequest<IntakeAiInitialReviewResponse>(
+    `/intake-sessions/${sessionId}/ai-initial-review/acknowledge`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        human_confirmed: true,
+        confirmed_issue_ids: confirmedIssueIds,
+      }),
+    },
+    token,
+  );
+}
+
+export function listIntakeAnswerRevisions(
+  token: string,
+  sessionId: string,
+): Promise<IntakeAnswerRevision[]> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/answer-revisions`,
+    {},
+    token,
+  );
+}
+
+export function restoreIntakeAnswerRevision(
+  token: string,
+  sessionId: string,
+  field: string,
+  revisionId: string,
+): Promise<SubmitIntakeAnswerResponse> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/answers/${encodeURIComponent(field)}/restore`,
+    { method: "POST", body: JSON.stringify({ revision_id: revisionId }) },
     token,
   );
 }
