@@ -26,10 +26,24 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        ensure_rollback_is_safe(manager, &[(
-            "AI profile candidates, controlled source records, or archive review material exist",
-            "SELECT 1 FROM intake_profile_drafts LIMIT 1 UNION ALL SELECT 1 FROM case_source_records LIMIT 1 UNION ALL SELECT 1 FROM archive_review_materials LIMIT 1",
-        )]).await?;
+        ensure_rollback_is_safe(
+            manager,
+            &[
+                (
+                    "AI profile candidates exist",
+                    "SELECT 1 FROM intake_profile_drafts LIMIT 1",
+                ),
+                (
+                    "controlled source records exist",
+                    "SELECT 1 FROM case_source_records LIMIT 1",
+                ),
+                (
+                    "archive review material exists",
+                    "SELECT 1 FROM archive_review_materials LIMIT 1",
+                ),
+            ],
+        )
+        .await?;
         execute_script(
             manager,
             sql_for_backend(

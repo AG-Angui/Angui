@@ -389,7 +389,7 @@ mod tests {
             .await
             .expect("in-memory sqlite connection should succeed");
 
-        Migrator::up(&database, None)
+        Migrator::up(&database, Some(32))
             .await
             .expect("migrations through the prompt translation should succeed");
         assert_eq!(
