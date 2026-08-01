@@ -21,7 +21,10 @@ function render(ui: ReactElement) {
     </MemoryRouter>
   );
   const result = renderUi(wrapped(ui));
-  return { ...result, rerender: (nextUi: ReactElement) => result.rerender(wrapped(nextUi)) };
+  return {
+    ...result,
+    rerender: (nextUi: ReactElement) => result.rerender(wrapped(nextUi)),
+  };
 }
 
 const mocked = vi.hoisted(() => ({
@@ -148,17 +151,21 @@ describe("CaseWorkspacePage", () => {
       screen.getByRole("link", { name: "补充人物资料（主操作）" }),
     ).toHaveAttribute("href", "#case-profile-editor");
     expect(document.getElementById("case-profile-editor")).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "案件工作区导航" })).toBeInTheDocument();
-    expect(screen.getByText("补充或更正人物资料").closest("details")).not.toHaveAttribute(
-      "open",
-    );
-    expect(screen.getByText("案件状态与成员管理").closest("details")).not.toHaveAttribute(
-      "open",
-    );
-    expect(screen.getByText("提交一条新线索").closest("details")).not.toHaveAttribute(
-      "open",
-    );
-    expect(screen.queryByRole("heading", { name: "任务看板" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("navigation", { name: "案件工作区导航" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("补充或更正人物资料").closest("details"),
+    ).not.toHaveAttribute("open");
+    expect(
+      screen.getByText("案件状态与成员管理").closest("details"),
+    ).not.toHaveAttribute("open");
+    expect(
+      screen.getByText("提交一条新线索").closest("details"),
+    ).not.toHaveAttribute("open");
+    expect(
+      screen.queryByRole("heading", { name: "任务看板" }),
+    ).not.toBeInTheDocument();
     expect(mocked.listCaseTasks).not.toHaveBeenCalled();
   });
 
@@ -202,7 +209,9 @@ describe("CaseWorkspacePage", () => {
 
     render(<CaseWorkspacePage mode="volunteer" />);
 
-    expect(await screen.findByRole("heading", { name: "协作提示" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "协作提示" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "查看已分配任务（主操作）" }),
     ).toHaveAttribute("href", "#task-board");
@@ -252,7 +261,9 @@ describe("CaseWorkspacePage", () => {
       screen.queryByRole("link", { name: "提交一条新线索（主操作）" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("提交一条新线索")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "提交线索" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "提交线索" }),
+    ).not.toBeInTheDocument();
   });
 
   it("puts commander task and review work ahead of case materials", async () => {
@@ -305,14 +316,13 @@ describe("CaseWorkspacePage", () => {
     expect(taskHeading.compareDocumentPosition(clueHeading)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(screen.getByRole("link", { name: "前往任务和审核区（主操作）" })).toHaveAttribute(
-      "href",
-      "#task-board",
-    );
+    expect(
+      screen.getByRole("link", { name: "前往任务和审核区（主操作）" }),
+    ).toHaveAttribute("href", "#task-board");
     expect(document.getElementById("task-board")).toBeInTheDocument();
-    expect(screen.getByText("案件状态与成员管理").closest("details")).not.toHaveAttribute(
-      "open",
-    );
+    expect(
+      screen.getByText("案件状态与成员管理").closest("details"),
+    ).not.toHaveAttribute("open");
   });
 
   it("lets a commander accept a minimal pending case before viewing it", async () => {
@@ -334,7 +344,10 @@ describe("CaseWorkspacePage", () => {
     renderUi(
       <MemoryRouter initialEntries={["/command"]}>
         <Routes>
-          <Route path="/command" element={<CaseWorkspacePage mode="commander" />} />
+          <Route
+            path="/command"
+            element={<CaseWorkspacePage mode="commander" />}
+          />
         </Routes>
       </MemoryRouter>,
     );
@@ -399,7 +412,9 @@ describe("CaseWorkspacePage", () => {
 
     render(<CaseWorkspacePage mode="commander" />);
 
-    expect(await screen.findByRole("navigation", { name: "案件详情导航" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("navigation", { name: "案件详情导航" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "返回案件列表" })).toHaveAttribute(
       "href",
       "/command",

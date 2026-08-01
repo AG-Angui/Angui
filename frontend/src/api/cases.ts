@@ -353,7 +353,8 @@ export interface ArchiveDraft {
   content: string;
   source_scope: string[];
   review_material_id: string | null;
-  deidentification_status: "manual_review_required" | "deidentified" | "rejected";
+  deidentification_status:
+    "manual_review_required" | "deidentified" | "rejected";
   template_version: string;
   provider_model: string | null;
   version: number;
@@ -747,11 +748,22 @@ export interface CaseSourceRecord {
   created_at: string;
 }
 
-export function createCaseSourceRecord(token: string, caseId: string, payload: Omit<CaseSourceRecord, "id" | "case_id" | "created_at">): Promise<CaseSourceRecord> {
-  return apiRequest(`/cases/${caseId}/source-records`, { method: "POST", body: JSON.stringify(payload) }, token);
+export function createCaseSourceRecord(
+  token: string,
+  caseId: string,
+  payload: Omit<CaseSourceRecord, "id" | "case_id" | "created_at">,
+): Promise<CaseSourceRecord> {
+  return apiRequest(
+    `/cases/${caseId}/source-records`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
 }
 
-export function listCaseSourceRecords(token: string, caseId: string): Promise<CaseSourceRecord[]> {
+export function listCaseSourceRecords(
+  token: string,
+  caseId: string,
+): Promise<CaseSourceRecord[]> {
   return apiRequest(`/cases/${caseId}/source-records`, {}, token);
 }
 
@@ -847,18 +859,30 @@ export function createArchiveDraft(
   token: string,
   caseId: string,
 ): Promise<ArchiveDraft> {
-  return apiRequest(`/cases/${caseId}/archive-drafts`, { method: "POST" }, token);
+  return apiRequest(
+    `/cases/${caseId}/archive-drafts`,
+    { method: "POST" },
+    token,
+  );
 }
 
 export function deidentifyArchiveDraft(
   token: string,
   draftId: string,
-  payload: { outcome: "confirm" | "reject"; reason: string; deidentified_material?: string },
+  payload: {
+    outcome: "confirm" | "reject";
+    reason: string;
+    deidentified_material?: string;
+  },
 ): Promise<ArchiveDraft> {
-  return apiRequest(`/admin/archive-drafts/${draftId}/deidentify`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  }, token);
+  return apiRequest(
+    `/admin/archive-drafts/${draftId}/deidentify`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
 }
 
 export function listAdminArchiveDrafts(token: string): Promise<ArchiveDraft[]> {
@@ -870,10 +894,14 @@ export function reviewArchiveDraft(
   draftId: string,
   payload: { action: "publish" | "reject" | "withdraw"; reason: string },
 ): Promise<ArchiveDraft> {
-  return apiRequest(`/admin/archive-drafts/${draftId}/review`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  }, token);
+  return apiRequest(
+    `/admin/archive-drafts/${draftId}/review`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
 }
 
 export function listCaseClues(

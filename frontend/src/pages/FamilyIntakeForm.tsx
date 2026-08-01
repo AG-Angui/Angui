@@ -67,24 +67,36 @@ const defaultQuestionPrompts: Record<string, string> = {
   basic_information: "请填写可供家属核对的基本信息。",
   health_status: "请补充健康、认知、行动能力或用药方面需要记录的情况。",
   behavior_habits: "请描述有助于后续核实线索的日常习惯、偏好或行为特点。",
-  last_seen: "请说明最后出现的时间和地点；如有不确定的交通方式或同行人，也请标明。",
+  last_seen:
+    "请说明最后出现的时间和地点；如有不确定的交通方式或同行人，也请标明。",
   frequent_locations: "请补充常去地点，并避免填写与寻找无关的私人住址。",
-  suspicious_motive: "是否有需要人工谨慎核实的可能原因、计划或担忧？不确定时可标记为未知。",
+  suspicious_motive:
+    "是否有需要人工谨慎核实的可能原因、计划或担忧？不确定时可标记为未知。",
   belongings: "请描述当时携带的衣着、包、手机、证件或其他随身物品。",
-  transport_ability: "请说明可能的独立出行方式，包括步行、车辆、公共交通及同行人情况。",
+  transport_ability:
+    "请说明可能的独立出行方式，包括步行、车辆、公共交通及同行人情况。",
   follow_up_clues: "是否有之后获得、但仍需要人工核实的信息或线索？",
 };
 
 const legacyDefaultQuestionPrompts: Record<string, string> = {
-  basic_information: "Please describe the person using information your family can verify.",
-  health_status: "What health, cognitive, mobility, or medication concerns should be recorded as unconfirmed draft information?",
-  behavior_habits: "What routines, preferences, or behaviors may help verify future leads?",
-  last_seen: "When and where was the person last seen? Include uncertainty in time, place, transport, or companions.",
-  frequent_locations: "Which places do they commonly visit? Please avoid unrelated private addresses.",
-  suspicious_motive: "Are there any possible reasons, plans, or concerns that need careful human follow-up? Mark unknown when unsure.",
-  belongings: "What clothing, bags, phone, identification, or other belongings were they carrying?",
-  transport_ability: "How might they travel independently? Include walking, vehicle, public transport, and companion uncertainty.",
-  follow_up_clues: "Is there later information or a lead that still needs human verification?",
+  basic_information:
+    "Please describe the person using information your family can verify.",
+  health_status:
+    "What health, cognitive, mobility, or medication concerns should be recorded as unconfirmed draft information?",
+  behavior_habits:
+    "What routines, preferences, or behaviors may help verify future leads?",
+  last_seen:
+    "When and where was the person last seen? Include uncertainty in time, place, transport, or companions.",
+  frequent_locations:
+    "Which places do they commonly visit? Please avoid unrelated private addresses.",
+  suspicious_motive:
+    "Are there any possible reasons, plans, or concerns that need careful human follow-up? Mark unknown when unsure.",
+  belongings:
+    "What clothing, bags, phone, identification, or other belongings were they carrying?",
+  transport_ability:
+    "How might they travel independently? Include walking, vehicle, public transport, and companion uncertainty.",
+  follow_up_clues:
+    "Is there later information or a lead that still needs human verification?",
 };
 
 const blankProfile: ConfirmedIntakeProfile = {
@@ -159,9 +171,15 @@ export function FamilyIntakeForm({
     useState<IntakeAiInitialReviewResponse | null>(null);
   const [confirmedInitialReviewIssues, setConfirmedInitialReviewIssues] =
     useState<string[]>([]);
-  const [answerRevisions, setAnswerRevisions] = useState<IntakeAnswerRevision[]>([]);
+  const [answerRevisions, setAnswerRevisions] = useState<
+    IntakeAnswerRevision[]
+  >([]);
   const [profileVersions, setProfileVersions] = useState<IntakeDraft[]>([]);
-  const [comparison, setComparison] = useState<{ from: string; to: string; fields: string[] } | null>(null);
+  const [comparison, setComparison] = useState<{
+    from: string;
+    to: string;
+    fields: string[];
+  } | null>(null);
   const [isReviewingBasicInformation, setIsReviewingBasicInformation] =
     useState(false);
   const [busyAction, setBusyAction] = useState<
@@ -200,7 +218,9 @@ export function FamilyIntakeForm({
           .then(() => listIntakeAnswerRevisions(token, sessionId))
           .then(setAnswerRevisions)
           .catch(() => setAnswerRevisions([]));
-        void listIntakeDraftVersions(token, sessionId).then((value) => setProfileVersions(value.items)).catch(() => setProfileVersions([]));
+        void listIntakeDraftVersions(token, sessionId)
+          .then((value) => setProfileVersions(value.items))
+          .catch(() => setProfileVersions([]));
         if (initializeProfile)
           setProfile(profileFromDraft(nextDraft, basicInformationForProfile));
         return nextDraft;
@@ -349,7 +369,8 @@ export function FamilyIntakeForm({
       setSession(guidedSession);
       setInitialReview(null);
       setConfirmedInitialReviewIssues([]);
-      if (guidedSession.phase !== "phase_two") setIsReviewingBasicInformation(false);
+      if (guidedSession.phase !== "phase_two")
+        setIsReviewingBasicInformation(false);
       setAssessments(response.assessments);
       if (replace) {
         if (draft) {
@@ -647,39 +668,280 @@ export function FamilyIntakeForm({
         <DraftProfileReview draft={draft} onEditSource={openSourceEditor} />
         {!editSource && (
           <section className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center justify-between gap-2"><h3 className="m-0 text-sm font-bold text-slate-950">AI 画像草稿版本</h3><Button size="sm" variant="ghost" isDisabled={isBusy} onPress={() => void (async () => { if (!token || !session) return; const next = await generateIntakeDraft(token, session.id); setDraft(next); setProfile(profileFromDraft(next, basicInformation)); setProfileVersions((current) => [next, ...current]); })()}>生成新版本</Button></div>
-            {profileVersions.length === 0 ? <p className="mb-0 mt-2 text-xs text-slate-600">尚未生成 AI 画像候选；当前内容仍来自家属原始回答。</p> : <ul className="mb-0 mt-3 space-y-2 p-0">{profileVersions.slice(0, 8).map((version) => <li key={version.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white p-3"><span className="text-xs text-slate-700">v{version.version} · {version.status} · {version.degradation_status}</span><div className="flex gap-2"><Button size="sm" variant="ghost" isDisabled={isBusy || version.status !== "draft"} onPress={() => void (async () => { if (!token || !session) return; const updated = await reviewIntakeDraft(token, session.id, version.id, "confirm", "family confirmed profile candidate"); setDraft(updated); setProfileVersions((items) => items.map((item) => item.id === updated.id ? updated : item)); })()}>确认</Button><Button size="sm" variant="ghost" isDisabled={isBusy} onPress={() => void (async () => { if (!token || !session) return; const restored = await restoreIntakeDraft(token, session.id, version.id, "family restored this candidate for another review"); setDraft(restored); setProfile(profileFromDraft(restored, basicInformation)); setProfileVersions((items) => [restored, ...items]); })()}>恢复</Button></div></li>)}</ul>}
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="m-0 text-sm font-bold text-slate-950">
+                AI 画像草稿版本
+              </h3>
+              <Button
+                size="sm"
+                variant="ghost"
+                isDisabled={isBusy}
+                onPress={() =>
+                  void (async () => {
+                    if (!token || !session) return;
+                    const next = await generateIntakeDraft(token, session.id);
+                    setDraft(next);
+                    setProfile(profileFromDraft(next, basicInformation));
+                    setProfileVersions((current) => [next, ...current]);
+                  })()
+                }
+              >
+                生成新版本
+              </Button>
+            </div>
+            {profileVersions.length === 0 ? (
+              <p className="mb-0 mt-2 text-xs text-slate-600">
+                尚未生成 AI 画像候选；当前内容仍来自家属原始回答。
+              </p>
+            ) : (
+              <ul className="mb-0 mt-3 space-y-2 p-0">
+                {profileVersions.slice(0, 8).map((version) => (
+                  <li
+                    key={version.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white p-3"
+                  >
+                    <span className="text-xs text-slate-700">
+                      v{version.version} · {version.status} ·{" "}
+                      {version.degradation_status}
+                    </span>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        isDisabled={isBusy || version.status !== "draft"}
+                        onPress={() =>
+                          void (async () => {
+                            if (!token || !session) return;
+                            const updated = await reviewIntakeDraft(
+                              token,
+                              session.id,
+                              version.id,
+                              "confirm",
+                              "family confirmed profile candidate",
+                            );
+                            setDraft(updated);
+                            setProfileVersions((items) =>
+                              items.map((item) =>
+                                item.id === updated.id ? updated : item,
+                              ),
+                            );
+                          })()
+                        }
+                      >
+                        确认
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        isDisabled={isBusy}
+                        onPress={() =>
+                          void (async () => {
+                            if (!token || !session) return;
+                            const restored = await restoreIntakeDraft(
+                              token,
+                              session.id,
+                              version.id,
+                              "family restored this candidate for another review",
+                            );
+                            setDraft(restored);
+                            setProfile(
+                              profileFromDraft(restored, basicInformation),
+                            );
+                            setProfileVersions((items) => [restored, ...items]);
+                          })()
+                        }
+                      >
+                        恢复
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         )}
         {!editSource && profileVersions.length > 0 && (
-          <section className="mt-3 rounded-md border border-slate-200 bg-white p-4" aria-label="画像草稿版本操作">
-            <h3 className="m-0 text-sm font-bold text-slate-950">版本确认、拒绝与比较</h3>
+          <section
+            className="mt-3 rounded-md border border-slate-200 bg-white p-4"
+            aria-label="画像草稿版本操作"
+          >
+            <h3 className="m-0 text-sm font-bold text-slate-950">
+              版本确认、拒绝与比较
+            </h3>
             <div className="mt-3 grid gap-2">
               {profileVersions.slice(0, 8).map((version) => (
-                <div key={`actions-${version.id}`} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-2 last:border-0">
-                  <label className="flex items-center gap-2 text-xs text-slate-700"><input type="checkbox" checked={comparison?.from === version.id || comparison?.to === version.id} onChange={() => setComparison((current) => current?.from === version.id ? { ...current, from: "" } : current?.to === version.id ? { ...current, to: "" } : !current?.from ? { from: version.id, to: "", fields: [] } : { from: current.from, to: version.id, fields: [] })} />v{version.version}</label>
-                  <div className="flex gap-2"><Button size="sm" variant="ghost" isDisabled={isBusy || version.status !== "draft"} onPress={() => void (async () => { if (!token || !session) return; const updated = await reviewIntakeDraft(token, session.id, version.id, "reject", "family rejected profile candidate"); setProfileVersions((items) => items.map((item) => item.id === updated.id ? updated : item)); })()}>拒绝</Button><Button size="sm" variant="ghost" isDisabled={isBusy} onPress={() => void (async () => { if (!token || !session) return; const restored = await restoreIntakeDraft(token, session.id, version.id, "family restored this candidate for another review"); setDraft(restored); setProfile(profileFromDraft(restored, basicInformation)); setProfileVersions((items) => [restored, ...items]); })()}>恢复</Button></div>
+                <div
+                  key={`actions-${version.id}`}
+                  className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-2 last:border-0"
+                >
+                  <label className="flex items-center gap-2 text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={
+                        comparison?.from === version.id ||
+                        comparison?.to === version.id
+                      }
+                      onChange={() =>
+                        setComparison((current) =>
+                          current?.from === version.id
+                            ? { ...current, from: "" }
+                            : current?.to === version.id
+                              ? { ...current, to: "" }
+                              : !current?.from
+                                ? { from: version.id, to: "", fields: [] }
+                                : {
+                                    from: current.from,
+                                    to: version.id,
+                                    fields: [],
+                                  },
+                        )
+                      }
+                    />
+                    v{version.version}
+                  </label>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={isBusy || version.status !== "draft"}
+                      onPress={() =>
+                        void (async () => {
+                          if (!token || !session) return;
+                          const updated = await reviewIntakeDraft(
+                            token,
+                            session.id,
+                            version.id,
+                            "reject",
+                            "family rejected profile candidate",
+                          );
+                          setProfileVersions((items) =>
+                            items.map((item) =>
+                              item.id === updated.id ? updated : item,
+                            ),
+                          );
+                        })()
+                      }
+                    >
+                      拒绝
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={isBusy}
+                      onPress={() =>
+                        void (async () => {
+                          if (!token || !session) return;
+                          const restored = await restoreIntakeDraft(
+                            token,
+                            session.id,
+                            version.id,
+                            "family restored this candidate for another review",
+                          );
+                          setDraft(restored);
+                          setProfile(
+                            profileFromDraft(restored, basicInformation),
+                          );
+                          setProfileVersions((items) => [restored, ...items]);
+                        })()
+                      }
+                    >
+                      恢复
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
-            <Button className="mt-3" size="sm" variant="secondary" isDisabled={!token || !session || !comparison?.from || !comparison?.to || comparison.from === comparison.to || isBusy} onPress={() => void (async () => { if (!token || !session || !comparison?.from || !comparison?.to) return; const diff = await diffIntakeDraftVersions(token, session.id, comparison.from, comparison.to); setComparison({ from: comparison.from, to: comparison.to, fields: diff.changed_fields }); })()}>比较所选版本</Button>
-            {comparison?.fields.length ? <p className="mb-0 mt-2 text-xs text-slate-700">变化字段：{comparison.fields.join("、")}</p> : comparison?.from && comparison?.to ? <p className="mb-0 mt-2 text-xs text-slate-500">选择比较后将显示变更字段；无结果表示字段值一致。</p> : null}
+            <Button
+              className="mt-3"
+              size="sm"
+              variant="secondary"
+              isDisabled={
+                !token ||
+                !session ||
+                !comparison?.from ||
+                !comparison?.to ||
+                comparison.from === comparison.to ||
+                isBusy
+              }
+              onPress={() =>
+                void (async () => {
+                  if (
+                    !token ||
+                    !session ||
+                    !comparison?.from ||
+                    !comparison?.to
+                  )
+                    return;
+                  const diff = await diffIntakeDraftVersions(
+                    token,
+                    session.id,
+                    comparison.from,
+                    comparison.to,
+                  );
+                  setComparison({
+                    from: comparison.from,
+                    to: comparison.to,
+                    fields: diff.changed_fields,
+                  });
+                })()
+              }
+            >
+              比较所选版本
+            </Button>
+            {comparison?.fields.length ? (
+              <p className="mb-0 mt-2 text-xs text-slate-700">
+                变化字段：{comparison.fields.join("、")}
+              </p>
+            ) : comparison?.from && comparison?.to ? (
+              <p className="mb-0 mt-2 text-xs text-slate-500">
+                选择比较后将显示变更字段；无结果表示字段值一致。
+              </p>
+            ) : null}
           </section>
         )}
         {answerRevisions.length > 0 && !editSource && (
-          <section className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="answer-history-title">
-            <h3 id="answer-history-title" className="m-0 text-sm font-bold text-slate-950">问询修订历史</h3>
-            <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">恢复旧版本会使当前 AI 初审失效，系统会重新生成画像并要求再次初审。</p>
+          <section
+            className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-4"
+            aria-labelledby="answer-history-title"
+          >
+            <h3
+              id="answer-history-title"
+              className="m-0 text-sm font-bold text-slate-950"
+            >
+              问询修订历史
+            </h3>
+            <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">
+              恢复旧版本会使当前 AI 初审失效，系统会重新生成画像并要求再次初审。
+            </p>
             <ul className="mb-0 mt-3 space-y-2 p-0">
-              {answerRevisions.slice().reverse().slice(0, 12).map((revision) => (
-                <li key={revision.id} className="flex flex-col gap-2 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <strong className="text-xs text-slate-900">{questionLabels[revision.field] ?? revision.field} · {revision.revision_kind}</strong>
-                    <p className="mb-0 mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{revision.answer}</p>
-                  </div>
-                  <Button size="sm" variant="ghost" isDisabled={isBusy} onPress={() => void restoreRevision(revision)}>恢复此版本</Button>
-                </li>
-              ))}
+              {answerRevisions
+                .slice()
+                .reverse()
+                .slice(0, 12)
+                .map((revision) => (
+                  <li
+                    key={revision.id}
+                    className="flex flex-col gap-2 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <strong className="text-xs text-slate-900">
+                        {questionLabels[revision.field] ?? revision.field} ·{" "}
+                        {revision.revision_kind}
+                      </strong>
+                      <p className="mb-0 mt-1 line-clamp-2 text-xs leading-5 text-slate-600">
+                        {revision.answer}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={isBusy}
+                      onPress={() => void restoreRevision(revision)}
+                    >
+                      恢复此版本
+                    </Button>
+                  </li>
+                ))}
             </ul>
           </section>
         )}
@@ -938,8 +1200,8 @@ export function FamilyIntakeForm({
   const currentLabel = isReviewingPhaseOne
     ? "基本情况（编辑）"
     : question
-    ? (questionLabels[question.field] ?? question.field)
-    : "正在整理草稿";
+      ? (questionLabels[question.field] ?? question.field)
+      : "正在整理草稿";
 
   return (
     <section
@@ -1058,7 +1320,9 @@ export function FamilyIntakeForm({
                 <Spinner
                   size="sm"
                   aria-label={
-                    isReviewingPhaseOne ? "正在保存基本情况更正" : "正在保存答案"
+                    isReviewingPhaseOne
+                      ? "正在保存基本情况更正"
+                      : "正在保存答案"
                   }
                 />
               )}
@@ -1133,7 +1397,8 @@ function InitialReviewPanel({
         {isReviewing ? (
           <span className="flex items-center gap-2">
             <Spinner size="sm" aria-label="正在进行 AI 初步审核" />
-            正在进行 AI 初步审核，请稍候；审核完成前不会创建案件或向指挥端提交资料。
+            正在进行 AI
+            初步审核，请稍候；审核完成前不会创建案件或向指挥端提交资料。
           </span>
         ) : (
           "首次确认后，系统会进行 AI 初步审核。它只标注需要您核对的疑点，不能确认事实、修改资料或判断位置。"
@@ -1174,7 +1439,10 @@ function InitialReviewPanel({
         <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-900">
           <strong>需要先修正的规则核对项</strong>
           {review.blocking_assessments.map((item) => (
-            <p key={`${item.field_path}-${item.conflict_type}`} className="mb-0 mt-2">
+            <p
+              key={`${item.field_path}-${item.conflict_type}`}
+              className="mb-0 mt-2"
+            >
               {item.evidence_summary} {item.suggested_action}
             </p>
           ))}
@@ -1183,7 +1451,8 @@ function InitialReviewPanel({
 
       {review.issues.length === 0 ? (
         <p className="mb-0 mt-3 text-sm leading-6 text-slate-700">
-          未发现需要额外确认的 AI 疑点。请确认后进行二次提交；这不代表资料已经被系统认定为真实无误。
+          未发现需要额外确认的 AI
+          疑点。请确认后进行二次提交；这不代表资料已经被系统认定为真实无误。
         </p>
       ) : (
         <div className="mt-3 grid gap-3">

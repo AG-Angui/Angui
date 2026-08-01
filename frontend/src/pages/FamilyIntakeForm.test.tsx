@@ -188,12 +188,12 @@ function answerResponse(session: IntakeSession): SubmitIntakeAnswerResponse {
 }
 
 describe("FamilyIntakeForm", () => {
-beforeEach(() => {
-  mocked.getIntakeAiFollowUp.mockResolvedValue({
-    question: null,
-    degradation_status: "rule_based_fallback",
-    generated_at: "2026-07-25T08:00:00Z",
-  });
+  beforeEach(() => {
+    mocked.getIntakeAiFollowUp.mockResolvedValue({
+      question: null,
+      degradation_status: "rule_based_fallback",
+      generated_at: "2026-07-25T08:00:00Z",
+    });
     window.sessionStorage.clear();
     vi.clearAllMocks();
   });
@@ -411,7 +411,9 @@ beforeEach(() => {
         },
       }),
     );
-    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(phaseTwoSession));
+    mocked.submitIntakeAnswer.mockResolvedValue(
+      answerResponse(phaseTwoSession),
+    );
 
     render(
       <FamilyIntakeForm
@@ -420,7 +422,9 @@ beforeEach(() => {
       />,
     );
 
-    expect(await screen.findByRole("heading", { name: "常去地点" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "常去地点" }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "上一步" }));
 
     expect(
@@ -448,7 +452,9 @@ beforeEach(() => {
     expect(
       await screen.findByRole("heading", { name: "常去地点" }),
     ).toBeInTheDocument();
-    expect(screen.getByDisplayValue("北门附近有目击信息。")).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("北门附近有目击信息。"),
+    ).toBeInTheDocument();
   });
 
   it("uses Chinese default prompts when an existing session still returns the old seed copy", async () => {
@@ -459,7 +465,8 @@ beforeEach(() => {
           ...phaseTwoSession,
           next_question: {
             field: "follow_up_clues",
-            prompt: "Is there later information or a lead that still needs human verification?",
+            prompt:
+              "Is there later information or a lead that still needs human verification?",
             required: false,
           },
         },
@@ -481,9 +488,13 @@ beforeEach(() => {
       />,
     );
 
-    expect(await screen.findByText("是否有之后获得、但仍需要人工核实的信息或线索？")).toBeInTheDocument();
     expect(
-      screen.queryByText("Is there later information or a lead that still needs human verification?"),
+      await screen.findByText("是否有之后获得、但仍需要人工核实的信息或线索？"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Is there later information or a lead that still needs human verification?",
+      ),
     ).not.toBeInTheDocument();
   });
 
@@ -549,8 +560,10 @@ beforeEach(() => {
           id: "issue-1",
           field: "last_seen",
           severity: "needs_confirmation",
-          evidence_summary: "The reported time and place need family confirmation.",
-          clarification_question: "Please confirm the last-seen information is accurate.",
+          evidence_summary:
+            "The reported time and place need family confirmation.",
+          clarification_question:
+            "Please confirm the last-seen information is accurate.",
           source_fields: ["last_seen"],
         },
       ],
@@ -568,8 +581,10 @@ beforeEach(() => {
           id: "issue-1",
           field: "last_seen",
           severity: "needs_confirmation",
-          evidence_summary: "The reported time and place need family confirmation.",
-          clarification_question: "Please confirm the last-seen information is accurate.",
+          evidence_summary:
+            "The reported time and place need family confirmation.",
+          clarification_question:
+            "Please confirm the last-seen information is accurate.",
           source_fields: ["last_seen"],
         },
       ],
@@ -613,7 +628,9 @@ beforeEach(() => {
     );
     expect(mocked.confirmIntakeSession).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "二次确认并提交指挥端" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "二次确认并提交指挥端" }),
+    );
     await waitFor(() =>
       expect(mocked.confirmIntakeSession).toHaveBeenCalledTimes(1),
     );

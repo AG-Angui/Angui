@@ -37,12 +37,12 @@ npm --prefix frontend run test
 
 测试使用 Vitest、Testing Library、`.invalid` 模拟邮箱和虚构案件数据，不调用真实服务，也不在断言中记录密码或会话令牌。
 
-| 能力 / 后端端点 | 前端测试 |
-| --- | --- |
-| API 网络错误，以及 `400`、`401`、`403`、`404`、`409` 错误的安全提示 | `src/api/client.test.ts` |
-| `GET/POST /api/cases`、`GET /api/cases/{case_id}`、成员添加、线索提交/审核、案件状态更新 | `src/api/cases.test.ts` |
-| 登录成功/失败、刷新恢复、退出、令牌失效后清除旧会话 | `src/auth/AuthContext.test.tsx` |
-| 无会话页面、家属/指挥/志愿者导航、错误工作台 URL 重定向、新人和管理员的无案件权限状态 | `src/App.test.tsx` |
+| 能力 / 后端端点                                                                          | 前端测试                        |
+| ---------------------------------------------------------------------------------------- | ------------------------------- |
+| API 网络错误，以及 `400`、`401`、`403`、`404`、`409` 错误的安全提示                      | `src/api/client.test.ts`        |
+| `GET/POST /api/cases`、`GET /api/cases/{case_id}`、成员添加、线索提交/审核、案件状态更新 | `src/api/cases.test.ts`         |
+| 登录成功/失败、刷新恢复、退出、令牌失效后清除旧会话                                      | `src/auth/AuthContext.test.tsx` |
+| 无会话页面、家属/指挥/志愿者导航、错误工作台 URL 重定向、新人和管理员的无案件权限状态    | `src/App.test.tsx`              |
 
 运行一次完整前端基线：
 
@@ -54,6 +54,6 @@ npm --prefix frontend run test
 
 复制 `frontend/.env.example` 为本地环境文件时，不要提交真实服务地址或密钥。
 
-| 变量 | 默认值 | 用途 |
-| --- | --- | --- |
+| 变量                | 默认值 | 用途                  |
+| ------------------- | ------ | --------------------- |
 | `VITE_API_BASE_URL` | `/api` | 浏览器调用的 API 前缀 |

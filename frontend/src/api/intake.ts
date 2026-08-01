@@ -122,7 +122,11 @@ export interface IntakeDraft {
   version: number;
 }
 
-export interface IntakeDraftDiff { from_version: number; to_version: number; changed_fields: string[]; }
+export interface IntakeDraftDiff {
+  from_version: number;
+  to_version: number;
+  changed_fields: string[];
+}
 
 export interface ConfirmedIntakeProfile {
   display_name: string;
@@ -139,7 +143,8 @@ export interface ConfirmIntakeResponse {
   case_id: string;
   case_code: string;
   status: "active" | "resolved" | "closed";
-  confirmation_status: "human_confirmed" | "human_confirmed_after_ai_initial_review";
+  confirmation_status:
+    "human_confirmed" | "human_confirmed_after_ai_initial_review";
   confirmed_at: string;
 }
 
@@ -174,11 +179,63 @@ export function getIntakeDraft(
   );
 }
 
-export function generateIntakeDraft(token: string, sessionId: string): Promise<IntakeDraft> { return apiRequest(`/intake-sessions/${sessionId}/profile-draft/generate`, { method: "POST" }, token); }
-export function listIntakeDraftVersions(token: string, sessionId: string): Promise<{ items: IntakeDraft[] }> { return apiRequest(`/intake-sessions/${sessionId}/profile-draft/versions`, {}, token); }
-export function diffIntakeDraftVersions(token: string, sessionId: string, fromId: string, toId: string): Promise<IntakeDraftDiff> { return apiRequest(`/intake-sessions/${sessionId}/profile-draft/${fromId}/diff/${toId}`, {}, token); }
-export function reviewIntakeDraft(token: string, sessionId: string, draftId: string, action: "confirm" | "reject", reason: string): Promise<IntakeDraft> { return apiRequest(`/intake-sessions/${sessionId}/profile-draft/${draftId}/review`, { method: "PATCH", body: JSON.stringify({ action, reason }) }, token); }
-export function restoreIntakeDraft(token: string, sessionId: string, draftId: string, reason: string): Promise<IntakeDraft> { return apiRequest(`/intake-sessions/${sessionId}/profile-draft/restore`, { method: "POST", body: JSON.stringify({ draft_id: draftId, reason }) }, token); }
+export function generateIntakeDraft(
+  token: string,
+  sessionId: string,
+): Promise<IntakeDraft> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/generate`,
+    { method: "POST" },
+    token,
+  );
+}
+export function listIntakeDraftVersions(
+  token: string,
+  sessionId: string,
+): Promise<{ items: IntakeDraft[] }> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/versions`,
+    {},
+    token,
+  );
+}
+export function diffIntakeDraftVersions(
+  token: string,
+  sessionId: string,
+  fromId: string,
+  toId: string,
+): Promise<IntakeDraftDiff> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/${fromId}/diff/${toId}`,
+    {},
+    token,
+  );
+}
+export function reviewIntakeDraft(
+  token: string,
+  sessionId: string,
+  draftId: string,
+  action: "confirm" | "reject",
+  reason: string,
+): Promise<IntakeDraft> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/${draftId}/review`,
+    { method: "PATCH", body: JSON.stringify({ action, reason }) },
+    token,
+  );
+}
+export function restoreIntakeDraft(
+  token: string,
+  sessionId: string,
+  draftId: string,
+  reason: string,
+): Promise<IntakeDraft> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/profile-draft/restore`,
+    { method: "POST", body: JSON.stringify({ draft_id: draftId, reason }) },
+    token,
+  );
+}
 
 export interface IntakeAiInitialReviewIssue {
   id: string;
@@ -264,7 +321,11 @@ export function listIntakeAnswerRevisions(
   token: string,
   sessionId: string,
 ): Promise<IntakeAnswerRevision[]> {
-  return apiRequest(`/intake-sessions/${sessionId}/answer-revisions`, {}, token);
+  return apiRequest(
+    `/intake-sessions/${sessionId}/answer-revisions`,
+    {},
+    token,
+  );
 }
 
 export function restoreIntakeAnswerRevision(
