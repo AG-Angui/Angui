@@ -37,6 +37,12 @@ struct ArchiveOrganizationCandidate {
     uncertainty: String,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SummaryCandidate {
+    content: String,
+}
+
 pub async fn create_archive_draft(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -76,6 +82,8 @@ pub async fn create_archive_draft(
         purpose: AiPurpose::CaseArchiveDraft,
         data_region: "CN".to_owned(),
         system_instruction: Some("Return JSON only: {timeline:string[],lessons:string[],uncertainty:string}. Use only supplied aggregate metadata. Do not infer persons, locations, health information, causes, or operational outcomes.".to_owned()),
+        output_schema: Some(archive_candidate_schema()),
+        output_schema_name: Some("case_archive_candidate".to_owned()),
         input: serde_json::to_string(&json!({
             "case_status": case.status,
             "confirmed_clue_count": confirmed_clue_count,
@@ -393,6 +401,23 @@ pub async fn review_archive_draft(
     archive_draft_response(model)
 }
 
+/// Returns archive drafts for the administrator review queue. This is kept
+/// separate from case membership because administrators perform the final
+/// de-identification and learning-resource approval lifecycle.
+pub async fn list_archive_drafts_for_admin(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<ArchiveDraftResponse>, ApiError> {
+    require_admin(auth)?;
+    archive_drafts::Entity::find()
+        .order_by_desc(archive_drafts::Column::UpdatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(archive_draft_response)
+        .collect()
+}
+
 pub async fn get_public_progress(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -474,7 +499,9 @@ pub async fn create_clue_drafts(
         data_level: DataLevel::Collaborative,
         purpose: AiPurpose::ClueDraft,
         data_region: "CN".to_owned(),
-        system_instruction: None,
+        system_instruction: Some("Return JSON only using the supplied schema. Extract only candidate fields explicitly supported by the supplied text. Keep unknown fields null or empty. Do not decide whether a report is true, infer a current or future location, add facts, or issue an action instruction. Include a source excerpt and per-field source excerpts only from the supplied text.".to_owned()),
+        output_schema: Some(clue_candidate_schema()),
+        output_schema_name: Some("clue_draft_candidate".to_owned()),
         input: text.clone(),
         requested_output_tokens: 400,
         template_version: "clue-draft-rule-v1".to_owned(),
@@ -565,6 +592,25 @@ pub async fn create_clue_drafts(
     Ok(vec![clue_draft_response(draft)?])
 }
 
+/// Lists durable clue-extraction drafts so a commander can resume review after
+/// a page refresh or a later hand-off. Raw source text remains protected by
+/// the normal case-role check.
+pub async fn list_clue_drafts(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<ClueDraftResponse>, ApiError> {
+    case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    clue_drafts::Entity::find()
+        .filter(clue_drafts::Column::CaseId.eq(case_id))
+        .order_by_desc(clue_drafts::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(clue_draft_response)
+        .collect()
+}
+
 pub async fn create_summary_draft(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -591,6 +637,8 @@ pub async fn create_summary_draft(
                 purpose: AiPurpose::CaseSummaryDraft,
                 data_region: "CN".to_owned(),
                 system_instruction: Some("Return a concise case-summary draft. Keep unverified information explicitly unverified and do not make location conclusions or task decisions.".to_owned()),
+                output_schema: Some(summary_candidate_schema()),
+                output_schema_name: Some("case_summary_candidate".to_owned()),
                 input,
                 requested_output_tokens: 800,
                 template_version: "case-summary-ai-v1".to_owned(),
@@ -601,7 +649,13 @@ pub async fn create_summary_draft(
                 let decision = execution.decision();
                 let (content, provider_model, audit_status) = match execution {
                     AiExecutionResult::Completed { route, output } => {
-                        match required_text("content", output, 12_000) {
+                        match gateway.decode_json::<SummaryCandidate>(&output).and_then(
+                            |candidate| {
+                                required_text("content", candidate.content, 12_000).map_err(|_| {
+                                    crate::ai_gateway::AiGatewayError::InvalidStructuredOutput
+                                })
+                            },
+                        ) {
                             Ok(content) => (content, Some(route.model), AiTaskStatus::Completed),
                             Err(_) => (
                                 deterministic_draft_content(&summary),
@@ -949,6 +1003,58 @@ fn deterministic_draft_content(summary: &crate::models::CaseSummaryResponse) -> 
     )
 }
 
+fn archive_candidate_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "timeline": { "type": "array", "items": { "type": "string" } },
+            "lessons": { "type": "array", "items": { "type": "string" } },
+            "uncertainty": { "type": "string" }
+        },
+        "required": ["timeline", "lessons", "uncertainty"],
+        "additionalProperties": false
+    })
+}
+
+fn clue_candidate_schema() -> serde_json::Value {
+    let nullable_string = json!({ "type": ["string", "null"] });
+    json!({
+        "type": "object",
+        "properties": {
+            "content_summary": nullable_string,
+            "occurred_at": { "type": ["string", "null"] },
+            "location_text": { "type": ["string", "null"] },
+            "source_text": { "type": ["string", "null"] },
+            "action_candidates": { "type": "array", "items": { "type": "string" } },
+            "missing_fields": { "type": "array", "items": { "type": "string" } },
+            "source_excerpt": { "type": "string" },
+            "field_sources": {
+                "type": "object",
+                "properties": {
+                    "content_summary": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "occurred_at": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "location_text": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "source_text": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false },
+                    "action_candidates": { "type": "object", "properties": { "reference": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } }, "required": ["reference", "excerpt"], "additionalProperties": false }
+                },
+                "required": ["content_summary", "occurred_at", "location_text", "source_text", "action_candidates"],
+                "additionalProperties": false
+            }
+        },
+        "required": ["content_summary", "occurred_at", "location_text", "source_text", "action_candidates", "missing_fields", "source_excerpt", "field_sources"],
+        "additionalProperties": false
+    })
+}
+
+fn summary_candidate_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": { "content": { "type": "string" } },
+        "required": ["content"],
+        "additionalProperties": false
+    })
+}
+
 fn deterministic_archive_draft_content(
     case_status: &str,
     confirmed_clue_count: u64,
@@ -1160,13 +1266,18 @@ pub async fn review_clue_draft(
             "action": action,
             "version": updated.version,
             "reason_length": reason.chars().count(),
+            "field_decisions": request.field_decisions.iter().map(|(field, decision)| json!({
+                "field": field,
+                "action": decision.action,
+                "has_value": decision.value.as_ref().is_some_and(|value| !value.trim().is_empty()),
+                "reason_length": decision.reason.as_ref().map(|value| value.chars().count()).unwrap_or(0),
+            })).collect::<Vec<_>>(),
         })),
     )
     .await?;
-    transaction.commit().await?;
     if action == "accept" {
-        let promoted = case_service::create_clue(
-            db,
+        let promoted = case_service::create_clue_in_transaction(
+            &transaction,
             auth,
             case_id,
             CreateClueRequest {
@@ -1196,7 +1307,6 @@ pub async fn review_clue_draft(
         )
         .await?;
         let promoted_id = promoted.id.clone();
-        let transaction = db.begin().await?;
         let affected = clue_drafts::Entity::update_many()
             .col_expr(
                 clue_drafts::Column::PromotedClueId,
@@ -1221,9 +1331,9 @@ pub async fn review_clue_draft(
             Some(json!({ "clue_id": promoted.id })),
         )
         .await?;
-        transaction.commit().await?;
         updated.promoted_clue_id = Some(promoted.id);
     }
+    transaction.commit().await?;
     clue_draft_response(updated)
 }
 

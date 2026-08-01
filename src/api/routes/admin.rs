@@ -15,6 +15,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
         web::scope("/admin")
             .route("/audit-events", web::get().to(list_audit_events))
             .route("/users", web::get().to(list_users))
+            .route("/archive-drafts", web::get().to(list_archive_drafts))
             .route(
                 "/users/{user_id}/status",
                 web::patch().to(update_user_status),
@@ -56,6 +57,18 @@ async fn update_user_status(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(
         admin_service::update_user_status(&state.db, &auth, &user_id, request.into_inner()).await?,
+    ))
+}
+
+async fn list_archive_drafts(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_archive_drafts_for_admin(
+            &state.db, &auth,
+        )
+        .await?,
     ))
 }
 

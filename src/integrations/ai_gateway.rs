@@ -102,6 +102,12 @@ pub struct AiRequest {
     pub purpose: AiPurpose,
     pub data_region: String,
     pub system_instruction: Option<String>,
+    /// Provider-neutral JSON Schema for a structured model result. Providers
+    /// that expose a native constrained-output feature receive this schema;
+    /// every result is still validated again by the calling service.
+    pub output_schema: Option<Value>,
+    /// Stable schema name used by providers that require a named contract.
+    pub output_schema_name: Option<String>,
     pub input: String,
     pub requested_output_tokens: usize,
     pub template_version: String,
@@ -384,11 +390,14 @@ impl AiProvider for ProtocolProvider {
                     name: "authorization",
                     value: credential,
                 }],
-                body: json!({
-                    "model": self.config.model,
-                    "messages": openai_messages(instructions, request.input.as_str()),
-                    "max_tokens": max_tokens,
-                }),
+                body: openai_chat_body(
+                    json!({
+                        "model": self.config.model,
+                        "messages": openai_messages(instructions, request.input.as_str()),
+                        "max_tokens": max_tokens,
+                    }),
+                    request,
+                ),
             },
             ProviderProtocol::OpenAiResponses => ProviderHttpRequest {
                 method: "POST",
@@ -406,7 +415,7 @@ impl AiProvider for ProtocolProvider {
                     if let Some(reasoning_effort) = self.config.reasoning_effort {
                         body["reasoning"] = json!({ "effort": reasoning_effort });
                     }
-                    body
+                    add_openai_responses_schema(body, request)
                 },
             },
             ProviderProtocol::AnthropicMessages => ProviderHttpRequest {
@@ -440,6 +449,10 @@ impl AiProvider for ProtocolProvider {
                 if !instructions.is_empty() {
                     body["systemInstruction"] = json!({ "parts": [{ "text": instructions }] });
                 }
+                if let Some(schema) = &request.output_schema {
+                    body["generationConfig"]["responseMimeType"] = json!("application/json");
+                    body["generationConfig"]["responseJsonSchema"] = schema.clone();
+                }
                 ProviderHttpRequest {
                     method: "POST",
                     path: format!("/v1beta/models/{}:generateContent", self.config.model),
@@ -453,6 +466,25 @@ impl AiProvider for ProtocolProvider {
         };
         Ok(request)
     }
+}
+
+fn openai_chat_body(mut body: Value, request: &AiRequest) -> Value {
+    if let (Some(schema), Some(name)) = (&request.output_schema, &request.output_schema_name) {
+        body["response_format"] = json!({
+            "type": "json_schema",
+            "json_schema": { "name": name, "strict": true, "schema": schema },
+        });
+    }
+    body
+}
+
+fn add_openai_responses_schema(mut body: Value, request: &AiRequest) -> Value {
+    if let (Some(schema), Some(name)) = (&request.output_schema, &request.output_schema_name) {
+        body["text"] = json!({
+            "format": { "type": "json_schema", "name": name, "strict": true, "schema": schema },
+        });
+    }
+    body
 }
 
 fn openai_messages(instructions: &str, input: &str) -> Vec<Value> {
@@ -493,31 +525,10 @@ impl AiGateway {
     }
 
     pub fn route(&self, request: &AiRequest) -> GatewayDecision {
-        let mut candidates: Vec<_> = self
-            .providers
-            .iter()
-            .filter_map(|registered| {
-                let route = registered.provider.route();
-                provider_is_eligible(&registered.config, request).then_some((
-                    route,
-                    registered.config.priority,
-                    registered.config.weight,
-                ))
-            })
-            .collect();
-
-        candidates.sort_by(|left, right| {
-            right
-                .1
-                .cmp(&left.1)
-                .then_with(|| right.2.cmp(&left.2))
-                .then_with(|| left.0.provider_id.cmp(&right.0.provider_id))
-        });
-
-        candidates
+        self.eligible_routes(request)
             .into_iter()
             .next()
-            .map(|(route, _, _)| GatewayDecision::Routed(route))
+            .map(GatewayDecision::Routed)
             .unwrap_or_else(|| {
                 if self.providers.is_empty() {
                     GatewayDecision::Degraded {
@@ -531,6 +542,29 @@ impl AiGateway {
                     }
                 }
             })
+    }
+
+    fn eligible_routes(&self, request: &AiRequest) -> Vec<ProviderRoute> {
+        let mut candidates: Vec<_> = self
+            .providers
+            .iter()
+            .filter_map(|registered| {
+                let route = registered.provider.route();
+                provider_is_eligible(&registered.config, request).then_some((
+                    route,
+                    registered.config.priority,
+                    registered.config.weight,
+                ))
+            })
+            .collect();
+        candidates.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| left.0.provider_id.cmp(&right.0.provider_id))
+        });
+        candidates.into_iter().map(|(route, _, _)| route).collect()
     }
 
     pub fn build_provider_request(
@@ -583,6 +617,33 @@ impl AiGateway {
             }
         };
 
+        let routes = self.eligible_routes(request);
+        for (index, candidate_route) in routes.iter().enumerate() {
+            // A transport request is read-only. Retrying it once is safe and
+            // keeps malformed/upstream transient failures out of business
+            // workflows. Writes happen only after this method returns.
+            for _ in 0..2 {
+                if let Ok(output) = self.execute_route(candidate_route, request).await {
+                    return AiExecutionResult::Completed {
+                        route: candidate_route.clone(),
+                        output,
+                    };
+                }
+            }
+            if !candidate_route.allow_fallback || index + 1 == routes.len() {
+                return AiExecutionResult::Failed {
+                    route: candidate_route.clone(),
+                };
+            }
+        }
+        AiExecutionResult::Failed { route }
+    }
+
+    async fn execute_route(
+        &self,
+        route: &ProviderRoute,
+        request: &AiRequest,
+    ) -> Result<String, AiGatewayError> {
         let outcome = async {
             let endpoint = env::var(&route.endpoint_env).map_err(|_| {
                 AiGatewayError::MissingRuntimeConfiguration(route.endpoint_env.clone())
@@ -621,14 +682,16 @@ impl AiGateway {
                 .json::<Value>()
                 .await
                 .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
-            extract_provider_output(route.protocol, &payload)
+            let output = extract_provider_output(route.protocol, &payload)?;
+            if request.output_schema.is_some() {
+                serde_json::from_str::<Value>(&output)
+                    .map_err(|_| AiGatewayError::InvalidStructuredOutput)?;
+            }
+            Ok(output)
         }
         .await;
 
-        match outcome {
-            Ok(output) => AiExecutionResult::Completed { route, output },
-            Err(_) => AiExecutionResult::Failed { route },
-        }
+        outcome
     }
 
     pub fn decode_json<T: DeserializeOwned>(&self, output: &str) -> Result<T, AiGatewayError> {
@@ -813,6 +876,8 @@ mod tests {
             purpose: AiPurpose::IntakeDraft,
             data_region: "cn-test-1".to_owned(),
             system_instruction: Some("Follow the approved template.".to_owned()),
+            output_schema: None,
+            output_schema_name: None,
             input: "A simulated intake answer".to_owned(),
             requested_output_tokens: 100,
             template_version: "intake-v1".to_owned(),
@@ -961,6 +1026,58 @@ mod tests {
                     assert_eq!(outbound.path, "/v1beta/models/test-model:generateContent");
                     assert!(outbound.body.get("systemInstruction").is_some());
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn structured_requests_use_native_schema_controls_when_supported() {
+        for protocol in [
+            ProviderProtocol::OpenAiChatCompletions,
+            ProviderProtocol::OpenAiResponses,
+            ProviderProtocol::GeminiGenerateContent,
+        ] {
+            let gateway = AiGateway::from_configurations(vec![provider("structured", protocol)])
+                .expect("fixture is valid");
+            let route = match gateway.route(&request()) {
+                GatewayDecision::Routed(route) => route,
+                GatewayDecision::Degraded { .. } => panic!("fixture should route"),
+            };
+            let mut structured = request();
+            structured.output_schema = Some(json!({
+                "type": "object",
+                "properties": { "answer": { "type": "string" } },
+                "required": ["answer"],
+                "additionalProperties": false
+            }));
+            structured.output_schema_name = Some("test_answer".to_owned());
+            let outbound = gateway
+                .build_provider_request(&route, &structured)
+                .expect("structured request should be serializable");
+            match protocol {
+                ProviderProtocol::OpenAiChatCompletions => {
+                    assert_eq!(outbound.body["response_format"]["type"], "json_schema");
+                    assert_eq!(
+                        outbound.body["response_format"]["json_schema"]["strict"],
+                        true
+                    );
+                }
+                ProviderProtocol::OpenAiResponses => {
+                    assert_eq!(outbound.body["text"]["format"]["type"], "json_schema");
+                    assert_eq!(outbound.body["text"]["format"]["strict"], true);
+                }
+                ProviderProtocol::GeminiGenerateContent => {
+                    assert_eq!(
+                        outbound.body["generationConfig"]["responseMimeType"],
+                        "application/json"
+                    );
+                    assert!(
+                        outbound.body["generationConfig"]
+                            .get("responseJsonSchema")
+                            .is_some()
+                    );
+                }
+                ProviderProtocol::AnthropicMessages => unreachable!(),
             }
         }
     }

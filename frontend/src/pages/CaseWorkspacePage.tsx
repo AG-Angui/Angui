@@ -17,6 +17,7 @@ import {
   applyForTask,
   createCasePlace,
   createClueDraft,
+  createArchiveDraft,
   createSummaryDraft,
   createCaseTask,
   getCaseMapView,
@@ -30,6 +31,9 @@ import {
   getCase,
   getCaseResourceConfiguration,
   listCaseClues,
+  listClueDrafts,
+  listSummaryDraftVersions,
+  diffSummaryDraftVersions,
   listCases,
   listCommandIntake,
   reviewClue,
@@ -64,6 +68,7 @@ import type {
   LocationPrecision,
   PublicClueSourceType,
   SummaryDraft,
+  SummaryDraftDiff,
   PlaceType,
   PlaceVisibility,
 } from "../api/cases";
@@ -2516,6 +2521,9 @@ function CaseCollaborationPanel({
   const [poiCategory, setPoiCategory] = useState("hospital");
   const [pois, setPois] = useState<CasePois | null>(null);
   const [summaryDraft, setSummaryDraft] = useState<SummaryDraft | null>(null);
+  const [summaryVersions, setSummaryVersions] = useState<SummaryDraft[]>([]);
+  const [summaryDiff, setSummaryDiff] = useState<SummaryDraftDiff | null>(null);
+  const [archiveNotice, setArchiveNotice] = useState("");
   const [summary, setSummary] = useState<CaseSummary | null>(null);
   const [summaryEdit, setSummaryEdit] = useState("");
   const [reviewReason, setReviewReason] = useState("");
@@ -2552,13 +2560,28 @@ function CaseCollaborationPanel({
       return;
     }
     try {
-      const [loadedSummary, latestDraft] = await Promise.all([
+      const [loadedSummary, latestDraft, versions] = await Promise.all([
         getCaseSummary(token, detail.id),
         getLatestSummaryDraft(token, detail.id),
+        listSummaryDraftVersions(token, detail.id),
       ]);
       setSummary(loadedSummary);
       setSummaryDraft(latestDraft);
       setSummaryEdit(latestDraft?.content ?? "");
+      setSummaryVersions(versions.items);
+      setSummaryDiff(null);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    }
+  }, [detail.id, isCommander, token]);
+
+  const loadClueDrafts = useCallback(async () => {
+    if (!token || !isCommander) {
+      setClueDrafts([]);
+      return;
+    }
+    try {
+      setClueDrafts(await listClueDrafts(token, detail.id));
     } catch (cause) {
       setError(messageFrom(cause));
     }
@@ -2571,13 +2594,17 @@ function CaseCollaborationPanel({
     setClueDrafts([]);
     setPois(null);
     setSummaryDraft(null);
+    setSummaryVersions([]);
+    setSummaryDiff(null);
+    setArchiveNotice("");
     setSummary(null);
     setSummaryEdit("");
     setReviewReason("");
     setError("");
     void loadPublicProgress();
     void loadSummary();
-  }, [detail.id, loadPublicProgress, loadSummary]);
+    void loadClueDrafts();
+  }, [detail.id, loadClueDrafts, loadPublicProgress, loadSummary]);
 
   async function run(key: string, action: () => Promise<void>) {
     setBusy(key);
@@ -2775,7 +2802,7 @@ function CaseCollaborationPanel({
                   text: clueDraftText,
                   source_type: "manual_report",
                 });
-                setClueDrafts(created);
+                setClueDrafts((current) => [...created, ...current]);
                 setClueDraftText("");
               })
             }
@@ -2911,7 +2938,8 @@ function CaseCollaborationPanel({
                         detail.id,
                         summaryEdit,
                       );
-                      setSummaryDraft(created);
+                        setSummaryDraft(created);
+                        setSummaryVersions((current) => [created, ...current]);
                     })
                   }
                 >
@@ -2981,6 +3009,132 @@ function CaseCollaborationPanel({
                   </div>
                 </>
               )}
+              {summaryDraft.status === "draft" && (
+                <>
+                  <Field label="提交审核理由" required>
+                    <Input
+                      value={reviewReason}
+                      maxLength={1000}
+                      onChange={(event) => setReviewReason(event.target.value)}
+                      fullWidth
+                    />
+                  </Field>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      isDisabled={!token || !reviewReason.trim() || busy === "summary-review"}
+                      onPress={() =>
+                        void run("summary-review", async () => {
+                          if (!token) return;
+                          const updated = await reviewSummaryDraft(
+                            token,
+                            detail.id,
+                            summaryDraft.id,
+                            { action: "submit", reason: reviewReason },
+                          );
+                          setSummaryDraft(updated);
+                          setSummaryVersions((current) => current.map((item) => item.id === updated.id ? updated : item));
+                        })
+                      }
+                    >
+                      提交审核
+                    </Button>
+                  </div>
+                </>
+              )}
+              {summaryDraft.status === "published" && (
+                <>
+                  <Field label="撤回理由" required>
+                    <Input
+                      value={reviewReason}
+                      maxLength={1000}
+                      onChange={(event) => setReviewReason(event.target.value)}
+                      fullWidth
+                    />
+                  </Field>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={!token || !reviewReason.trim() || busy === "summary-review"}
+                      onPress={() =>
+                        void run("summary-review", async () => {
+                          if (!token) return;
+                          const updated = await reviewSummaryDraft(
+                            token,
+                            detail.id,
+                            summaryDraft.id,
+                            { action: "withdraw", reason: reviewReason },
+                          );
+                          setSummaryDraft(updated);
+                          setSummaryVersions((current) => current.map((item) => item.id === updated.id ? updated : item));
+                        })
+                      }
+                    >
+                      撤回已发布摘要
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {summaryVersions.length > 1 && (
+            <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+              <h4 className="m-0 text-sm font-semibold text-slate-900">版本与差异</h4>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {summaryVersions.map((version) => (
+                  <Button
+                    key={version.id}
+                    size="sm"
+                    variant="ghost"
+                    isDisabled={!token || busy === "summary-diff"}
+                    onPress={() =>
+                      void run("summary-diff", async () => {
+                        if (!token) return;
+                        const previous = summaryVersions.find((item) => item.id !== version.id);
+                        if (!previous) return;
+                        setSummaryDraft(version);
+                        setSummaryEdit(version.content);
+                        setSummaryDiff(await diffSummaryDraftVersions(token, detail.id, previous.id, version.id));
+                      })
+                    }
+                  >
+                    v{version.version} · {statusLabels[version.status] ?? version.status}
+                  </Button>
+                ))}
+              </div>
+              {summaryDiff && (
+                <div className="mt-3 grid gap-3 text-xs leading-5 sm:grid-cols-2">
+                  <div><strong>新增</strong><p className="mb-0 whitespace-pre-wrap">{summaryDiff.added.join("\n") || "无"}</p></div>
+                  <div><strong>移除</strong><p className="mb-0 whitespace-pre-wrap">{summaryDiff.removed.join("\n") || "无"}</p></div>
+                </div>
+              )}
+            </div>
+          )}
+          {(detail.status === "resolved" || detail.status === "closed") && (
+            <div className="mt-3 rounded-md border border-violet-200 bg-violet-50 p-3">
+              <h4 className="m-0 text-sm font-semibold text-slate-900">案例整理候选</h4>
+              <p className="mb-0 mt-1 text-xs leading-5 text-slate-700">
+                仅使用已确认线索与已完成任务的最小化聚合信息生成草稿；不会自动进入学习库，仍须管理员完成脱敏与版本审核。
+              </p>
+              <div className="mt-2 flex justify-end">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  isDisabled={!token || busy === "archive-draft"}
+                  onPress={() =>
+                    void run("archive-draft", async () => {
+                      if (!token) return;
+                      const archive = await createArchiveDraft(token, detail.id);
+                      setArchiveNotice(`已创建案例整理草稿 v${archive.version}，等待管理员脱敏审核。`);
+                    })
+                  }
+                >
+                  创建案例整理草稿
+                </Button>
+              </div>
+              {archiveNotice && <p className="mb-0 mt-2 text-xs text-violet-800">{archiveNotice}</p>}
             </div>
           )}
         </div>
@@ -3006,6 +3160,10 @@ function ClueDraftReviewCard({
     action: "accept" | "reject";
     reason: string;
     candidate: ClueDraft["candidate"];
+    field_decisions: Record<
+      string,
+      { action: "accept" | "edit" | "clear"; value?: string | null; reason?: string | null }
+    >;
   }) => void;
 }) {
   const [reason, setReason] = useState("");
@@ -3039,6 +3197,16 @@ function ClueDraftReviewCard({
       <p className="mb-0 mt-2 text-xs text-slate-500">
         来源片段：{candidate.source_excerpt}
       </p>
+      {Object.entries(candidate.field_sources).length > 0 && (
+        <ul className="mb-0 mt-2 space-y-1 p-0 text-xs text-slate-500">
+          {Object.entries(candidate.field_sources).map(([field, source]) => (
+            <li key={field} className="list-none">
+              {field}：{source.excerpt ?? "未提供来源片段"}
+              {source.reference ? `（${source.reference}）` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
       {draft.review_status === "pending_review" ? (
         <>
           <Field label="时间候选">
@@ -3110,7 +3278,12 @@ function ClueDraftReviewCard({
               size="sm"
               variant="ghost"
               isDisabled={!reason.trim() || isBusy}
-              onPress={() => onReview({ action: "reject", reason, candidate })}
+              onPress={() => onReview({
+                action: "reject",
+                reason,
+                candidate,
+                field_decisions: fieldDecisions(draft.candidate, candidate, reason),
+              })}
             >
               拒绝候选
             </Button>
@@ -3118,7 +3291,12 @@ function ClueDraftReviewCard({
               size="sm"
               variant="secondary"
               isDisabled={!reason.trim() || isBusy}
-              onPress={() => onReview({ action: "accept", reason, candidate })}
+              onPress={() => onReview({
+                action: "accept",
+                reason,
+                candidate,
+                field_decisions: fieldDecisions(draft.candidate, candidate, reason),
+              })}
             >
               人工接受候选
             </Button>
@@ -3131,6 +3309,32 @@ function ClueDraftReviewCard({
       )}
     </div>
   );
+}
+
+function fieldDecisions(
+  original: ClueDraft["candidate"],
+  edited: ClueDraft["candidate"],
+  reason: string,
+) {
+  const scalarFields = ["content_summary", "occurred_at", "location_text", "source_text"] as const;
+  const decisions: Record<string, { action: "accept" | "edit" | "clear"; value?: string | null; reason?: string }> = {};
+  for (const field of scalarFields) {
+    const before = original[field];
+    const after = edited[field];
+    decisions[field] = before === after
+      ? { action: "accept", reason }
+      : after == null || after === ""
+        ? { action: "clear", reason }
+        : { action: "edit", value: after, reason };
+  }
+  const beforeActions = original.action_candidates.join("\n");
+  const afterActions = edited.action_candidates.join("\n");
+  decisions.action_candidates = beforeActions === afterActions
+    ? { action: "accept", reason }
+    : afterActions
+      ? { action: "edit", value: afterActions, reason }
+      : { action: "clear", reason };
+  return decisions;
 }
 
 function ReviewButton({

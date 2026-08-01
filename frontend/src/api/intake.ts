@@ -187,6 +187,14 @@ export interface IntakeAiInitialReviewResponse {
   ready_for_second_confirmation: boolean;
 }
 
+export interface IntakeAnswerRevision {
+  id: string;
+  field: string;
+  answer: string;
+  revision_kind: string;
+  created_at: string;
+}
+
 export function getIntakeAiFollowUp(
   token: string,
   sessionId: string,
@@ -235,6 +243,26 @@ export function acknowledgeIntakeAiInitialReview(
         confirmed_issue_ids: confirmedIssueIds,
       }),
     },
+    token,
+  );
+}
+
+export function listIntakeAnswerRevisions(
+  token: string,
+  sessionId: string,
+): Promise<IntakeAnswerRevision[]> {
+  return apiRequest(`/intake-sessions/${sessionId}/answer-revisions`, {}, token);
+}
+
+export function restoreIntakeAnswerRevision(
+  token: string,
+  sessionId: string,
+  field: string,
+  revisionId: string,
+): Promise<SubmitIntakeAnswerResponse> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/answers/${encodeURIComponent(field)}/restore`,
+    { method: "POST", body: JSON.stringify({ revision_id: revisionId }) },
     token,
   );
 }

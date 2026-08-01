@@ -326,3 +326,90 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     .await;
     assert_error(hidden, StatusCode::NOT_FOUND, "not_found").await;
 }
+
+#[actix_web::test]
+async fn clue_draft_queue_is_commander_only_and_survives_the_creation_response() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let app = crate::init_api_app!(&context);
+    let commander_token = context.token(COMMANDER).await;
+
+    let created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clue-drafts"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({
+                "text": "Fictional caller asks the team to verify the north gate.",
+                "source_type": "manual_report",
+                "raw_record_reference": "fictional-call-record-2"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let listed = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clue-drafts"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed: Value = test::read_body_json(listed).await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+    assert_eq!(listed[0]["raw_record_reference"], "fictional-call-record-2");
+    let draft_id = listed[0]["id"].as_str().expect("draft id");
+
+    let reviewed = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/cases/{case_id}/clue-drafts/{draft_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({
+                "action": "accept",
+                "reason": "fictional commander review",
+                "candidate": {
+                    "content_summary": "Verify the fictional north gate.",
+                    "occurred_at": null,
+                    "location_text": "Fictional north gate",
+                    "source_text": "Fictional caller",
+                    "action_candidates": ["Verify with the commander"],
+                    "missing_fields": ["occurred_at"],
+                    "source_excerpt": "Fictional caller asks the team to verify the north gate.",
+                    "field_sources": {}
+                },
+                "field_decisions": {
+                    "location_text": { "action": "edit", "value": "Fictional north gate", "reason": "normalized by commander" },
+                    "occurred_at": { "action": "clear", "reason": "no time in source" }
+                }
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(reviewed.status(), StatusCode::OK);
+    let reviewed: Value = test::read_body_json(reviewed).await;
+    assert_eq!(reviewed["review_status"], "accepted");
+    assert!(reviewed["promoted_clue_id"].as_str().is_some());
+
+    let forbidden = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/clue-drafts"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(VOLUNTEER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_error(forbidden, StatusCode::FORBIDDEN, "forbidden").await;
+}

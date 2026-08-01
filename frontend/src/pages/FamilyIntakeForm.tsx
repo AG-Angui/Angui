@@ -16,6 +16,8 @@ import {
   getIntakeAiInitialReview,
   getIntakeAiFollowUp,
   getIntakeDraft,
+  listIntakeAnswerRevisions,
+  restoreIntakeAnswerRevision,
   startIntakeAiInitialReview,
   submitIntakeAnswer,
 } from "../api/intake";
@@ -23,6 +25,7 @@ import type {
   ConfirmedIntakeProfile,
   IntakeAiInitialReviewResponse,
   IntakeAssessment,
+  IntakeAnswerRevision,
   IntakeDraft,
   IntakeDraftProfile,
   IntakeProfileDraftFieldMetadata,
@@ -151,6 +154,7 @@ export function FamilyIntakeForm({
     useState<IntakeAiInitialReviewResponse | null>(null);
   const [confirmedInitialReviewIssues, setConfirmedInitialReviewIssues] =
     useState<string[]>([]);
+  const [answerRevisions, setAnswerRevisions] = useState<IntakeAnswerRevision[]>([]);
   const [isReviewingBasicInformation, setIsReviewingBasicInformation] =
     useState(false);
   const [busyAction, setBusyAction] = useState<
@@ -185,6 +189,10 @@ export function FamilyIntakeForm({
         const nextDraft = await getIntakeDraft(token, sessionId);
         setDraft(nextDraft);
         setAssessments(nextDraft.assessments);
+        void Promise.resolve()
+          .then(() => listIntakeAnswerRevisions(token, sessionId))
+          .then(setAnswerRevisions)
+          .catch(() => setAnswerRevisions([]));
         if (initializeProfile)
           setProfile(profileFromDraft(nextDraft, basicInformationForProfile));
         return nextDraft;
@@ -433,6 +441,30 @@ export function FamilyIntakeForm({
     }
   }
 
+  async function restoreRevision(revision: IntakeAnswerRevision) {
+    if (!token || !session) return;
+    setBusyAction("replace");
+    setError("");
+    try {
+      const response = await restoreIntakeAnswerRevision(
+        token,
+        session.id,
+        revision.field,
+        revision.id,
+      );
+      const nextSession = sessionFromAnswerResponse(response);
+      setSession(nextSession);
+      setInitialReview(null);
+      setConfirmedInitialReviewIssues([]);
+      const refreshed = await loadDraft(nextSession.id, true, basicInformation);
+      if (refreshed) setProfile(profileFromDraft(refreshed, basicInformation));
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function startInitialReview() {
     if (!token || !session || !draft) return;
     if (draft.confirmation_blocked_reasons.length > 0) {
@@ -605,6 +637,23 @@ export function FamilyIntakeForm({
         {error && <Alert>{error}</Alert>}
         <AssessmentList items={displayedAssessments} />
         <DraftProfileReview draft={draft} onEditSource={openSourceEditor} />
+        {answerRevisions.length > 0 && !editSource && (
+          <section className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="answer-history-title">
+            <h3 id="answer-history-title" className="m-0 text-sm font-bold text-slate-950">问询修订历史</h3>
+            <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">恢复旧版本会使当前 AI 初审失效，系统会重新生成画像并要求再次初审。</p>
+            <ul className="mb-0 mt-3 space-y-2 p-0">
+              {answerRevisions.slice().reverse().slice(0, 12).map((revision) => (
+                <li key={revision.id} className="flex flex-col gap-2 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <strong className="text-xs text-slate-900">{questionLabels[revision.field] ?? revision.field} · {revision.revision_kind}</strong>
+                    <p className="mb-0 mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{revision.answer}</p>
+                  </div>
+                  <Button size="sm" variant="ghost" isDisabled={isBusy} onPress={() => void restoreRevision(revision)}>恢复此版本</Button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {draft.direction_hypotheses.length > 0 && (
           <section

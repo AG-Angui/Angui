@@ -1077,6 +1077,20 @@ paths:
 
   /api/cases/{case_id}/clue-drafts:
     parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: listClueDrafts
+      summary: Resume commander clue-draft review queue
+      description: Returns persisted structured-extraction drafts for the case so review can resume after a page refresh. It never promotes a draft or confirms a fact.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Persisted clue drafts, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ClueDraft" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     post:
       tags: [Cases]
       operationId: createClueDrafts
@@ -1172,6 +1186,41 @@ paths:
         "201": { description: Versioned internal summary draft, content: { application/json: { schema: { $ref: "#/components/schemas/SummaryDraft" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/summary-drafts/versions:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: listSummaryDraftVersions
+      summary: List commander-visible summary draft versions
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Summary draft history, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: "#/components/schemas/SummaryDraft" } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/cases/{case_id}/summary-drafts/{from_id}/diff/{to_id}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+      - { name: from_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: to_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Cases]
+      operationId: diffSummaryDraftVersions
+      summary: Compare two immutable summary draft versions
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Line-level summary draft difference, content: { application/json: { schema: { type: object, required: [from_version, to_version, added, removed], properties: { from_version: { type: integer }, to_version: { type: integer }, added: { type: array, items: { type: string } }, removed: { type: array, items: { type: string } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /api/cases/{case_id}/summary-drafts/{draft_id}/review:
@@ -1576,6 +1625,21 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/archive-drafts:
+    get:
+      tags: [Admin]
+      operationId: listAdminArchiveDrafts
+      summary: List controlled archive drafts awaiting or retaining administrator review
+      description: Admin capability only. Returns lifecycle metadata and controlled draft content; it does not expose source chats, exact trajectories, attachments, or unreviewed clues.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Controlled archive drafts, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ArchiveDraft" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /api/admin/archive-drafts/{draft_id}/deidentify:
     parameters:

@@ -37,6 +37,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 "/{case_id}/public-progress",
                 web::get().to(get_public_progress),
             )
+            .route("/{case_id}/clue-drafts", web::get().to(list_clue_drafts))
             .route("/{case_id}/clue-drafts", web::post().to(create_clue_drafts))
             .route(
                 "/{case_id}/clue-drafts/{draft_id}/review",
@@ -396,6 +397,17 @@ async fn create_clue_drafts(
             &state.ai_gateway,
         )
         .await?,
+    ))
+}
+
+async fn list_clue_drafts(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_clue_drafts(&state.db, &auth, &case_id)
+            .await?,
     ))
 }
 

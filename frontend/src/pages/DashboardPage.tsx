@@ -1,4 +1,4 @@
-import { Button, Card, Chip } from "@heroui/react";
+import { Button, Card, Chip, Input } from "@heroui/react";
 import {
   ClipboardCheck,
   FileSearch,
@@ -7,8 +7,15 @@ import {
   UsersRound,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getCase, listCases, listCommandIntake } from "../api/cases";
-import type { CaseDetail, CaseListItem, CommandIntakeCase } from "../api/cases";
+import {
+  deidentifyArchiveDraft,
+  getCase,
+  listAdminArchiveDrafts,
+  listCases,
+  listCommandIntake,
+  reviewArchiveDraft,
+} from "../api/cases";
+import type { ArchiveDraft, CaseDetail, CaseListItem, CommandIntakeCase } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import {
   EmptyState,
@@ -26,11 +33,13 @@ const caseStatusLabels: Record<string, string> = {
 export function DashboardPage() {
   const { token, user } = useAuth();
   const isCommander = user?.global_capabilities.includes("commander") ?? false;
+  const isAdmin = user?.global_capabilities.includes("admin") ?? false;
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [details, setDetails] = useState<CaseDetail[]>([]);
   const [pendingIntakeCases, setPendingIntakeCases] = useState<
     CommandIntakeCase[]
   >([]);
+  const [archiveDrafts, setArchiveDrafts] = useState<ArchiveDraft[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -39,9 +48,10 @@ export function DashboardPage() {
     setIsLoading(true);
     setError("");
     try {
-      const [items, intakeCases] = await Promise.all([
+      const [items, intakeCases, archives] = await Promise.all([
         listCases(token),
         isCommander ? listCommandIntake(token) : Promise.resolve([]),
+        isAdmin ? listAdminArchiveDrafts(token) : Promise.resolve([]),
       ]);
       const settledDetails = await Promise.allSettled(
         items.slice(0, 20).map((item) => getCase(token, item.id)),
@@ -53,6 +63,7 @@ export function DashboardPage() {
       setCases(items);
       setDetails(loaded);
       setPendingIntakeCases(intakeCases);
+      setArchiveDrafts(archives);
       if (loaded.length !== items.length) {
         setError("部分案件详情暂时不可用，统计数据可能不完整。");
       }
@@ -60,11 +71,12 @@ export function DashboardPage() {
       setCases([]);
       setDetails([]);
       setPendingIntakeCases([]);
+      setArchiveDrafts([]);
       setError(cause instanceof Error ? cause.message : "无法连接案件服务。");
     } finally {
       setIsLoading(false);
     }
-  }, [isCommander, token]);
+  }, [isAdmin, isCommander, token]);
 
   useEffect(() => {
     void loadDashboard();
@@ -216,6 +228,30 @@ export function DashboardPage() {
             ))}
           </section>
 
+          {isAdmin && (
+            <section className="mb-7 overflow-hidden border-y border-violet-200 bg-violet-50" aria-labelledby="archive-review-title">
+              <header className="border-b border-violet-200 px-5 py-4">
+                <span className="block text-xs font-semibold text-violet-700">管理员审核</span>
+                <h2 id="archive-review-title" className="m-0 mt-1 text-base font-bold text-slate-950">案例整理草稿</h2>
+                <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">必须先完成脱敏确认，才可发布为学习资源；撤回不影响原案件。</p>
+              </header>
+              {archiveDrafts.length === 0 ? (
+                <p className="m-0 px-5 py-4 text-sm text-slate-600">暂无需要审核的案例整理草稿。</p>
+              ) : (
+                <div className="grid gap-3 p-5 lg:grid-cols-2">
+                  {archiveDrafts.map((draft) => (
+                    <ArchiveReviewCard
+                      key={draft.id}
+                      draft={draft}
+                      token={token}
+                      onChanged={(updated) => setArchiveDrafts((current) => current.map((item) => item.id === updated.id ? updated : item))}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           <section
             className="overflow-hidden border-y border-slate-200 bg-white"
             aria-labelledby="case-status-title"
@@ -285,5 +321,63 @@ export function DashboardPage() {
         </>
       )}
     </div>
+  );
+}
+
+function ArchiveReviewCard({
+  draft,
+  token,
+  onChanged,
+}: {
+  draft: ArchiveDraft;
+  token: string | null;
+  onChanged: (draft: ArchiveDraft) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const action = async (run: () => Promise<ArchiveDraft>) => {
+    if (!token || !reason.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      onChanged(await run());
+      setReason("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "案例草稿审核失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <article className="rounded-md border border-violet-200 bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <strong className="text-sm text-slate-950">草稿 v{draft.version}</strong>
+        <Chip size="sm" variant="soft"><Chip.Label>{draft.status}</Chip.Label></Chip>
+      </div>
+      <p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{draft.content}</p>
+      <p className="mb-0 mt-2 text-xs text-slate-500">来源范围：{draft.source_scope.join("、")} · 脱敏：{draft.deidentification_status}</p>
+      {draft.status !== "rejected" && draft.status !== "withdrawn" && (
+        <>
+          <Input className="mt-3" aria-label={`案例草稿 ${draft.id} 审核理由`} value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            {draft.status === "draft" && (
+              <>
+                <Button size="sm" variant="ghost" isDisabled={busy || !reason.trim()} onPress={() => void action(() => deidentifyArchiveDraft(token!, draft.id, { outcome: "reject", reason }))}>拒绝脱敏</Button>
+                <Button size="sm" variant="secondary" isDisabled={busy || !reason.trim()} onPress={() => void action(() => deidentifyArchiveDraft(token!, draft.id, { outcome: "confirm", reason }))}>确认已脱敏</Button>
+              </>
+            )}
+            {draft.status === "pending_review" && (
+              <>
+                <Button size="sm" variant="ghost" isDisabled={busy || !reason.trim()} onPress={() => void action(() => reviewArchiveDraft(token!, draft.id, { action: "reject", reason }))}>驳回</Button>
+                <Button size="sm" variant="primary" isDisabled={busy || !reason.trim()} onPress={() => void action(() => reviewArchiveDraft(token!, draft.id, { action: "publish", reason }))}>审核发布</Button>
+              </>
+            )}
+            {draft.status === "published" && <Button size="sm" variant="ghost" isDisabled={busy || !reason.trim()} onPress={() => void action(() => reviewArchiveDraft(token!, draft.id, { action: "withdraw", reason }))}>撤回</Button>}
+          </div>
+        </>
+      )}
+      {error && <p className="mb-0 mt-2 text-xs text-red-700">{error}</p>}
+    </article>
   );
 }

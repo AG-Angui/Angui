@@ -391,6 +391,8 @@ pub async fn start_ai_initial_review(
         purpose: AiPurpose::IntakeDraft,
         data_region: "CN".to_owned(),
         system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family text. `field` must be one of the supplied family answer field names or `profile`. `source_fields` must name only supplied fields. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
+        output_schema: Some(initial_review_schema()),
+        output_schema_name: Some("intake_initial_review".to_owned()),
         input,
         requested_output_tokens: 700,
         template_version: "intake-initial-review-ai-v1".to_owned(),
@@ -591,6 +593,8 @@ pub async fn get_ai_follow_up(
         purpose: AiPurpose::IntakeDraft,
         data_region: "CN".to_owned(),
         system_instruction: Some("Return JSON only: {field,prompt,purpose,missing_fields,skippable}. Ask one optional factual follow-up for a listed missing field. Do not infer a location, diagnosis, action, or emergency conclusion.".to_owned()),
+        output_schema: Some(follow_up_schema()),
+        output_schema_name: Some("intake_follow_up".to_owned()),
         input,
         requested_output_tokens: 220,
         template_version: "intake-follow-up-ai-v1".to_owned(),
@@ -1454,6 +1458,46 @@ fn direction_hypotheses(
         uncertainty_notice: "This is an unverified direction candidate derived from family-provided draft answers. It is not a fact, task, or publication decision.".to_owned(),
         description: format!("Consider verifying reported frequent locations: {frequent_locations}"),
     }]
+}
+
+fn initial_review_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": { "type": "string" },
+                        "severity": { "type": "string", "enum": ["needs_confirmation", "warning"] },
+                        "evidence_summary": { "type": "string" },
+                        "clarification_question": { "type": "string" },
+                        "source_fields": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["field", "severity", "evidence_summary", "clarification_question", "source_fields"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["issues"],
+        "additionalProperties": false
+    })
+}
+
+fn follow_up_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "field": { "type": "string" },
+            "prompt": { "type": "string" },
+            "purpose": { "type": "string" },
+            "missing_fields": { "type": "array", "items": { "type": "string" } },
+            "skippable": { "type": "boolean" }
+        },
+        "required": ["field", "prompt", "purpose", "missing_fields", "skippable"],
+        "additionalProperties": false
+    })
 }
 
 fn now() -> String {

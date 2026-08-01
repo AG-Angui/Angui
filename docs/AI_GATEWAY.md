@@ -111,11 +111,15 @@ Before a provider can become a candidate, the Gateway checks all of the followin
 - emergency-disable state;
 - configured input and output limits.
 
-Candidates are ordered deterministically by priority, then weight, then provider ID. A gateway with no configured providers returns `rule_based / no_provider_configured`. When providers exist but none meet every policy requirement, it returns `manual_required / no_compliant_provider`. Automatic retry, circuit-breaking, and cross-provider failover are intentionally outside this component and belong to the later reliability issues.
+Candidates are ordered deterministically by priority, then weight, then provider ID. A gateway with no configured providers returns `rule_based / no_provider_configured`. When providers exist but none meet every policy requirement, it returns `manual_required / no_compliant_provider`.
+
+For a routed request, the Gateway makes at most two attempts against the selected provider. A structured request whose provider response is not valid JSON is treated as a failed attempt rather than being passed to a business service. If the selected provider has `allow_fallback: true`, all attempts fail, and another provider independently satisfies the same capability, data-level, purpose, residency, and limit policy, the Gateway tries the next eligible provider. Business writes occur only after execution returns, so these transport retries cannot create duplicate cases, clues, summaries, or archive records. Circuit breaking remains a deployment/observability concern and is not represented as persistent mutable Gateway state.
+
+`AiRequest` can carry a purpose-specific JSON Schema. The OpenAI Chat Completions and Responses adapters send strict named JSON-schema controls; Gemini sends `application/json` and its response JSON schema. Anthropic remains prompt-plus-server-validation because this adapter currently uses its text-message protocol rather than a tool-use response contract. All providers still receive server-side parsing and purpose-specific semantic validation before any draft is saved.
 
 ## Audit Boundary
 
-Each future execution is expected to persist the Gateway's `AiExecutionAudit` through `persist_execution_audit`. The record includes Provider ID, model, template version, input-scope reference, SHA-256 input hash, redaction-policy version, and task status. It never contains the raw request, response, health history, contact data, or precise locations.
+Each controlled execution persists the Gateway's `AiExecutionAudit` through `persist_execution_audit`. The record includes the selected Provider ID, model, template version, input-scope reference, SHA-256 input hash, redaction-policy version, and task status. It never contains the raw request, response, health history, contact data, or precise locations.
 
 The Gateway resolves provider endpoint and credential references only at its transport boundary, executes a policy-approved request with the configured timeout, and extracts response text for the supported protocols. Business services must still validate the response against their purpose-specific schema before saving a draft. Transport failures, non-success responses, empty responses, and invalid structured output must use the deterministic or manual fallback path.
 
@@ -130,6 +134,6 @@ The Gateway never allows an AI result to create a confirmed clue, publish a case
 
 ## Prompt Templates
 
-Approved system instructions are stored in the versioned `ai_prompt_templates` database table, not in provider environment variables or an MCP server. The common table is keyed by purpose, so it can serve `intake_next_question`, `intake_profile_draft`, `clue_draft`, `case_summary_draft`, `knowledge_answer`, and `case_archive_draft` without duplicating publication and audit rules for every module. The currently seeded intake template is reserved for the future model-backed path; the shipped intake flow is deterministic and rule-based.
+Approved system instructions are stored in the versioned `ai_prompt_templates` database table, not in provider environment variables or an MCP server. The common table is keyed by purpose, so it can serve `intake_next_question`, `intake_profile_draft`, `clue_draft`, `case_summary_draft`, `knowledge_answer`, and `case_archive_draft` without duplicating publication and audit rules for every module. The current controlled runtime paths retain their security-critical instructions and schema contracts in reviewed Rust code; the seed template is not yet a runtime override for those safety constraints. A future template-management path must compose published wording only with, never instead of, the non-bypassable server safety contract.
 
 The future management API must restrict draft, publication, and retirement actions to the appropriate administrative capability, create a corresponding audit event, preserve published versions for reproducibility, and prohibit direct client-supplied prompt text in normal business requests. MCP may be useful as a separate, authenticated operator integration, but it is not the runtime source of prompt configuration.
