@@ -22,6 +22,19 @@ pub enum ProviderProtocol {
     GeminiGenerateContent,
 }
 
+/// Reasoning budget requested from an OpenAI Responses-compatible provider.
+///
+/// This is intentionally provider-local: different fallback providers can use
+/// different reasoning budgets without sharing a global runtime setting.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiCapability {
@@ -65,6 +78,10 @@ pub struct ProviderConfig {
     pub input_limit_chars: usize,
     pub output_limit_tokens: usize,
     pub timeout_ms: u64,
+    /// Optional reasoning budget, supported only by OpenAI Responses-compatible
+    /// providers.
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub allow_fallback: bool,
     pub priority: u16,
     pub weight: u16,
@@ -335,11 +352,17 @@ impl AiProvider for ProtocolProvider {
                     name: "authorization",
                     value: credential,
                 }],
-                body: json!({
-                    "model": self.config.model,
-                    "input": openai_messages(instructions, request.input.as_str()),
-                    "max_output_tokens": max_tokens,
-                }),
+                body: {
+                    let mut body = json!({
+                        "model": self.config.model,
+                        "input": openai_messages(instructions, request.input.as_str()),
+                        "max_output_tokens": max_tokens,
+                    });
+                    if let Some(reasoning_effort) = self.config.reasoning_effort {
+                        body["reasoning"] = json!({ "effort": reasoning_effort });
+                    }
+                    body
+                },
             },
             ProviderProtocol::AnthropicMessages => ProviderHttpRequest {
                 method: "POST",
@@ -577,6 +600,13 @@ pub fn validate_provider_configurations(
                 config.id
             )));
         }
+        if config.reasoning_effort.is_some() && config.protocol != ProviderProtocol::OpenAiResponses
+        {
+            return Err(AiGatewayError::InvalidConfiguration(format!(
+                "provider {:?} may only configure reasoning_effort for open_ai_responses",
+                config.id
+            )));
+        }
         if config.allowed_data_levels.contains(&DataLevel::Sensitive)
             && config
                 .compliance_scopes
@@ -627,6 +657,7 @@ mod tests {
             input_limit_chars: 1_000,
             output_limit_tokens: 128,
             timeout_ms: 5_000,
+            reasoning_effort: None,
             allow_fallback: false,
             priority: 10,
             weight: 1,
@@ -719,6 +750,36 @@ mod tests {
             Err(AiGatewayError::InvalidConfiguration(message))
                 if message.contains("without a compliance scope")
         ));
+    }
+
+    #[test]
+    fn validation_rejects_reasoning_effort_for_non_responses_provider() {
+        let mut configuration = provider("chat", ProviderProtocol::OpenAiChatCompletions);
+        configuration.reasoning_effort = Some(ReasoningEffort::High);
+
+        assert!(matches!(
+            validate_provider_configurations(&[configuration]),
+            Err(AiGatewayError::InvalidConfiguration(message))
+                if message.contains("reasoning_effort")
+        ));
+    }
+
+    #[test]
+    fn responses_provider_serializes_configured_reasoning_effort() {
+        let mut configuration = provider("reasoning", ProviderProtocol::OpenAiResponses);
+        configuration.reasoning_effort = Some(ReasoningEffort::High);
+        let gateway = AiGateway::from_configurations(vec![configuration])
+            .expect("valid Responses configuration should be accepted");
+        let route = match gateway.route(&request()) {
+            GatewayDecision::Routed(route) => route,
+            GatewayDecision::Degraded { .. } => panic!("configured provider should route"),
+        };
+
+        let outbound = gateway
+            .build_provider_request(&route, &request())
+            .expect("provider request should be created");
+
+        assert_eq!(outbound.body["reasoning"]["effort"], "high");
     }
 
     #[test]

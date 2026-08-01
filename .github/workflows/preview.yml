@@ -94,6 +94,9 @@ jobs:
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
           PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
           AMAP_WEBSERVICE_KEY: ${{ secrets.AMAP_WEBSERVICE_KEY }}
+          ANGUI_AI_PROVIDERS_JSON: ${{ secrets.ANGUI_AI_PROVIDERS_JSON }}
+          ANGUI_PREVIEW_AI_ENDPOINT: ${{ secrets.ANGUI_PREVIEW_AI_ENDPOINT }}
+          ANGUI_PREVIEW_AI_KEY: ${{ secrets.ANGUI_PREVIEW_AI_KEY }}
           PREVIEW_REPOSITORY_DIR: ${{ github.workspace }}
           PREVIEW_BACKEND_DIR: ${{ github.workspace }}/.preview/backend
           PREVIEW_FRONTEND_DIR: ${{ github.workspace }}/.preview/frontend
