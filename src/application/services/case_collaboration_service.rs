@@ -680,6 +680,31 @@ pub async fn restore_archive_review_material(
             "only an administrator-approved deidentified material can be restored".to_owned(),
         ));
     }
+    let current_material_id = existing.review_material_id.clone().ok_or_else(|| {
+        ApiError::Conflict("archive draft is missing its selected review material".to_owned())
+    })?;
+    let mut cursor = Some(current_material_id);
+    let mut visited = std::collections::HashSet::new();
+    let mut source_is_in_chain = false;
+    while let Some(material_id) = cursor {
+        if !visited.insert(material_id.clone()) {
+            break;
+        }
+        if material_id == source.id {
+            source_is_in_chain = true;
+            break;
+        }
+        cursor = archive_review_materials::Entity::find_by_id(material_id)
+            .one(&transaction)
+            .await?
+            .and_then(|material| material.parent_material_id);
+    }
+    if !source_is_in_chain {
+        return Err(ApiError::Conflict(
+            "material version is not part of this archive draft's immutable review chain"
+                .to_owned(),
+        ));
+    }
     let next_material_version = archive_review_materials::Entity::find()
         .filter(archive_review_materials::Column::CaseId.eq(&existing.case_id))
         .order_by_desc(archive_review_materials::Column::Version)

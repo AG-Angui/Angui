@@ -585,3 +585,74 @@ async fn archive_review_material_versions_support_admin_list_diff_restore_and_rb
     assert!(!audit.metadata_json.unwrap_or_default().contains("line one"));
     assert_eq!(case_id, restored["case_id"]);
 }
+
+#[actix_web::test]
+async fn archive_material_restore_rejects_deidentified_versions_outside_the_draft_chain() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let commander_token = context.token(COMMANDER).await;
+    let admin_token = context.token(ADMIN).await;
+    let (case_id, first_draft_id) =
+        create_finished_archive_draft!(&context, &app, &commander_token);
+
+    let first_deidentified = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{first_draft_id}/deidentify"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({
+                "outcome": "confirm",
+                "reason": "first material confirmation",
+                "deidentified_material": "first approved material"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(first_deidentified.status(), StatusCode::OK);
+
+    let second_created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/archive-drafts"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(second_created.status(), StatusCode::CREATED);
+    let second_created: Value = test::read_body_json(second_created).await;
+    let second_draft_id = second_created["id"]
+        .as_str()
+        .expect("second archive draft id should be returned");
+
+    let second_deidentified = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{second_draft_id}/deidentify"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({
+                "outcome": "confirm",
+                "reason": "second material confirmation",
+                "deidentified_material": "second approved material"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(second_deidentified.status(), StatusCode::OK);
+
+    let cross_chain_restore = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{second_draft_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "must not restore another draft material" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(cross_chain_restore, StatusCode::CONFLICT, "conflict").await;
+}
