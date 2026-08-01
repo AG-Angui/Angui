@@ -45,6 +45,12 @@ services:
       # Optional server-only Web Service credential. It is intentionally not
       # present in the frontend, migration, or bootstrap containers.
       AMAP_WEBSERVICE_KEY: ${AMAP_WEBSERVICE_KEY:-}
+      # AI provider configuration and credentials are server-only. Provider
+      # JSON references these environment-variable names rather than embedding
+      # endpoint URLs or credentials.
+      ANGUI_AI_PROVIDERS_JSON: ${ANGUI_AI_PROVIDERS_JSON:-[]}
+      ANGUI_PREVIEW_AI_ENDPOINT: ${ANGUI_PREVIEW_AI_ENDPOINT:-}
+      ANGUI_PREVIEW_AI_KEY: ${ANGUI_PREVIEW_AI_KEY:-}
     volumes:
       - ./runtime/angui:/usr/local/bin/angui:ro
       - ./runtime/angui-admin:/usr/local/bin/angui-admin:ro

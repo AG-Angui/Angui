@@ -82,6 +82,25 @@ const afterBasicInformationSession: IntakeSession = {
   },
 };
 
+const phaseTwoSession: IntakeSession = {
+  ...collectingSession,
+  phase: "phase_two",
+  completed_phase_one_fields: [
+    "basic_information",
+    "health_status",
+    "behavior_habits",
+    "last_seen",
+  ],
+  missing_phase_one_fields: [],
+  phase_transition_ready: true,
+  missing_fields: ["frequent_locations"],
+  next_question: {
+    field: "frequent_locations",
+    prompt: "请补充常去地点。",
+    required: false,
+  },
+};
+
 const profileDraft: IntakeDraft = {
   status: "draft",
   source_scope: "family_provided intake answers from this session only",
@@ -352,6 +371,97 @@ describe("FamilyIntakeForm", () => {
         },
       ),
     );
+  });
+
+  it("returns to basic information from phase two without losing the clue draft", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({
+        session: phaseTwoSession,
+        answer: "北门附近有目击信息。",
+        basicInformation: {
+          name: "王女士",
+          gender: "女",
+          age: "72",
+          height: "158",
+          appearance: "短发，戴眼镜",
+        },
+      }),
+    );
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(phaseTwoSession));
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "常去地点" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "基本情况（编辑）" }),
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue("王女士")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "姓名或称呼" }), {
+      target: { value: "王女士（已更正）" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "保存更正并返回补充线索" }),
+    );
+
+    await waitFor(() =>
+      expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        expect.objectContaining({
+          field: "basic_information",
+          answer: expect.stringContaining("王女士（已更正）"),
+          replace: true,
+        }),
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "常去地点" }),
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue("北门附近有目击信息。")).toBeInTheDocument();
+  });
+
+  it("uses Chinese default prompts when an existing session still returns the old seed copy", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({
+        session: {
+          ...phaseTwoSession,
+          next_question: {
+            field: "follow_up_clues",
+            prompt: "Is there later information or a lead that still needs human verification?",
+            required: false,
+          },
+        },
+        answer: "",
+        basicInformation: {
+          name: "",
+          gender: "",
+          age: "",
+          height: "",
+          appearance: "",
+        },
+      }),
+    );
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(await screen.findByText("是否有之后获得、但仍需要人工核实的信息或线索？")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Is there later information or a lead that still needs human verification?"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows field-level provenance and sends a replacement when the family corrects a draft answer", async () => {

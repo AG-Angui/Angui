@@ -135,7 +135,7 @@ export function ProfilePage() {
               }
             >
               <option value="zh-CN">简体中文</option>
-              <option value="en-US">English (US)</option>
+              <option value="en-US">英语（美国）</option>
             </select>
           </label>
           <label className="flex min-h-10 items-center gap-2 self-end text-sm text-slate-700">

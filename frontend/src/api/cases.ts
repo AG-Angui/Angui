@@ -71,6 +71,7 @@ export interface ClueTimelineQuery {
   page_size?: number;
   status?: ClueStatus;
   source_type?: ClueSourceType;
+  q?: string;
   sort?: "created_at" | "occurred_at";
   order?: "asc" | "desc";
 }

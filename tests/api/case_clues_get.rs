@@ -162,6 +162,23 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
         "field_report"
     );
 
+    let searched = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/cases/{case_id}/clues?source_type=field_report&q=FICTIONAL%20FIELD"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    let searched_body: Value = test::read_body_json(searched).await;
+    assert_eq!(searched_body["total"], 1);
+    assert_eq!(
+        searched_body["items"][0]["content"],
+        "A fictional field report for source filtering."
+    );
+
     let unavailable = test::call_service(
         &app,
         test::TestRequest::get()
@@ -185,6 +202,7 @@ async fn get_case_clues_rejects_invalid_whitelisted_query_values() {
         "page_size=101",
         "status=unreviewed",
         "source_type=untrusted_client_value",
+        "q=",
         "sort=status",
         "order=sideways",
         "unexpected=value",

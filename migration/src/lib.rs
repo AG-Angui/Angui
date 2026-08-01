@@ -31,6 +31,7 @@ mod m0028_create_task_operation_idempotency;
 mod m0029_add_task_operation_request_fingerprint;
 mod m0030_allow_multiple_task_volunteers;
 mod m0031_create_task_applications;
+mod m0032_translate_default_intake_questions;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -71,6 +72,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0029_add_task_operation_request_fingerprint::Migration),
             Box::new(m0030_allow_multiple_task_volunteers::Migration),
             Box::new(m0031_create_task_applications::Migration),
+            Box::new(m0032_translate_default_intake_questions::Migration),
         ]
     }
 }
@@ -369,6 +371,37 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[tokio::test]
+    async fn sqlite_default_intake_prompt_translation_rolls_back_and_reapplies() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+
+        Migrator::up(&database, None)
+            .await
+            .expect("migrations through the prompt translation should succeed");
+        assert_eq!(
+            intake_question_prompt(&database, "intake-q-0209").await,
+            "是否有之后获得、但仍需要人工核实的信息或线索？"
+        );
+
+        Migrator::down(&database, Some(1))
+            .await
+            .expect("prompt translation rollback should succeed");
+        assert_eq!(
+            intake_question_prompt(&database, "intake-q-0209").await,
+            "Is there later information or a lead that still needs human verification?"
+        );
+
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("prompt translation should reapply after rollback");
+        assert_eq!(
+            intake_question_prompt(&database, "intake-q-0209").await,
+            "是否有之后获得、但仍需要人工核实的信息或线索？"
+        );
     }
 
     #[tokio::test]
@@ -836,6 +869,20 @@ mod tests {
             ))
             .await
             .expect("test member and intake session should be stored");
+    }
+
+    async fn intake_question_prompt(database: &impl ConnectionTrait, id: &str) -> String {
+        database
+            .query_one(Statement::from_sql_and_values(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT prompt FROM intake_question_definitions WHERE id = ?",
+                [id.into()],
+            ))
+            .await
+            .expect("intake question prompt query should succeed")
+            .expect("seeded intake question should exist")
+            .try_get::<String>("", "prompt")
+            .expect("seeded intake question should include a prompt")
     }
 
     fn task_insert_sql(id: &str, case_id: &str) -> String {

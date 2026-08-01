@@ -579,6 +579,14 @@ pub async fn list_clues(
             )
         })
         .collect();
+    let visible_clues: Vec<_> = if let Some(query) = &query.q {
+        visible_clues
+            .into_iter()
+            .filter(|clue| clue_matches_query(clue, query))
+            .collect()
+    } else {
+        visible_clues
+    };
     let total = u64::try_from(visible_clues.len()).map_err(|_| ApiError::Internal)?;
     let start = query.offset()?;
     let end = start
@@ -722,8 +730,24 @@ struct ValidatedClueTimelineQuery {
     page_size: u64,
     status: Option<String>,
     source_type: Option<String>,
+    q: Option<String>,
     sort: String,
     order: Order,
+}
+
+fn clue_matches_query(clue: &ClueResponse, query: &str) -> bool {
+    let normalized_query = query.to_lowercase();
+    [
+        clue.content.as_str(),
+        clue.source.as_str(),
+        clue.source_type.as_str(),
+        clue.status.as_str(),
+        clue.location_text.as_deref().unwrap_or_default(),
+        clue.reported_at.as_str(),
+        clue.occurred_at.as_deref().unwrap_or_default(),
+    ]
+    .into_iter()
+    .any(|value| value.to_lowercase().contains(&normalized_query))
 }
 
 impl ValidatedClueTimelineQuery {
@@ -774,6 +798,14 @@ impl TryFrom<ClueTimelineQuery> for ValidatedClueTimelineQuery {
                 "source_type is unsupported".to_owned(),
             ));
         }
+        let q = value.q.map(|query| query.trim().to_owned());
+        if q.as_deref()
+            .is_some_and(|query| query.is_empty() || query.chars().count() > 200)
+        {
+            return Err(ApiError::Validation(
+                "q must be between 1 and 200 characters".to_owned(),
+            ));
+        }
         let sort = value
             .sort
             .unwrap_or_else(|| "created_at".to_owned())
@@ -798,6 +830,7 @@ impl TryFrom<ClueTimelineQuery> for ValidatedClueTimelineQuery {
             page_size,
             status,
             source_type,
+            q,
             sort,
             order,
         })

@@ -33,6 +33,7 @@ The adapter builds an `http::Request<serde_json::Value>` at the transport bounda
     "input_limit_chars": 4000,
     "output_limit_tokens": 600,
     "timeout_ms": 8000,
+    "reasoning_effort": "high",
     "allow_fallback": false,
     "priority": 100,
     "weight": 1,
@@ -46,7 +47,58 @@ The adapter builds an `http::Request<serde_json::Value>` at the transport bounda
 
 This example intentionally contains neither a production URL nor a credential. `endpoint_env` and `credential_env` must be uppercase environment-variable names. Unknown properties, including `api_key`, `secret`, and direct URLs, are rejected by the configuration schema.
 
+`reasoning_effort` is optional and applies only to `open_ai_responses`. Its valid values are `low`, `medium`, `high`, and `xhigh`; when omitted, no reasoning budget is sent and the provider's default applies. A provider using any other protocol with this field is rejected during startup rather than silently ignoring the setting.
+
 Providers that permit `sensitive` data must declare at least one non-empty `compliance_scopes` value. Empty model identifiers, zero timeouts, empty data policies, duplicate IDs, zero limits, and zero weights are also rejected at startup.
+
+### Capability and Policy Values
+
+`capabilities`, `allowed_data_levels`, and `allowed_purposes` are arrays of exact `snake_case` enum values. The gateway rejects unknown values during startup, and a provider is eligible only when all three arrays authorize the request.
+
+| `capabilities` value | Permitted model capability |
+| --- | --- |
+| `inquiry` | Guided follow-up questions for an intake |
+| `structured_extraction` | Candidate field extraction from authorized records |
+| `case_summary` | Case-summary draft generation |
+| `knowledge_answer` | Answer generation for a future authorized knowledge-retrieval flow |
+| `case_organization` | Case-archive and retrospective organization drafts |
+
+| `allowed_data_levels` value | Maximum data classification the provider may receive |
+| --- | --- |
+| `public` | Public information |
+| `collaborative` | Case collaboration information shared with authorized participants |
+| `internal` | Internal case information restricted to authorized staff |
+| `sensitive` | Sensitive information; requires at least one non-empty `compliance_scopes` value |
+
+| `allowed_purposes` value | Business purpose |
+| --- | --- |
+| `intake_draft` | Intake follow-up and profile-draft assistance |
+| `clue_draft` | Structured clue-draft assistance |
+| `case_summary_draft` | Case-summary draft assistance |
+| `knowledge_answer` | Future knowledge-answer assistance |
+| `case_archive_draft` | Case archive and retrospective-draft assistance |
+
+Purpose values are routing-policy values, not prompt-template names. A purpose can use more than one versioned prompt template; for example, `intake_draft` can use separate templates for a next question and a profile draft.
+
+### Compliance Scope Naming
+
+`compliance_scopes` should contain stable approval identifiers rather than free-form descriptions, credentials, URLs, or personal information. The naming convention is:
+
+```text
+<jurisdiction>-<data-class>-<control-or-approval>-v<version>
+```
+
+For the preview provider configuration, the initial identifiers are:
+
+| Scope ID | Required approval or control evidence |
+| --- | --- |
+| `cn-sensitive-ai-dpia-v1` | Approved privacy and security impact assessment for sensitive AI processing in China |
+| `cn-sensitive-provider-dpa-v1` | Confirmed provider data-processing agreement |
+| `cn-sensitive-no-training-v1` | Confirmed provider commitment not to use submitted data for model training |
+| `cn-sensitive-retention-30d-v1` | Confirmed provider retention and deletion policy with a 30-day maximum retention period |
+| `cn-sensitive-cn-residency-v1` | Confirmed China data-residency and processing arrangement |
+
+These identifiers are governance references. The current gateway only verifies that at least one non-empty scope is present when a provider permits `sensitive` data; it does not yet validate the identifiers against a registry, expiry date, provider agreement, or request-level authorization. Those controls must be implemented before using sensitive data in a real deployment.
 
 ## Routing and Degradation
 

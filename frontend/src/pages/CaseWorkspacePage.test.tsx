@@ -1,13 +1,28 @@
 import {
   act,
   fireEvent,
-  render,
+  render as renderUi,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { MemoryRouter, Route, Routes } from "react-router";
 import type { CaseDetail, CaseRole, CaseStatus, Clue } from "../api/cases";
 import { CaseWorkspacePage } from "./CaseWorkspacePage";
+
+function render(ui: ReactElement) {
+  const wrapped = (nextUi: ReactElement) => (
+    <MemoryRouter initialEntries={["/command/cases/case-command"]}>
+      <Routes>
+        <Route path="/command/cases/:caseId" element={nextUi} />
+        <Route path="*" element={nextUi} />
+      </Routes>
+    </MemoryRouter>
+  );
+  const result = renderUi(wrapped(ui));
+  return { ...result, rerender: (nextUi: ReactElement) => result.rerender(wrapped(nextUi)) };
+}
 
 const mocked = vi.hoisted(() => ({
   auth: { token: "test-session" as string | null },
@@ -284,6 +299,7 @@ describe("CaseWorkspacePage", () => {
     expect(
       await screen.findByRole("heading", { name: "指挥工作台" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("权限：指挥人员")).toBeInTheDocument();
     const taskHeading = screen.getByRole("heading", { name: "任务看板" });
     const clueHeading = screen.getByRole("heading", { name: "线索" });
     expect(taskHeading.compareDocumentPosition(clueHeading)).toBe(
@@ -315,7 +331,13 @@ describe("CaseWorkspacePage", () => {
       detail("pending-case", "Accepted case", "commander"),
     );
 
-    render(<CaseWorkspacePage mode="commander" />);
+    renderUi(
+      <MemoryRouter initialEntries={["/command"]}>
+        <Routes>
+          <Route path="/command" element={<CaseWorkspacePage mode="commander" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByText("AG-PENDING")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "受理案件" }));
@@ -377,6 +399,19 @@ describe("CaseWorkspacePage", () => {
 
     render(<CaseWorkspacePage mode="commander" />);
 
+    expect(await screen.findByRole("navigation", { name: "案件详情导航" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回案件列表" })).toHaveAttribute(
+      "href",
+      "/command",
+    );
+    expect(screen.getByRole("link", { name: "任务与审核" })).toHaveAttribute(
+      "href",
+      "#case-tasks",
+    );
+    expect(screen.getByRole("link", { name: "态势与线索" })).toHaveAttribute(
+      "href",
+      "#case-clues",
+    );
     expect(await screen.findByText("Fictional market")).toBeInTheDocument();
     expect(screen.getByText("North gate, fictional park")).toBeInTheDocument();
     expect(screen.getByText("仅文字地点")).toBeInTheDocument();
@@ -845,6 +880,21 @@ describe("CaseWorkspacePage", () => {
     fireEvent.change(screen.getByLabelText("审核理由"), {
       target: { value: "Reviewed against the fictional record." },
     });
+    fireEvent.change(screen.getByLabelText("搜索线索"), {
+      target: { value: "field observation" },
+    });
+    await waitFor(() =>
+      expect(mocked.listCaseClues).toHaveBeenLastCalledWith(
+        "test-session",
+        "case-command",
+        expect.objectContaining({
+          source_type: "field_report",
+          q: "field observation",
+          page: 1,
+        }),
+      ),
+    );
+    await screen.findByLabelText("审核理由");
     const reviewTrigger = screen.getByRole("button", { name: "确认" });
     reviewTrigger.focus();
     fireEvent.click(reviewTrigger);

@@ -10,6 +10,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router";
 import {
   addCaseMember,
   acceptCommandCase,
@@ -82,6 +83,7 @@ type ReviewDraft = {
 type ClueQueueFilters = {
   status: ClueStatus | "";
   sourceType: ClueSourceType | "";
+  query: string;
   sort: "created_at" | "occurred_at";
   order: "asc" | "desc";
   page: number;
@@ -89,6 +91,7 @@ type ClueQueueFilters = {
 const defaultClueQueueFilters: ClueQueueFilters = {
   status: "pending_review",
   sourceType: "",
+  query: "",
   sort: "created_at",
   order: "desc",
   page: 1,
@@ -115,6 +118,12 @@ const statusLabels: Record<string, string> = {
   insufficient_information: "信息不足",
 };
 
+const caseRoleLabels: Record<CaseRole, string> = {
+  family: "家属",
+  commander: "指挥人员",
+  volunteer: "志愿者",
+};
+
 const placeTypeLabels: Record<string, string> = {
   frequent: "常去地点",
   key_location: "关键地点",
@@ -126,6 +135,8 @@ const placeTypeLabels: Record<string, string> = {
 
 export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   const { token, user } = useAuth();
+  const navigate = useNavigate();
+  const { caseId: routeCaseId } = useParams();
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CaseDetail | null>(null);
@@ -148,7 +159,9 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
         const items = await listCases(token);
         setCases(items);
         setSelectedId((currentId) => {
-          const nextId = preferredId ?? currentId ?? items[0]?.id ?? null;
+          const nextId =
+            preferredId ??
+            (mode === "commander" ? routeCaseId ?? null : currentId ?? items[0]?.id ?? null);
           if (!nextId) setDetail(null);
           return nextId;
         });
@@ -158,7 +171,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
         setIsLoading(false);
       }
     },
-    [token],
+    [mode, routeCaseId, token],
   );
 
   const loadDetail = useCallback(
@@ -194,6 +207,10 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   }, [loadCases]);
 
   useEffect(() => {
+    if (mode === "commander") setSelectedId(routeCaseId ?? null);
+  }, [mode, routeCaseId]);
+
+  useEffect(() => {
     if (selectedId) {
       void loadDetail(selectedId);
       return;
@@ -213,6 +230,61 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   );
   const copy = workspaceCopy[mode];
   const canCreateCase = user?.account_type === "member";
+  const isCommandCaseDetail = mode === "commander" && Boolean(routeCaseId);
+
+  if (isCommandCaseDetail) {
+    return (
+      <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
+        <div className="grid gap-6 lg:grid-cols-[248px_minmax(0,1fr)]">
+          <aside className="lg:sticky lg:top-6 lg:self-start">
+            <nav className="border border-slate-200 bg-white p-4" aria-label="案件详情导航">
+              <Link className="text-sm font-medium text-brand-700 hover:underline" to="/command">
+                返回案件列表
+              </Link>
+              <div className="mt-5 border-y border-slate-200 py-4">
+                <span className="block text-xs text-slate-500">当前位置</span>
+                <strong className="mt-1 block text-sm text-slate-950">
+                  {detail?.elder_profile.display_name ?? "正在加载案件"}
+                </strong>
+                <span className="mt-1 block text-xs text-slate-500">
+                  {detail?.case_code ?? routeCaseId}
+                </span>
+                {detail && (
+                  <span className="mt-2 inline-block text-xs font-medium text-slate-700">
+                    {statusLabels[detail.status]}
+                  </span>
+                )}
+              </div>
+              <div className="mt-4 grid gap-1 text-sm">
+                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-tasks">任务与审核</a>
+                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-clues">态势与线索</a>
+                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-profile">案件资料</a>
+                <a className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700" href="#case-members">协作与成员</a>
+              </div>
+            </nav>
+          </aside>
+          <main id="case-detail-content" className="min-w-0 border border-slate-200 bg-white">
+            {isDetailLoading ? (
+              <LoadingState label="正在加载案件详情" />
+            ) : detailError ? (
+              <ErrorState message={detailError} onRetry={() => selectedId && void loadDetail(selectedId)} />
+            ) : detail && resourceConfiguration ? (
+              <CaseDetailView
+                detail={detail}
+                resourceConfiguration={resourceConfiguration}
+                pendingCount={pendingCount}
+                onChanged={async (message) => {
+                  setNotice(message);
+                  await loadDetail(detail.id);
+                  await loadCases(detail.id);
+                }}
+              />
+            ) : null}
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
@@ -268,7 +340,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
         />
       )}
 
-      <div className="mt-5 grid min-h-[560px] overflow-hidden border-y border-slate-200 bg-white lg:grid-cols-[310px_minmax(0,1fr)]">
+      <div className={`mt-5 min-h-[560px] overflow-hidden border-y border-slate-200 bg-white ${mode === "commander" ? "" : "grid lg:grid-cols-[310px_minmax(0,1fr)]"}`}>
         <section
           className="border-b border-slate-200 lg:border-r lg:border-b-0"
           aria-label="案件列表"
@@ -294,7 +366,13 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                 <button
                   type="button"
                   key={item.id}
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() => {
+                    if (mode === "commander") {
+                      navigate(`/command/cases/${item.id}`);
+                      return;
+                    }
+                    setSelectedId(item.id);
+                  }}
                   aria-pressed={selectedId === item.id}
                   className={`flex min-h-20 w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
                     selectedId === item.id ? "bg-brand-50" : "hover:bg-slate-50"
@@ -309,6 +387,9 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                         <Chip.Label>{statusLabels[item.status]}</Chip.Label>
                       </Chip>
                     </div>
+                    <span className="mt-1 block text-xs text-slate-500">
+                      权限：{caseRoleLabels[item.access_role]}
+                    </span>
                     <span className="mt-1 block truncate text-xs text-slate-500">
                       {item.case_code}
                     </span>
@@ -323,7 +404,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
           )}
         </section>
 
-        <section className="min-w-0">
+        {mode !== "commander" && <section className="min-w-0">
           {isDetailLoading ? (
             <LoadingState label="正在加载案件详情" />
           ) : detailError ? (
@@ -347,7 +428,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
               <EmptyState icon={FileSearch} title="选择一个案件查看详情" />
             </div>
           )}
-        </section>
+        </section>}
       </div>
     </div>
   );
@@ -451,6 +532,7 @@ function CaseDetailView({
         page_size: 25,
         status: queueFilters.status || undefined,
         source_type: queueFilters.sourceType || undefined,
+        q: queueFilters.query.trim() || undefined,
         sort: queueFilters.sort,
         order: queueFilters.order,
       });
@@ -534,7 +616,7 @@ function CaseDetailView({
             </span>
           </div>
           <span className="text-xs text-slate-500">
-            权限：{detail.access_role}
+            权限：{caseRoleLabels[detail.access_role]}
           </span>
         </div>
       </header>
@@ -623,7 +705,7 @@ function CaseDetailView({
       )}
 
       {(isCommander || detail.access_role === "family") && (
-        <details className="border-b border-slate-200 bg-slate-50">
+        <details id="case-members" className="border-b border-slate-200 bg-slate-50">
           <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 sm:px-6">
             案件状态与成员管理
           </summary>
@@ -752,10 +834,26 @@ function CaseDetailView({
         </div>
 
         {isCommander && (
-          <fieldset className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4">
+          <fieldset className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-5">
             <legend className="px-1 text-sm font-semibold text-slate-800">
               筛选与排序
             </legend>
+            <Field label="搜索线索">
+              <Input
+                aria-label="搜索线索"
+                value={queueFilters.query}
+                maxLength={200}
+                placeholder="内容、来源、地点或状态"
+                onChange={(event) =>
+                  setQueueFilters((current) => ({
+                    ...current,
+                    query: event.target.value,
+                    page: 1,
+                  }))
+                }
+                fullWidth
+              />
+            </Field>
             <Field label="审核状态">
               <select
                 aria-label="审核状态筛选"
@@ -799,7 +897,7 @@ function CaseDetailView({
                 <option value="manual_report">人工上报</option>
                 <option value="field_report">现场反馈</option>
                 <option value="chat_draft">聊天整理草稿</option>
-                <option value="ai_draft">AI 字段草稿</option>
+                <option value="ai_draft">智能整理草稿</option>
               </select>
             </Field>
             <Field label="时间字段">
@@ -868,7 +966,7 @@ function CaseDetailView({
                   {clue.source_type !== "manual_report" && (
                     <span className="text-xs font-medium text-amber-700">
                       {clue.source_type === "ai_draft"
-                        ? "AI 字段草稿"
+                        ? "智能整理草稿"
                         : clue.source_type === "chat_draft"
                           ? "聊天整理草稿"
                           : "现场反馈"}
@@ -1764,6 +1862,7 @@ function TaskBoard({
       className="border-b border-slate-200 px-5 py-5 sm:px-6"
       aria-label="任务看板"
     >
+      <span id="case-tasks" aria-hidden="true" />
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="m-0 text-base font-bold text-slate-950">任务看板</h3>
