@@ -460,6 +460,11 @@ fn archive_review_openapi_contract_requires_admin_and_manual_deidentification() 
             );
         }
     }
+    assert!(
+        operation("/api/admin/archive-drafts/{draft_id}/review-materials/diff/{from_version}/{to_version}:\n")
+            .contains("\"400\": { $ref: \"#/components/responses/ValidationError\" }"),
+        "the material diff contract must document version validation failures"
+    );
     assert_schema_contains(
         "DeidentifyArchiveDraftRequest",
         &[

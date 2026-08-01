@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardPage } from "./DashboardPage";
 
 const mocked = vi.hoisted(() => ({
+  deidentifyArchiveDraft: vi.fn(),
+  reviewArchiveDraft: vi.fn(),
   getCase: vi.fn(),
   listAdminArchiveDrafts: vi.fn(),
   listArchiveReviewMaterials: vi.fn(),
@@ -26,6 +28,9 @@ vi.mock("../auth/useAuth", () => ({
   }),
 }));
 vi.mock("../api/cases", () => ({
+  deidentifyArchiveDraft: (...args: unknown[]) =>
+    mocked.deidentifyArchiveDraft(...args),
+  reviewArchiveDraft: (...args: unknown[]) => mocked.reviewArchiveDraft(...args),
   getCase: (...args: unknown[]) => mocked.getCase(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
   listCommandIntake: (...args: unknown[]) => mocked.listCommandIntake(...args),
@@ -45,6 +50,8 @@ describe("DashboardPage", () => {
   beforeEach(() => {
     mocked.globalCapabilities = [];
     mocked.listCases.mockResolvedValue([]);
+    mocked.deidentifyArchiveDraft.mockResolvedValue({});
+    mocked.reviewArchiveDraft.mockResolvedValue({});
     mocked.listCommandIntake.mockResolvedValue([]);
     mocked.listAdminArchiveDrafts.mockResolvedValue([]);
     mocked.listArchiveReviewMaterials.mockResolvedValue([]);
@@ -130,7 +137,7 @@ describe("DashboardPage", () => {
         updated_at: "2026-07-25T08:00:00Z",
       },
     ]);
-    mocked.listArchiveReviewMaterials.mockResolvedValue([
+    mocked.listArchiveReviewMaterials.mockResolvedValueOnce([
       {
         id: "material-2",
         case_id: "case-1",
@@ -145,6 +152,53 @@ describe("DashboardPage", () => {
         review_reason: "reviewed",
         created_at: "2026-07-25T08:00:00Z",
         selected_for_ai: true,
+      },
+      {
+        id: "material-1",
+        case_id: "case-1",
+        version: 1,
+        parent_material_id: null,
+        content: "Earlier approved material",
+        source_scope: ["confirmed_clue_review_material"],
+        status: "deidentified",
+        created_by_user_id: "admin-1",
+        reviewed_by_user_id: "admin-1",
+        reviewed_at: "2026-07-24T08:00:00Z",
+        review_reason: "reviewed",
+        created_at: "2026-07-24T08:00:00Z",
+        selected_for_ai: false,
+      },
+    ]);
+    mocked.listArchiveReviewMaterials.mockResolvedValueOnce([
+      {
+        id: "material-3",
+        case_id: "case-1",
+        version: 3,
+        parent_material_id: "material-1",
+        content: "Restored approved material",
+        source_scope: ["confirmed_clue_review_material"],
+        status: "deidentified",
+        created_by_user_id: "admin-1",
+        reviewed_by_user_id: "admin-1",
+        reviewed_at: "2026-07-25T09:00:00Z",
+        review_reason: "restored",
+        created_at: "2026-07-25T09:00:00Z",
+        selected_for_ai: true,
+      },
+      {
+        id: "material-2",
+        case_id: "case-1",
+        version: 2,
+        parent_material_id: "material-1",
+        content: "Approved de-identified material",
+        source_scope: ["confirmed_clue_review_material"],
+        status: "deidentified",
+        created_by_user_id: "admin-1",
+        reviewed_by_user_id: "admin-1",
+        reviewed_at: "2026-07-25T08:00:00Z",
+        review_reason: "reviewed",
+        created_at: "2026-07-25T08:00:00Z",
+        selected_for_ai: false,
       },
       {
         id: "material-1",
@@ -189,15 +243,15 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
 
-    expect(await screen.findByText("Review material versions")).toBeInTheDocument();
+    expect(await screen.findByText("审核材料版本")).toBeInTheDocument();
     expect(
       await screen.findByText("Approved de-identified material"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/selected for AI/)).toBeInTheDocument();
+    expect(screen.getByText(/当前 AI 输入/)).toBeInTheDocument();
     expect(mocked.listArchiveReviewMaterials).toHaveBeenCalledWith("test-session", "archive-1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Compare with first version" }));
-    expect(await screen.findByText("Diff v1 to v2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "与最早版本比较" }));
+    expect(await screen.findByText("差异：v1 与 v2")).toBeInTheDocument();
     expect(mocked.diffArchiveReviewMaterials).toHaveBeenCalledWith(
       "test-session",
       "archive-1",
@@ -208,12 +262,14 @@ describe("DashboardPage", () => {
     fireEvent.change(screen.getByLabelText(/审核理由/), {
       target: { value: "restore approved historical version" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复此版本" }));
     expect(mocked.restoreArchiveReviewMaterial).toHaveBeenCalledWith(
       "test-session",
       "archive-1",
       1,
       "restore approved historical version",
     );
+    expect(await screen.findByText("Restored approved material")).toBeInTheDocument();
+    expect(mocked.listArchiveReviewMaterials).toHaveBeenCalledTimes(2);
   });
 });
