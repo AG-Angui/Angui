@@ -50,6 +50,30 @@ const questionReasons: Record<string, string> = {
   follow_up_clues: "记录家属尚待核实的补充信息。",
 };
 
+const defaultQuestionPrompts: Record<string, string> = {
+  basic_information: "请填写可供家属核对的基本信息。",
+  health_status: "请补充健康、认知、行动能力或用药方面需要记录的情况。",
+  behavior_habits: "请描述有助于后续核实线索的日常习惯、偏好或行为特点。",
+  last_seen: "请说明最后出现的时间和地点；如有不确定的交通方式或同行人，也请标明。",
+  frequent_locations: "请补充常去地点，并避免填写与寻找无关的私人住址。",
+  suspicious_motive: "是否有需要人工谨慎核实的可能原因、计划或担忧？不确定时可标记为未知。",
+  belongings: "请描述当时携带的衣着、包、手机、证件或其他随身物品。",
+  transport_ability: "请说明可能的独立出行方式，包括步行、车辆、公共交通及同行人情况。",
+  follow_up_clues: "是否有之后获得、但仍需要人工核实的信息或线索？",
+};
+
+const legacyDefaultQuestionPrompts: Record<string, string> = {
+  basic_information: "Please describe the person using information your family can verify.",
+  health_status: "What health, cognitive, mobility, or medication concerns should be recorded as unconfirmed draft information?",
+  behavior_habits: "What routines, preferences, or behaviors may help verify future leads?",
+  last_seen: "When and where was the person last seen? Include uncertainty in time, place, transport, or companions.",
+  frequent_locations: "Which places do they commonly visit? Please avoid unrelated private addresses.",
+  suspicious_motive: "Are there any possible reasons, plans, or concerns that need careful human follow-up? Mark unknown when unsure.",
+  belongings: "What clothing, bags, phone, identification, or other belongings were they carrying?",
+  transport_ability: "How might they travel independently? Include walking, vehicle, public transport, and companion uncertainty.",
+  follow_up_clues: "Is there later information or a lead that still needs human verification?",
+};
+
 const blankProfile: ConfirmedIntakeProfile = {
   display_name: "",
   age: null,
@@ -768,7 +792,11 @@ export function FamilyIntakeForm({
             />
           ) : (
             <Field
-              label={question.prompt}
+              label={
+                legacyDefaultQuestionPrompts[question.field] === question.prompt
+                  ? defaultQuestionPrompts[question.field]
+                  : question.prompt
+              }
               required={question.required}
               hint={questionReasons[question.field]}
             >

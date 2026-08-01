@@ -387,6 +387,9 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                         <Chip.Label>{statusLabels[item.status]}</Chip.Label>
                       </Chip>
                     </div>
+                    <span className="mt-1 block text-xs text-slate-500">
+                      权限：{caseRoleLabels[item.access_role]}
+                    </span>
                     <span className="mt-1 block truncate text-xs text-slate-500">
                       {item.case_code}
                     </span>
@@ -894,7 +897,7 @@ function CaseDetailView({
                 <option value="manual_report">人工上报</option>
                 <option value="field_report">现场反馈</option>
                 <option value="chat_draft">聊天整理草稿</option>
-                <option value="ai_draft">AI 字段草稿</option>
+                <option value="ai_draft">智能整理草稿</option>
               </select>
             </Field>
             <Field label="时间字段">
@@ -963,7 +966,7 @@ function CaseDetailView({
                   {clue.source_type !== "manual_report" && (
                     <span className="text-xs font-medium text-amber-700">
                       {clue.source_type === "ai_draft"
-                        ? "AI 字段草稿"
+                        ? "智能整理草稿"
                         : clue.source_type === "chat_draft"
                           ? "聊天整理草稿"
                           : "现场反馈"}

@@ -428,6 +428,42 @@ describe("FamilyIntakeForm", () => {
     expect(screen.getByDisplayValue("北门附近有目击信息。")).toBeInTheDocument();
   });
 
+  it("uses Chinese default prompts when an existing session still returns the old seed copy", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({
+        session: {
+          ...phaseTwoSession,
+          next_question: {
+            field: "follow_up_clues",
+            prompt: "Is there later information or a lead that still needs human verification?",
+            required: false,
+          },
+        },
+        answer: "",
+        basicInformation: {
+          name: "",
+          gender: "",
+          age: "",
+          height: "",
+          appearance: "",
+        },
+      }),
+    );
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(await screen.findByText("是否有之后获得、但仍需要人工核实的信息或线索？")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Is there later information or a lead that still needs human verification?"),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows field-level provenance and sends a replacement when the family corrects a draft answer", async () => {
     mocked.createIntakeSession.mockResolvedValue(collectingSession);
     mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(readySession));
