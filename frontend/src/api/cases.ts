@@ -218,6 +218,7 @@ export interface ClueDraft {
   content: string;
   source_type: PublicClueSourceType;
   raw_record_reference: string | null;
+  source_record_id: string | null;
   occurred_at: string | null;
   location_text: string | null;
   uncertainty_notice: string;
@@ -351,6 +352,7 @@ export interface ArchiveDraft {
   status: "draft" | "pending_review" | "published" | "rejected" | "withdrawn";
   content: string;
   source_scope: string[];
+  review_material_id: string | null;
   deidentification_status: "manual_review_required" | "deidentified" | "rejected";
   template_version: string;
   provider_model: string | null;
@@ -726,17 +728,31 @@ export function submitTaskFeedback(
 export function createClueDraft(
   token: string,
   caseId: string,
-  payload: {
-    text: string;
-    source_type?: PublicClueSourceType;
-    raw_record_reference?: string;
-  },
+  payload: { source_record_id: string },
 ): Promise<ClueDraft[]> {
   return apiRequest<ClueDraft[]>(
     `/cases/${caseId}/clue-drafts`,
     { method: "POST", body: JSON.stringify(payload) },
     token,
   );
+}
+
+export interface CaseSourceRecord {
+  id: string;
+  case_id: string;
+  record_type: "message" | "phone_record" | "field_feedback";
+  content: string;
+  occurred_at: string | null;
+  source_reference: string | null;
+  created_at: string;
+}
+
+export function createCaseSourceRecord(token: string, caseId: string, payload: Omit<CaseSourceRecord, "id" | "case_id" | "created_at">): Promise<CaseSourceRecord> {
+  return apiRequest(`/cases/${caseId}/source-records`, { method: "POST", body: JSON.stringify(payload) }, token);
+}
+
+export function listCaseSourceRecords(token: string, caseId: string): Promise<CaseSourceRecord[]> {
+  return apiRequest(`/cases/${caseId}/source-records`, {}, token);
 }
 
 export function listClueDrafts(
@@ -837,7 +853,7 @@ export function createArchiveDraft(
 export function deidentifyArchiveDraft(
   token: string,
   draftId: string,
-  payload: { outcome: "confirm" | "reject"; reason: string },
+  payload: { outcome: "confirm" | "reject"; reason: string; deidentified_material?: string },
 ): Promise<ArchiveDraft> {
   return apiRequest(`/admin/archive-drafts/${draftId}/deidentify`, {
     method: "POST",

@@ -6,8 +6,9 @@ use crate::{
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse, CasePoiQuery,
         CaseResourceConfigurationResponse, CreateCasePlaceRequest, CreateCaseRequest,
-        CreateClueDraftRequest, CreateClueRequest, CreateSummaryDraftRequest, CreateTaskRequest,
-        ReviewClueDraftRequest, ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
+        CreateSummaryDraftRequest, CreateTaskRequest, ReviewClueDraftRequest,
+        ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
         UpdateElderProfileRequest,
     },
     roles::CaseRole,
@@ -39,6 +40,14 @@ pub fn configure(config: &mut web::ServiceConfig) {
             )
             .route("/{case_id}/clue-drafts", web::get().to(list_clue_drafts))
             .route("/{case_id}/clue-drafts", web::post().to(create_clue_drafts))
+            .route(
+                "/{case_id}/source-records",
+                web::get().to(list_source_records),
+            )
+            .route(
+                "/{case_id}/source-records",
+                web::post().to(create_source_record),
+            )
             .route(
                 "/{case_id}/clue-drafts/{draft_id}/review",
                 web::patch().to(review_clue_draft),
@@ -206,6 +215,36 @@ async fn create_archive_draft(
     )
     .await?;
     Ok(HttpResponse::Created().json(draft))
+}
+
+async fn create_source_record(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+    request: web::Json<CreateCaseSourceRecordRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        crate::services::case_collaboration_service::create_case_source_record(
+            &state.db,
+            &auth,
+            &case_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn list_source_records(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_case_source_records(
+            &state.db, &auth, &case_id,
+        )
+        .await?,
+    ))
 }
 
 async fn download_attachment(

@@ -93,12 +93,22 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     )
     .await;
 
+    let source = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/source-records"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({ "record_type": "phone_record", "content": "Fictional caller said to verify the north gate.", "source_reference": "fictional-call-1" }))
+            .to_request(),
+    ).await;
+    assert_eq!(source.status(), StatusCode::CREATED);
+    let source: Value = test::read_body_json(source).await;
     let clue_drafts = test::call_service(
         &app,
         test::TestRequest::post()
             .uri(&format!("/api/cases/{case_id}/clue-drafts"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
-            .set_json(json!({ "text": "Fictional caller said to verify the north gate.", "source_type": "manual_report", "raw_record_reference": "fictional-call-1" }))
+            .set_json(json!({ "source_record_id": source["id"] }))
             .to_request(),
     )
     .await;
@@ -340,16 +350,22 @@ async fn clue_draft_queue_is_commander_only_and_survives_the_creation_response()
     let app = crate::init_api_app!(&context);
     let commander_token = context.token(COMMANDER).await;
 
+    let source = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/source-records"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({ "record_type": "phone_record", "content": "Fictional caller asks the team to verify the north gate.", "source_reference": "fictional-call-record-2" }))
+            .to_request(),
+    ).await;
+    assert_eq!(source.status(), StatusCode::CREATED);
+    let source: Value = test::read_body_json(source).await;
     let created = test::call_service(
         &app,
         test::TestRequest::post()
             .uri(&format!("/api/cases/{case_id}/clue-drafts"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
-            .set_json(json!({
-                "text": "Fictional caller asks the team to verify the north gate.",
-                "source_type": "manual_report",
-                "raw_record_reference": "fictional-call-record-2"
-            }))
+            .set_json(json!({ "source_record_id": source["id"] }))
             .to_request(),
     )
     .await;

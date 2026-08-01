@@ -16,6 +16,7 @@ import {
   acceptCommandCase,
   applyForTask,
   createCasePlace,
+  createCaseSourceRecord,
   createClueDraft,
   createArchiveDraft,
   createSummaryDraft,
@@ -31,6 +32,7 @@ import {
   getCase,
   getCaseResourceConfiguration,
   listCaseClues,
+  listCaseSourceRecords,
   listClueDrafts,
   listSummaryDraftVersions,
   diffSummaryDraftVersions,
@@ -2517,6 +2519,7 @@ function CaseCollaborationPanel({
     useState<CasePublicProgress | null>(null);
   const [progressError, setProgressError] = useState("");
   const [clueDraftText, setClueDraftText] = useState("");
+  const [clueRecordType, setClueRecordType] = useState<"message" | "phone_record" | "field_feedback">("message");
   const [clueDrafts, setClueDrafts] = useState<ClueDraft[]>([]);
   const [poiCategory, setPoiCategory] = useState("hospital");
   const [pois, setPois] = useState<CasePois | null>(null);
@@ -2581,7 +2584,8 @@ function CaseCollaborationPanel({
       return;
     }
     try {
-      setClueDrafts(await listClueDrafts(token, detail.id));
+      const [drafts] = await Promise.all([listClueDrafts(token, detail.id), listCaseSourceRecords(token, detail.id)]);
+      setClueDrafts(drafts);
     } catch (cause) {
       setError(messageFrom(cause));
     }
@@ -2788,6 +2792,11 @@ function CaseCollaborationPanel({
           onChange={(event) => setClueDraftText(event.target.value)}
           fullWidth
         />
+        <div className="mt-2 flex gap-2">
+          {(["message", "phone_record", "field_feedback"] as const).map((type) => (
+            <Button key={type} size="sm" variant={clueRecordType === type ? "secondary" : "ghost"} onPress={() => setClueRecordType(type)}>{type}</Button>
+          ))}
+        </div>
         <div className="mt-2 flex justify-end">
           <Button
             size="sm"
@@ -2798,10 +2807,8 @@ function CaseCollaborationPanel({
             onPress={() =>
               void run("clue-draft", async () => {
                 if (!token) return;
-                const created = await createClueDraft(token, detail.id, {
-                  text: clueDraftText,
-                  source_type: "manual_report",
-                });
+                const record = await createCaseSourceRecord(token, detail.id, { record_type: clueRecordType, content: clueDraftText, occurred_at: null, source_reference: null });
+                const created = await createClueDraft(token, detail.id, { source_record_id: record.id });
                 setClueDrafts((current) => [...created, ...current]);
                 setClueDraftText("");
               })

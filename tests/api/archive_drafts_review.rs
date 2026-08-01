@@ -92,7 +92,7 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
         test::TestRequest::post()
             .uri(&format!("/api/admin/archive-drafts/{draft_id}/deidentify"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
-            .set_json(json!({ "outcome": "confirm", "reason": "fictional manual de-identification confirmation" }))
+            .set_json(json!({ "outcome": "confirm", "reason": "fictional manual de-identification confirmation", "deidentified_material": "At an unspecified time, a confirmed review item and a completed task were recorded. Exact identities, contacts, health details, locations, and routes were removed." }))
             .to_request(),
     )
     .await;
@@ -160,7 +160,7 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
     assert_eq!(stored.case_id, case_id);
     assert_eq!(stored.status, "withdrawn");
     assert_eq!(stored.version, 4);
-    assert!(stored.content.contains("Source scope is limited"));
+    assert!(stored.content.contains("Timeline") || stored.content.contains("de-identified"));
     assert!(
         cases::Entity::find_by_id(&case_id)
             .one(&context.database)
@@ -248,7 +248,7 @@ async fn archive_deidentification_rejection_and_missing_drafts_do_not_publish_or
                 "/api/admin/archive-drafts/{review_rejection_id}/deidentify"
             ))
             .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
-            .set_json(json!({ "outcome": "confirm", "reason": "fictional manual confirmation before review rejection" }))
+            .set_json(json!({ "outcome": "confirm", "reason": "fictional manual confirmation before review rejection", "deidentified_material": "De-identified test material for review rejection." }))
             .to_request(),
     )
     .await;

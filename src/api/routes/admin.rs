@@ -84,6 +84,7 @@ async fn deidentify_archive_draft(
             &auth,
             &draft_id,
             request.into_inner(),
+            &state.ai_gateway,
         )
         .await?,
     ))

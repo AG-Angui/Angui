@@ -12,12 +12,16 @@ use crate::{
         DataLevel,
     },
     amap_service::{Coordinate, PoiSearch},
-    entities::{archive_drafts, case_places, cases, clue_drafts, clues, summary_drafts, tasks},
+    entities::{
+        archive_drafts, archive_review_materials, case_places, case_source_records, cases,
+        clue_drafts, clues, summary_drafts, tasks,
+    },
     error::ApiError,
     models::{
         ArchiveDraftResponse, AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse,
-        CasePublicProgressItem, CasePublicProgressResponse, ClueDraftCandidate,
-        ClueDraftFieldDecision, ClueDraftResponse, CreateClueDraftRequest, CreateClueRequest,
+        CasePublicProgressItem, CasePublicProgressResponse, CaseSourceRecordResponse,
+        ClueDraftCandidate, ClueDraftFieldDecision, ClueDraftResponse,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
         CreateSummaryDraftRequest, DeidentifyArchiveDraftRequest, ReviewArchiveDraftRequest,
         ReviewClueDraftRequest, ReviewSummaryDraftRequest, SummaryDraftDiffResponse,
         SummaryDraftResponse, SummaryDraftVersionResponse,
@@ -28,6 +32,77 @@ use crate::{
 
 const DRAFT_TEMPLATE_VERSION: &str = "case-summary-rule-v1";
 const ARCHIVE_DRAFT_TEMPLATE_VERSION: &str = "case-archive-safe-metadata-v1";
+
+pub async fn create_case_source_record(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    request: CreateCaseSourceRecordRequest,
+) -> Result<CaseSourceRecordResponse, ApiError> {
+    case_service::require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let record_type = request.record_type.trim().to_lowercase();
+    if !matches!(
+        record_type.as_str(),
+        "message" | "phone_record" | "field_feedback"
+    ) {
+        return Err(ApiError::Validation(
+            "record_type must be message, phone_record, or field_feedback".to_owned(),
+        ));
+    }
+    let content = required_text("content", request.content, 4_000)?;
+    let timestamp = now();
+    let model = case_source_records::ActiveModel {
+        id: Set(case_service::new_id()),
+        case_id: Set(case_id.to_owned()),
+        record_type: Set(record_type),
+        content: Set(content),
+        occurred_at: Set(trim(request.occurred_at, 40)?),
+        source_reference: Set(trim(request.source_reference, 500)?),
+        created_by_user_id: Set(auth.id.clone()),
+        created_at: Set(timestamp),
+    }
+    .insert(db)
+    .await?;
+    case_service::write_audit(
+        db,
+        Some(case_id.to_owned()),
+        auth,
+        "case_source_record.created",
+        "case_source_record",
+        model.id.clone(),
+        Some(json!({"record_type": model.record_type})),
+    )
+    .await?;
+    Ok(case_source_record_response(model))
+}
+
+pub async fn list_case_source_records(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<Vec<CaseSourceRecordResponse>, ApiError> {
+    case_service::require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    Ok(case_source_records::Entity::find()
+        .filter(case_source_records::Column::CaseId.eq(case_id))
+        .order_by_desc(case_source_records::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(case_source_record_response)
+        .collect())
+}
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +122,7 @@ pub async fn create_archive_draft(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     case_id: &str,
-    gateway: &crate::ai_gateway::AiGateway,
+    _gateway: &crate::ai_gateway::AiGateway,
 ) -> Result<ArchiveDraftResponse, ApiError> {
     let transaction = db.begin().await?;
     case_service::require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander])
@@ -73,85 +148,67 @@ pub async fn create_archive_draft(
         .count(&transaction)
         .await?;
     let source_scope = vec![
-        "confirmed_clue_metadata".to_owned(),
-        "completed_task_metadata".to_owned(),
+        "confirmed_clue_review_material".to_owned(),
+        "completed_task_review_material".to_owned(),
     ];
-    let ai_request = AiRequest {
-        capability: AiCapability::CaseOrganization,
-        data_level: DataLevel::Internal,
-        purpose: AiPurpose::CaseArchiveDraft,
-        data_region: "CN".to_owned(),
-        system_instruction: Some("Return JSON only: {timeline:string[],lessons:string[],uncertainty:string}. Use only supplied aggregate metadata. Do not infer persons, locations, health information, causes, or operational outcomes.".to_owned()),
-        output_schema: Some(archive_candidate_schema()),
-        output_schema_name: Some("case_archive_candidate".to_owned()),
-        input: serde_json::to_string(&json!({
-            "case_status": case.status,
-            "confirmed_clue_count": confirmed_clue_count,
-            "completed_task_count": completed_task_count,
-            "source_scope": source_scope,
-        })).map_err(|_| ApiError::Internal)?,
-        requested_output_tokens: 500,
-        template_version: "case-archive-ai-v1".to_owned(),
-        input_scope_reference: "deidentified_aggregate_case_metadata".to_owned(),
-        redaction_policy_version: "archive-aggregate-only-v1".to_owned(),
-    };
-    let execution = gateway.execute(&ai_request).await;
-    let decision = execution.decision();
-    let (content, provider_model, template_version, audit_status) = match execution {
-        AiExecutionResult::Completed { route, output } => {
-            match gateway.decode_json::<ArchiveOrganizationCandidate>(&output) {
-                Ok(candidate) if valid_archive_candidate(&candidate) => (
-                    archive_candidate_content(candidate),
-                    Some(route.model),
-                    "case-archive-ai-v1".to_owned(),
-                    AiTaskStatus::Completed,
-                ),
-                _ => (
-                    deterministic_archive_draft_content(
-                        &case.status,
-                        confirmed_clue_count,
-                        completed_task_count,
-                    ),
-                    None,
-                    ARCHIVE_DRAFT_TEMPLATE_VERSION.to_owned(),
-                    AiTaskStatus::Failed,
-                ),
-            }
-        }
-        AiExecutionResult::Degraded { .. } => (
-            deterministic_archive_draft_content(
-                &case.status,
-                confirmed_clue_count,
-                completed_task_count,
-            ),
-            None,
-            ARCHIVE_DRAFT_TEMPLATE_VERSION.to_owned(),
-            AiTaskStatus::Degraded,
-        ),
-        AiExecutionResult::Failed { .. } => (
-            deterministic_archive_draft_content(
-                &case.status,
-                confirmed_clue_count,
-                completed_task_count,
-            ),
-            None,
-            ARCHIVE_DRAFT_TEMPLATE_VERSION.to_owned(),
-            AiTaskStatus::Failed,
-        ),
-    };
-    let execution_audit = AiExecutionAudit::for_request(&ai_request, &decision, audit_status);
+    let confirmed_clue_material = clues::Entity::find()
+        .filter(clues::Column::CaseId.eq(case_id))
+        .filter(clues::Column::Status.eq("confirmed"))
+        .all(&transaction)
+        .await?
+        .into_iter()
+        .map(|clue| format!("confirmed clue: {}", clue.content))
+        .collect::<Vec<_>>();
+    let task_material = tasks::Entity::find()
+        .filter(tasks::Column::CaseId.eq(case_id))
+        .filter(tasks::Column::Status.eq("completed"))
+        .all(&transaction)
+        .await?
+        .into_iter()
+        .map(|task| format!("completed task: {}", task.title))
+        .collect::<Vec<_>>();
+    let raw_material = confirmed_clue_material
+        .into_iter()
+        .chain(task_material)
+        .collect::<Vec<_>>()
+        .join("\n");
     let timestamp = now();
+    let material_version = archive_review_materials::Entity::find()
+        .filter(archive_review_materials::Column::CaseId.eq(case_id))
+        .order_by_desc(archive_review_materials::Column::Version)
+        .one(&transaction)
+        .await?
+        .map_or(1, |existing| existing.version + 1);
+    let material = archive_review_materials::ActiveModel {
+        id: Set(case_service::new_id()),
+        case_id: Set(case_id.to_owned()),
+        version: Set(material_version),
+        parent_material_id: Set(None),
+        content: Set(raw_material),
+        source_scope_json: Set(
+            serde_json::to_string(&source_scope).map_err(|_| ApiError::Internal)?
+        ),
+        status: Set("draft".to_owned()),
+        created_by_user_id: Set(auth.id.clone()),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+        review_reason: Set(None),
+        created_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await?;
     let model = archive_drafts::ActiveModel {
         id: Set(case_service::new_id()),
         case_id: Set(case_id.to_owned()),
         status: Set("draft".to_owned()),
-        content: Set(content),
+        content: Set("Awaiting administrator de-identification of the selected review material before AI organization.".to_owned()),
         source_scope_json: Set(
             serde_json::to_string(&source_scope).map_err(|_| ApiError::Internal)?
         ),
+        review_material_id: Set(Some(material.id.clone())),
         deidentification_status: Set("manual_review_required".to_owned()),
-        template_version: Set(template_version),
-        provider_model: Set(provider_model),
+        template_version: Set(ARCHIVE_DRAFT_TEMPLATE_VERSION.to_owned()),
+        provider_model: Set(None),
         created_by_user_id: Set(auth.id.clone()),
         deidentified_by_user_id: Set(None),
         deidentified_at: Set(None),
@@ -166,13 +223,6 @@ pub async fn create_archive_draft(
         updated_at: Set(timestamp),
     }
     .insert(&transaction)
-    .await?;
-    crate::ai_gateway::persist_execution_audit(
-        &transaction,
-        &execution_audit,
-        &auth.id,
-        Some(case_id),
-    )
     .await?;
     case_service::write_audit(
         &transaction,
@@ -200,6 +250,7 @@ pub async fn deidentify_archive_draft(
     auth: &AuthenticatedUser,
     draft_id: &str,
     request: DeidentifyArchiveDraftRequest,
+    gateway: &crate::ai_gateway::AiGateway,
 ) -> Result<ArchiveDraftResponse, ApiError> {
     require_admin(auth)?;
     let outcome = request.outcome.trim().to_lowercase();
@@ -219,7 +270,6 @@ pub async fn deidentify_archive_draft(
             "archive draft is not awaiting de-identification review".to_owned(),
         ));
     }
-    let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let timestamp = now();
     let next_deidentification_status = if outcome == "confirm" {
         "deidentified"
@@ -231,6 +281,94 @@ pub async fn deidentify_archive_draft(
     } else {
         "rejected"
     };
+    let material_id = existing.review_material_id.clone().ok_or_else(|| {
+        ApiError::Conflict("archive draft is missing its review material".to_owned())
+    })?;
+    let original_material = archive_review_materials::Entity::find_by_id(&material_id)
+        .one(&transaction)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    let (
+        content,
+        provider_model,
+        template_version,
+        _material_status,
+        next_material_id,
+        execution_audit,
+    ) = if outcome == "confirm" {
+        let material_text = required_text(
+            "deidentified_material",
+            request.deidentified_material.unwrap_or_default(),
+            12_000,
+        )?;
+        let material = archive_review_materials::ActiveModel {
+            id: Set(case_service::new_id()),
+            case_id: Set(original_material.case_id.clone()),
+            version: Set(original_material.version + 1),
+            parent_material_id: Set(Some(original_material.id)),
+            content: Set(material_text.clone()),
+            source_scope_json: Set(original_material.source_scope_json.clone()),
+            status: Set("deidentified".to_owned()),
+            created_by_user_id: Set(auth.id.clone()),
+            reviewed_by_user_id: Set(Some(auth.id.clone())),
+            reviewed_at: Set(Some(timestamp.clone())),
+            review_reason: Set(Some(reason.clone())),
+            created_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+        let ai_request = AiRequest { capability: AiCapability::CaseOrganization, data_level: DataLevel::Internal, purpose: AiPurpose::CaseArchiveDraft, data_region: "CN".to_owned(), system_instruction: Some("Return JSON only: {timeline:string[],lessons:string[],uncertainty:string}. Use only this administrator-approved de-identified material. Do not infer identities, exact locations, health details, causes, or operational outcomes.".to_owned()), output_schema: Some(archive_candidate_schema()), output_schema_name: Some("case_archive_candidate".to_owned()), input: serde_json::to_string(&json!({"deidentified_material": material_text})).map_err(|_| ApiError::Internal)?, requested_output_tokens: 500, template_version: "case-archive-ai-v2".to_owned(), input_scope_reference: format!("approved-deidentified-material:{}:v{}", material.id, material.version), redaction_policy_version: "archive-approved-material-v1".to_owned() };
+        let execution = gateway.execute(&ai_request).await;
+        let decision = execution.decision();
+        let (content, provider_model, audit_status) = match execution {
+            AiExecutionResult::Completed { route, output } => {
+                match gateway.decode_json::<ArchiveOrganizationCandidate>(&output) {
+                    Ok(candidate) if valid_archive_candidate(&candidate) => (
+                        archive_candidate_content(candidate),
+                        Some(route.model),
+                        AiTaskStatus::Completed,
+                    ),
+                    _ => (
+                        deterministic_archive_material_content(&material_text),
+                        None,
+                        AiTaskStatus::Failed,
+                    ),
+                }
+            }
+            AiExecutionResult::Degraded { .. } => (
+                deterministic_archive_material_content(&material_text),
+                None,
+                AiTaskStatus::Degraded,
+            ),
+            AiExecutionResult::Failed { .. } => (
+                deterministic_archive_material_content(&material_text),
+                None,
+                AiTaskStatus::Failed,
+            ),
+        };
+        (
+            content,
+            provider_model,
+            "case-archive-ai-v2".to_owned(),
+            "deidentified",
+            Some(material.id),
+            Some(AiExecutionAudit::for_request(
+                &ai_request,
+                &decision,
+                audit_status,
+            )),
+        )
+    } else {
+        (
+            existing.content.clone(),
+            None,
+            existing.template_version.clone(),
+            "rejected",
+            Some(original_material.id),
+            None,
+        )
+    };
+    let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let update = archive_drafts::Entity::update_many()
         .col_expr(archive_drafts::Column::Status, Expr::value(next_status))
         .col_expr(
@@ -248,6 +386,19 @@ pub async fn deidentify_archive_draft(
         .col_expr(
             archive_drafts::Column::DeidentificationReason,
             Expr::value(Some(reason.clone())),
+        )
+        .col_expr(archive_drafts::Column::Content, Expr::value(content))
+        .col_expr(
+            archive_drafts::Column::ProviderModel,
+            Expr::value(provider_model),
+        )
+        .col_expr(
+            archive_drafts::Column::TemplateVersion,
+            Expr::value(template_version),
+        )
+        .col_expr(
+            archive_drafts::Column::ReviewMaterialId,
+            Expr::value(next_material_id),
         )
         .col_expr(archive_drafts::Column::Version, Expr::value(next_version))
         .col_expr(archive_drafts::Column::UpdatedAt, Expr::value(timestamp))
@@ -268,6 +419,15 @@ pub async fn deidentify_archive_draft(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::Internal)?;
+    if let Some(execution_audit) = execution_audit {
+        crate::ai_gateway::persist_execution_audit(
+            &transaction,
+            &execution_audit,
+            &auth.id,
+            Some(&model.case_id),
+        )
+        .await?;
+    }
     case_service::write_audit(
         &transaction,
         Some(model.case_id.clone()),
@@ -483,17 +643,23 @@ pub async fn create_clue_drafts(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
-    let text = required_text("text", request.text, 4_000)?;
-    let source_type = request
-        .source_type
-        .unwrap_or_else(|| "manual_report".to_owned())
-        .trim()
-        .to_lowercase();
-    if !matches!(source_type.as_str(), "manual_report" | "field_report") {
-        return Err(ApiError::Validation(
-            "source_type must be manual_report or field_report".to_owned(),
+    let source_record = case_source_records::Entity::find_by_id(request.source_record_id.trim())
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("controlled source record was not found".to_owned()))?;
+    if source_record.case_id != case_id {
+        return Err(ApiError::NotFound(
+            "controlled source record was not found".to_owned(),
         ));
     }
+    let text = source_record.content.clone();
+    // Existing formal-clue lifecycle exposes only report categories. Preserve
+    // the precise controlled record type on its linked source object.
+    let source_type = if source_record.record_type == "field_feedback" {
+        "field_report".to_owned()
+    } else {
+        "manual_report".to_owned()
+    };
     let ai_request = AiRequest {
         capability: AiCapability::StructuredExtraction,
         data_level: DataLevel::Collaborative,
@@ -550,7 +716,8 @@ pub async fn create_clue_drafts(
         status: Set("draft".to_owned()),
         content: Set(text),
         source_type: Set(source_type.clone()),
-        raw_record_reference: Set(trim(request.raw_record_reference, 500)?),
+        raw_record_reference: Set(source_record.source_reference.clone()),
+        source_record_id: Set(Some(source_record.id.clone())),
         uncertainty_notice: Set(
             "This is an unreviewed extraction draft. Confirm time, location, and source before creating a clue."
                 .to_owned(),
@@ -1055,14 +1222,21 @@ fn summary_candidate_schema() -> serde_json::Value {
     })
 }
 
-fn deterministic_archive_draft_content(
-    case_status: &str,
-    confirmed_clue_count: u64,
-    completed_task_count: u64,
-) -> String {
-    format!(
-        "Internal archive draft. This record is not de-identified, publishable, indexable, exportable, or printable. Case status: {case_status}. Confirmed clue count: {confirmed_clue_count}. Completed task count: {completed_task_count}. Source scope is limited to counts and status metadata; it excludes raw clues, attachments, health notes, contacts, exact locations, routes, and task result text. Human de-identification and review are required before any separate reuse workflow."
-    )
+fn deterministic_archive_material_content(material: &str) -> String {
+    let lines = material
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(12)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        "Timeline and retrospective draft require administrator-approved de-identified material."
+            .to_owned()
+    } else {
+        format!(
+            "Timeline candidates (manual review required):\n{}\n\nLessons candidate: preserve uncertainty and do not treat this draft as a knowledge-base entry.",
+            lines.join("\n")
+        )
+    }
 }
 
 fn valid_archive_candidate(candidate: &ArchiveOrganizationCandidate) -> bool {
@@ -1100,6 +1274,19 @@ fn trim(value: Option<String>, maximum: usize) -> Result<Option<String>, ApiErro
         None => Ok(None),
     }
 }
+
+fn case_source_record_response(model: case_source_records::Model) -> CaseSourceRecordResponse {
+    CaseSourceRecordResponse {
+        id: model.id,
+        case_id: model.case_id,
+        record_type: model.record_type,
+        content: model.content,
+        occurred_at: model.occurred_at,
+        source_reference: model.source_reference,
+        created_at: model.created_at,
+    }
+}
+
 fn response(model: summary_drafts::Model) -> Result<SummaryDraftResponse, ApiError> {
     Ok(SummaryDraftResponse {
         id: model.id,
@@ -1129,6 +1316,7 @@ fn archive_draft_response(model: archive_drafts::Model) -> Result<ArchiveDraftRe
         content: model.content,
         source_scope: serde_json::from_str(&model.source_scope_json)
             .map_err(|_| ApiError::Internal)?,
+        review_material_id: model.review_material_id,
         deidentification_status: model.deidentification_status,
         template_version: model.template_version,
         provider_model: model.provider_model,
@@ -1159,6 +1347,7 @@ fn clue_draft_response(model: clue_drafts::Model) -> Result<ClueDraftResponse, A
         content: model.content,
         source_type: model.source_type,
         raw_record_reference: model.raw_record_reference,
+        source_record_id: model.source_record_id,
         occurred_at: serde_json::from_str::<ClueDraftCandidate>(&model.candidate_json)
             .map_err(|_| ApiError::Internal)?
             .occurred_at,

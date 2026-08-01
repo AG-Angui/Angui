@@ -114,6 +114,7 @@ pub struct UpdateAdminUserStatusRequest {
 pub struct DeidentifyArchiveDraftRequest {
     pub outcome: String,
     pub reason: String,
+    pub deidentified_material: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -389,6 +390,10 @@ pub struct IntakeProfileDraft {
     pub status: String,
     pub source_scope: String,
     pub generated_at: String,
+    pub provider_model: Option<String>,
+    pub template_version: String,
+    pub degradation_status: String,
+    pub version: i32,
     pub requires_human_confirmation: bool,
     pub profile: IntakeProfileDraftFields,
     pub field_metadata: Vec<IntakeProfileDraftFieldMetadata>,
@@ -401,16 +406,19 @@ pub struct IntakeProfileDraft {
 /// Provenance for a non-empty field in an unconfirmed intake profile draft.
 /// The value itself remains in `profile`; this metadata lets clients display
 /// the draft's origin without treating it as a confirmed case fact.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IntakeProfileDraftFieldMetadata {
     pub field: String,
     pub source_field: String,
     pub source: String,
     pub status: String,
     pub generated_at: String,
+    pub source_excerpt: Option<String>,
+    pub provider_model: Option<String>,
+    pub template_version: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IntakeProfileDraftFields {
     pub physical_description: Option<String>,
     pub clothing_description: Option<String>,
@@ -943,9 +951,27 @@ pub struct CaseSummaryTask {
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CreateClueDraftRequest {
-    pub text: String,
-    pub source_type: Option<String>,
-    pub raw_record_reference: Option<String>,
+    pub source_record_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCaseSourceRecordRequest {
+    pub record_type: String,
+    pub content: String,
+    pub occurred_at: Option<String>,
+    pub source_reference: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CaseSourceRecordResponse {
+    pub id: String,
+    pub case_id: String,
+    pub record_type: String,
+    pub content: String,
+    pub occurred_at: Option<String>,
+    pub source_reference: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -956,6 +982,7 @@ pub struct ClueDraftResponse {
     pub content: String,
     pub source_type: String,
     pub raw_record_reference: Option<String>,
+    pub source_record_id: Option<String>,
     pub occurred_at: Option<String>,
     pub location_text: Option<String>,
     pub uncertainty_notice: String,
@@ -1111,6 +1138,7 @@ pub struct ArchiveDraftResponse {
     pub status: String,
     pub content: String,
     pub source_scope: Vec<String>,
+    pub review_material_id: Option<String>,
     pub deidentification_status: String,
     pub template_version: String,
     pub provider_model: Option<String>,

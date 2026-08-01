@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, cases, intake_answer_revisions, intake_question_definitions,
-        intake_session_answers, intake_sessions,
+        audit_events, cases, intake_answer_revisions, intake_profile_drafts,
+        intake_question_definitions, intake_session_answers, intake_sessions,
     },
     error::ApiError,
     models::{
@@ -306,6 +306,14 @@ pub async fn get_intake_profile_draft(
         .await?
         .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
     require_session_creator(&session, auth)?;
+    if let Some(draft) = intake_profile_drafts::Entity::find()
+        .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+        .order_by_desc(intake_profile_drafts::Column::Version)
+        .one(db)
+        .await?
+    {
+        return profile_draft_from_model(draft);
+    }
     let questions = questions_for_version(db, session.question_set_version).await?;
     let answers = parse_answers(&session)?;
     let stored_answers = intake_session_answers::Entity::find()
@@ -323,6 +331,10 @@ pub async fn get_intake_profile_draft(
         status: "draft".to_owned(),
         source_scope: "family_provided intake answers from this session only".to_owned(),
         generated_at: session.updated_at.clone(),
+        provider_model: None,
+        template_version: "intake-profile-family-draft-v1".to_owned(),
+        degradation_status: "model_generation_pending".to_owned(),
+        version: 0,
         requires_human_confirmation: true,
         profile: IntakeProfileDraftFields {
             physical_description: answers.basic_information.clone(),
@@ -341,6 +353,110 @@ pub async fn get_intake_profile_draft(
         confirmation_blocked_reasons,
         direction_hypotheses: direction_hypotheses(&answers, &session.updated_at),
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileExtractionOutput {
+    profile: IntakeProfileDraftFields,
+    field_sources: std::collections::BTreeMap<String, ProfileFieldSource>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileFieldSource {
+    source_field: String,
+    source_excerpt: String,
+}
+
+/// Produces a versioned candidate from the family's immutable answer snapshot.
+/// It can never alter answers or create a case; all returned values remain a
+/// family-confirmed draft until the existing second confirmation flow.
+pub async fn generate_intake_profile_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    gateway: &crate::ai_gateway::AiGateway,
+) -> Result<IntakeProfileDraft, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    if session.case_id.is_some() || session.status == "confirmed" {
+        return Err(ApiError::Conflict(
+            "confirmed intake sessions cannot generate a profile candidate".to_owned(),
+        ));
+    }
+    let answers = parse_answers(&session)?;
+    let input = serde_json::to_string(&json!({"family_answers": answers}))
+        .map_err(|_| ApiError::Internal)?;
+    let request = AiRequest {
+        capability: AiCapability::StructuredExtraction, data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft, data_region: "CN".to_owned(),
+        system_instruction: Some("Return JSON only using the supplied schema. Extract concise profile candidates only from supplied family answers. For each non-empty candidate give its source answer field and an exact supporting excerpt. Keep unknown fields null. Do not diagnose, confirm facts, infer current or future location, add facts, issue instructions, or change answers.".to_owned()),
+        output_schema: Some(profile_extraction_schema()), output_schema_name: Some("intake_profile_candidate".to_owned()), input,
+        requested_output_tokens: 900, template_version: "intake-profile-extraction-v1".to_owned(),
+        input_scope_reference: "intake-session-family-answers-only".to_owned(), redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+    };
+    let execution = gateway.execute(&request).await;
+    let decision = execution.decision();
+    let (profile, metadata, provider_model, degradation_status, audit_status) = match execution {
+        AiExecutionResult::Completed { route, output } => {
+            match gateway.decode_json::<ProfileExtractionOutput>(&output) {
+                Ok(out) => match validate_profile_extraction(out, &answers) {
+                    Ok((profile, metadata)) => (
+                        profile,
+                        metadata,
+                        Some(route.model),
+                        "manual_review_required".to_owned(),
+                        AiTaskStatus::Completed,
+                    ),
+                    Err(_) => profile_fallback(&answers, &session),
+                },
+                Err(_) => profile_fallback(&answers, &session),
+            }
+        }
+        AiExecutionResult::Degraded { .. } => profile_fallback(&answers, &session),
+        AiExecutionResult::Failed { .. } => profile_fallback(&answers, &session),
+    };
+    let timestamp = now();
+    let transaction = db.begin().await?;
+    let latest = intake_profile_drafts::Entity::find()
+        .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+        .order_by_desc(intake_profile_drafts::Column::Version)
+        .one(&transaction)
+        .await?;
+    let version = latest.as_ref().map_or(1, |value| value.version + 1);
+    let model = intake_profile_drafts::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        session_id: Set(session_id.to_owned()),
+        version: Set(version),
+        parent_draft_id: Set(latest.map(|value| value.id)),
+        profile_json: Set(serde_json::to_string(&profile).map_err(|_| ApiError::Internal)?),
+        field_metadata_json: Set(serde_json::to_string(&metadata).map_err(|_| ApiError::Internal)?),
+        status: Set("draft".to_owned()),
+        degradation_status: Set(degradation_status),
+        provider_model: Set(provider_model),
+        template_version: Set("intake-profile-extraction-v1".to_owned()),
+        generated_at: Set(timestamp.clone()),
+        confirmed_by_user_id: Set(None),
+        confirmed_at: Set(None),
+        created_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+    crate::ai_gateway::persist_execution_audit(
+        &transaction,
+        &AiExecutionAudit::for_request(&request, &decision, audit_status),
+        &auth.id,
+        None,
+    )
+    .await?;
+    write_audit(&transaction, auth, "intake_profile_draft.generated", session_id.to_owned(), Some(json!({"version": version, "degradation_status": model.degradation_status, "provider_configured": model.provider_model.is_some()}))).await?;
+    transaction.commit().await?;
+    profile_draft_from_model(model)
 }
 
 /// Runs the controlled initial review after the family's first confirmation.
@@ -791,9 +907,143 @@ fn profile_draft_field_metadata(
             generated_at: stored
                 .map(|answer| answer.generated_at.clone())
                 .unwrap_or_else(|| session.created_at.clone()),
+            source_excerpt: value.clone(),
+            provider_model: stored.and_then(|answer| answer.model.clone()),
+            template_version: stored
+                .and_then(|answer| answer.template_version.clone())
+                .unwrap_or_else(|| "intake-profile-family-draft-v1".to_owned()),
         })
     })
     .collect()
+}
+
+fn profile_draft_from_model(
+    model: intake_profile_drafts::Model,
+) -> Result<IntakeProfileDraft, ApiError> {
+    Ok(IntakeProfileDraft {
+        status: model.status,
+        source_scope: "family_provided intake answers from this session only".to_owned(),
+        generated_at: model.generated_at,
+        provider_model: model.provider_model,
+        template_version: model.template_version,
+        degradation_status: model.degradation_status,
+        version: model.version,
+        requires_human_confirmation: true,
+        profile: serde_json::from_str(&model.profile_json).map_err(|_| ApiError::Internal)?,
+        field_metadata: serde_json::from_str(&model.field_metadata_json)
+            .map_err(|_| ApiError::Internal)?,
+        missing_fields: Vec::new(),
+        assessments: Vec::new(),
+        confirmation_blocked_reasons: Vec::new(),
+        direction_hypotheses: Vec::new(),
+    })
+}
+
+fn profile_fallback(
+    answers: &IntakeInitialAnswers,
+    session: &intake_sessions::Model,
+) -> (
+    IntakeProfileDraftFields,
+    Vec<IntakeProfileDraftFieldMetadata>,
+    Option<String>,
+    String,
+    AiTaskStatus,
+) {
+    let fields = IntakeProfileDraftFields {
+        physical_description: answers.basic_information.clone(),
+        clothing_description: answers.belongings.clone(),
+        health_notes: answers.health_status.clone(),
+        mobility_notes: answers.health_status.clone(),
+        transportation_ability: answers.transport_ability.clone(),
+        frequent_locations: answers.frequent_locations.clone(),
+        last_seen_information: answers.last_seen.clone(),
+        behavior_habits: answers.behavior_habits.clone(),
+        suspicious_motive: answers.suspicious_motive.clone(),
+    };
+    let metadata = profile_draft_field_metadata(answers, &[], session)
+        .into_iter()
+        .map(|mut item| {
+            item.source = "family_provided_fallback".to_owned();
+            item.template_version = "intake-profile-family-fallback-v1".to_owned();
+            item
+        })
+        .collect();
+    (
+        fields,
+        metadata,
+        None,
+        "rule_based_fallback".to_owned(),
+        AiTaskStatus::Degraded,
+    )
+}
+
+fn validate_profile_extraction(
+    output: ProfileExtractionOutput,
+    answers: &IntakeInitialAnswers,
+) -> Result<
+    (
+        IntakeProfileDraftFields,
+        Vec<IntakeProfileDraftFieldMetadata>,
+    ),
+    (),
+> {
+    let allowed = [
+        "basic_information",
+        "belongings",
+        "health_status",
+        "transport_ability",
+        "frequent_locations",
+        "last_seen",
+        "behavior_habits",
+        "suspicious_motive",
+    ];
+    let values = [
+        ("physical_description", &output.profile.physical_description),
+        ("clothing_description", &output.profile.clothing_description),
+        ("health_notes", &output.profile.health_notes),
+        ("mobility_notes", &output.profile.mobility_notes),
+        (
+            "transportation_ability",
+            &output.profile.transportation_ability,
+        ),
+        ("frequent_locations", &output.profile.frequent_locations),
+        (
+            "last_seen_information",
+            &output.profile.last_seen_information,
+        ),
+        ("behavior_habits", &output.profile.behavior_habits),
+        ("suspicious_motive", &output.profile.suspicious_motive),
+    ];
+    let mut metadata = Vec::new();
+    for (field, value) in values {
+        if value.as_ref().is_some_and(|value| !value.trim().is_empty()) {
+            let source = output.field_sources.get(field).ok_or(())?;
+            if !allowed.contains(&source.source_field.as_str())
+                || source.source_excerpt.trim().is_empty()
+            {
+                return Err(());
+            }
+            let answer = answer_for(answers, &source.source_field).ok_or(())?;
+            if !answer.contains(source.source_excerpt.trim()) {
+                return Err(());
+            }
+            metadata.push(IntakeProfileDraftFieldMetadata {
+                field: field.to_owned(),
+                source_field: source.source_field.clone(),
+                source: "ai_extracted".to_owned(),
+                status: "draft".to_owned(),
+                generated_at: now(),
+                source_excerpt: Some(source.source_excerpt.trim().to_owned()),
+                provider_model: None,
+                template_version: "intake-profile-extraction-v1".to_owned(),
+            });
+        }
+    }
+    Ok((output.profile, metadata))
+}
+
+fn profile_extraction_schema() -> serde_json::Value {
+    json!({"type":"object","additionalProperties":false,"required":["profile","field_sources"],"properties":{"profile":{"type":"object","additionalProperties":false,"required":["physical_description","clothing_description","health_notes","mobility_notes","transportation_ability","frequent_locations","last_seen_information","behavior_habits","suspicious_motive"],"properties":{"physical_description":{"type":["string","null"]},"clothing_description":{"type":["string","null"]},"health_notes":{"type":["string","null"]},"mobility_notes":{"type":["string","null"]},"transportation_ability":{"type":["string","null"]},"frequent_locations":{"type":["string","null"]},"last_seen_information":{"type":["string","null"]},"behavior_habits":{"type":["string","null"]},"suspicious_motive":{"type":["string","null"]}}},"field_sources":{"type":"object","additionalProperties":{"type":"object","additionalProperties":false,"required":["source_field","source_excerpt"],"properties":{"source_field":{"type":"string"},"source_excerpt":{"type":"string"}}}}}})
 }
 
 pub async fn confirm_intake_session(

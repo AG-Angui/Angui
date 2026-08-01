@@ -10,6 +10,7 @@ pub struct Model {
     pub content: String,
     pub source_type: String,
     pub raw_record_reference: Option<String>,
+    pub source_record_id: Option<String>,
     pub uncertainty_notice: String,
     pub template_version: String,
     pub provider_model: Option<String>,

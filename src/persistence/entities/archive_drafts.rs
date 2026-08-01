@@ -9,6 +9,7 @@ pub struct Model {
     pub status: String,
     pub content: String,
     pub source_scope_json: String,
+    pub review_material_id: Option<String>,
     pub deidentification_status: String,
     pub template_version: String,
     pub provider_model: Option<String>,

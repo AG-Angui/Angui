@@ -1,4 +1,4 @@
-import { Button, Card, Chip, Input } from "@heroui/react";
+import { Button, Card, Chip, Input, TextArea } from "@heroui/react";
 import {
   ClipboardCheck,
   FileSearch,
@@ -334,6 +334,7 @@ function ArchiveReviewCard({
   onChanged: (draft: ArchiveDraft) => void;
 }) {
   const [reason, setReason] = useState("");
+  const [deidentifiedMaterial, setDeidentifiedMaterial] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const action = async (run: () => Promise<ArchiveDraft>) => {
@@ -363,8 +364,9 @@ function ArchiveReviewCard({
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             {draft.status === "draft" && (
               <>
+                <TextArea className="mt-3" aria-label={`脱敏材料 ${draft.id}`} value={deidentifiedMaterial} maxLength={12000} rows={5} onChange={(event) => setDeidentifiedMaterial(event.target.value)} />
                 <Button size="sm" variant="ghost" isDisabled={busy || !reason.trim()} onPress={() => void action(() => deidentifyArchiveDraft(token!, draft.id, { outcome: "reject", reason }))}>拒绝脱敏</Button>
-                <Button size="sm" variant="secondary" isDisabled={busy || !reason.trim()} onPress={() => void action(() => deidentifyArchiveDraft(token!, draft.id, { outcome: "confirm", reason }))}>确认已脱敏</Button>
+                <Button size="sm" variant="secondary" isDisabled={busy || !reason.trim() || !deidentifiedMaterial.trim()} onPress={() => void action(() => deidentifyArchiveDraft(token!, draft.id, { outcome: "confirm", reason, deidentified_material: deidentifiedMaterial }))}>确认已脱敏</Button>
               </>
             )}
             {draft.status === "pending_review" && (

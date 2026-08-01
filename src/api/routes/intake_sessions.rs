@@ -24,6 +24,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 web::get().to(get_intake_profile_draft),
             )
             .route(
+                "/{session_id}/profile-draft/generate",
+                web::post().to(generate_intake_profile_draft),
+            )
+            .route(
                 "/{session_id}/ai-follow-up",
                 web::get().to(get_ai_follow_up),
             )
@@ -62,6 +66,22 @@ async fn get_intake_profile_draft(
     let draft =
         intake_session_service::get_intake_profile_draft(&state.db, &auth, &session_id).await?;
     Ok(HttpResponse::Ok().json(draft))
+}
+
+async fn generate_intake_profile_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        intake_session_service::generate_intake_profile_draft(
+            &state.db,
+            &auth,
+            &session_id,
+            &state.ai_gateway,
+        )
+        .await?,
+    ))
 }
 
 async fn get_ai_follow_up(
