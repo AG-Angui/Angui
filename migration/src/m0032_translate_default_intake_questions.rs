@@ -25,10 +25,16 @@ impl MigrationTrait for Migration {
         .await
     }
 
-    async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
-        // This is a presentation-only correction. Rolling it back would restore
-        // English prompts for existing family sessions, so it intentionally has
-        // no destructive down migration.
-        Ok(())
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        execute_script(
+            manager,
+            sql_for_backend(
+                manager,
+                include_str!("../sql/sqlite/down/0032_restore_default_intake_questions.sql"),
+                include_str!("../sql/postgres/down/0032_restore_default_intake_questions.sql"),
+                include_str!("../sql/mysql/down/0032_restore_default_intake_questions.sql"),
+            ),
+        )
+        .await
     }
 }

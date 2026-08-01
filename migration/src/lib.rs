@@ -374,6 +374,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_default_intake_prompt_translation_rolls_back_and_reapplies() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+
+        Migrator::up(&database, None)
+            .await
+            .expect("migrations through the prompt translation should succeed");
+        assert_eq!(
+            intake_question_prompt(&database, "intake-q-0209").await,
+            "是否有之后获得、但仍需要人工核实的信息或线索？"
+        );
+
+        Migrator::down(&database, Some(1))
+            .await
+            .expect("prompt translation rollback should succeed");
+        assert_eq!(
+            intake_question_prompt(&database, "intake-q-0209").await,
+            "Is there later information or a lead that still needs human verification?"
+        );
+
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("prompt translation should reapply after rollback");
+        assert_eq!(
+            intake_question_prompt(&database, "intake-q-0209").await,
+            "是否有之后获得、但仍需要人工核实的信息或线索？"
+        );
+    }
+
+    #[tokio::test]
     async fn sqlite_archive_draft_migration_preserves_data_and_refuses_unsafe_rollback() {
         let database = Database::connect("sqlite::memory:")
             .await
@@ -838,6 +869,20 @@ mod tests {
             ))
             .await
             .expect("test member and intake session should be stored");
+    }
+
+    async fn intake_question_prompt(database: &impl ConnectionTrait, id: &str) -> String {
+        database
+            .query_one(Statement::from_sql_and_values(
+                sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                "SELECT prompt FROM intake_question_definitions WHERE id = ?",
+                [id.into()],
+            ))
+            .await
+            .expect("intake question prompt query should succeed")
+            .expect("seeded intake question should exist")
+            .try_get::<String>("", "prompt")
+            .expect("seeded intake question should include a prompt")
     }
 
     fn task_insert_sql(id: &str, case_id: &str) -> String {
