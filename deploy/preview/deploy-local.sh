@@ -67,14 +67,22 @@ deploy() {
 
   # The policy itself contains no endpoint or credential, but a configured
   # transport without a policy would otherwise silently become the disabled
-  # "[]" configuration below. Flatten formatted JSON before writing the
-  # Compose dotenv file and fail before replacing a preview with rule-only AI.
+  # "[]" configuration below. Flatten formatted JSON before handing it to
+  # Compose and fail before replacing a preview with rule-only AI.
   ai_providers_json="$(printf '%s' "${ANGUI_AI_PROVIDERS_JSON:-}" | tr -d '\r\n')"
   ai_policy_without_whitespace="$(printf '%s' "${ai_providers_json}" | tr -d '[:space:]')"
   if { [[ -z "${ai_policy_without_whitespace}" ]] || [[ "${ai_policy_without_whitespace}" == "[]" ]]; } \
     && { [[ -n "${ANGUI_PREVIEW_AI_ENDPOINT:-}" ]] || [[ -n "${ANGUI_PREVIEW_AI_KEY:-}" ]]; }; then
     die "ANGUI_AI_PROVIDERS_JSON is required when ANGUI_PREVIEW_AI_ENDPOINT or ANGUI_PREVIEW_AI_KEY is set"
   fi
+
+  # Keep AI values out of the Compose dotenv file. A dotenv file is line based,
+  # so even a valid formatted JSON policy can be split into unrelated entries
+  # before Compose resolves the api environment. Process environment values take
+  # precedence over --env-file values during Compose interpolation.
+  export ANGUI_AI_PROVIDERS_JSON="${ai_providers_json:-[]}"
+  export ANGUI_PREVIEW_AI_ENDPOINT="${ANGUI_PREVIEW_AI_ENDPOINT:-}"
+  export ANGUI_PREVIEW_AI_KEY="${ANGUI_PREVIEW_AI_KEY:-}"
 
   PREVIEW_DIR="${PREVIEW_ROOT}/${PREVIEW_ID}"
   ensure_preview_dir
@@ -105,9 +113,6 @@ PREVIEW_ORIGIN=${PREVIEW_ORIGIN}
 PREVIEW_DEMO_PASSWORD=${PREVIEW_DEMO_PASSWORD}
 PREVIEW_PROXY_NETWORK=${PREVIEW_PROXY_NETWORK:-angui-proxy}
 AMAP_WEBSERVICE_KEY=${AMAP_WEBSERVICE_KEY:-}
-ANGUI_AI_PROVIDERS_JSON=${ai_providers_json:-[]}
-ANGUI_PREVIEW_AI_ENDPOINT=${ANGUI_PREVIEW_AI_ENDPOINT:-}
-ANGUI_PREVIEW_AI_KEY=${ANGUI_PREVIEW_AI_KEY:-}
 EOF
 
   # A preview is a fresh, disposable environment. Removing its named SQLite
