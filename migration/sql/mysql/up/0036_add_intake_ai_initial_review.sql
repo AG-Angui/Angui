@@ -1,6 +1,10 @@
 ALTER TABLE intake_sessions ADD COLUMN ai_initial_review_status VARCHAR(48) NOT NULL DEFAULT 'not_started';
 -- statement-break
-ALTER TABLE intake_sessions ADD COLUMN ai_initial_review_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE intake_sessions ADD COLUMN ai_initial_review_json TEXT NULL;
+-- statement-break
+UPDATE intake_sessions SET ai_initial_review_json = '[]' WHERE ai_initial_review_json IS NULL;
+-- statement-break
+ALTER TABLE intake_sessions MODIFY COLUMN ai_initial_review_json TEXT NOT NULL;
 -- statement-break
 ALTER TABLE intake_sessions ADD COLUMN ai_initial_review_profile_json TEXT NULL;
 -- statement-break
