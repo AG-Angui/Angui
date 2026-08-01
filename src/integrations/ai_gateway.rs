@@ -811,14 +811,14 @@ impl AiGateway {
         route: &ProviderRoute,
         request: &AiRequest,
     ) -> Result<String, AiGatewayError> {
-        let outcome = async {
+        async {
             let endpoint = env::var(&route.endpoint_env).map_err(|_| {
                 AiGatewayError::MissingRuntimeConfiguration(route.endpoint_env.clone())
             })?;
             let credential = env::var(&route.credential_env).map_err(|_| {
                 AiGatewayError::MissingRuntimeConfiguration(route.credential_env.clone())
             })?;
-            let native = self.build_native_request(&route, request, &endpoint, &credential)?;
+            let native = self.build_native_request(route, request, &endpoint, &credential)?;
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_millis(route.timeout_ms))
                 .build()
@@ -866,9 +866,7 @@ impl AiGateway {
             }
             Ok(output)
         }
-        .await;
-
-        outcome
+        .await
     }
 
     pub fn decode_json<T: DeserializeOwned>(&self, output: &str) -> Result<T, AiGatewayError> {
@@ -1053,12 +1051,13 @@ mod tests {
     use std::{
         io::{Read, Write},
         net::TcpListener,
-        sync::{Arc, LazyLock, Mutex},
+        sync::{Arc, LazyLock, Mutex as StdMutex},
         thread,
         time::Duration,
     };
 
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     fn provider(id: &str, protocol: ProviderProtocol) -> ProviderConfig {
         ProviderConfig {
@@ -1101,7 +1100,7 @@ mod tests {
         }
     }
 
-    fn mock_responses(responses: Vec<(u16, &'static str)>) -> (String, Arc<Mutex<usize>>) {
+    fn mock_responses(responses: Vec<(u16, &'static str)>) -> (String, Arc<StdMutex<usize>>) {
         mock_responses_with_delays(
             responses
                 .into_iter()
@@ -1112,10 +1111,10 @@ mod tests {
 
     fn mock_responses_with_delays(
         responses: Vec<(u16, &'static str, u64)>,
-    ) -> (String, Arc<Mutex<usize>>) {
+    ) -> (String, Arc<StdMutex<usize>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
         let endpoint = format!("http://{}", listener.local_addr().expect("mock address"));
-        let calls = Arc::new(Mutex::new(0usize));
+        let calls = Arc::new(StdMutex::new(0usize));
         let count = Arc::clone(&calls);
         thread::spawn(move || {
             for (status, body, delay_ms) in responses {
@@ -1145,7 +1144,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_json_runs_one_repair_request_and_stops_after_two_calls() {
-        let _environment = ENV_LOCK.lock().expect("environment lock");
+        let _environment = ENV_LOCK.lock().await;
         let (endpoint, calls) = mock_responses(vec![
             (200, r#"{"output_text":"not-json"}"#),
             (200, r#"{"output_text":"{\"answer\":\"ok\"}"}"#),
@@ -1179,7 +1178,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_failure_does_not_retry_or_fail_over() {
-        let _environment = ENV_LOCK.lock().expect("environment lock");
+        let _environment = ENV_LOCK.lock().await;
         let (endpoint, calls) = mock_responses(vec![(400, r#"{"error":"bad request"}"#)]);
         unsafe {
             env::set_var("ANGUI_TEST_AI_ENDPOINT", endpoint);
@@ -1204,7 +1203,7 @@ mod tests {
 
     #[tokio::test]
     async fn server_failure_uses_one_compliant_fallback() {
-        let _environment = ENV_LOCK.lock().expect("environment lock");
+        let _environment = ENV_LOCK.lock().await;
         let (primary_endpoint, primary_calls) =
             mock_responses(vec![(503, r#"{"error":"temporary"}"#)]);
         let (fallback_endpoint, fallback_calls) =
@@ -1245,7 +1244,7 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_uses_one_provider_failover_without_third_request() {
-        let _environment = ENV_LOCK.lock().expect("environment lock");
+        let _environment = ENV_LOCK.lock().await;
         let (primary_endpoint, primary_calls) =
             mock_responses_with_delays(vec![(200, r#"{"output_text":"late"}"#, 120)]);
         let (fallback_endpoint, fallback_calls) =
@@ -1291,7 +1290,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_repair_never_makes_a_third_request() {
-        let _environment = ENV_LOCK.lock().expect("environment lock");
+        let _environment = ENV_LOCK.lock().await;
         let (endpoint, calls) = mock_responses(vec![
             (200, r#"{"output_text":"not-json"}"#),
             (200, r#"{"output_text":"still-not-json"}"#),
