@@ -3063,11 +3063,9 @@ components:
     CreateClueDraftRequest:
       type: object
       additionalProperties: false
-      required: [text]
+      required: [source_record_id]
       properties:
-        text: { type: string, minLength: 1, maxLength: 4000 }
-        source_type: { type: string, enum: [manual_report, field_report], default: manual_report }
-        raw_record_reference: { type: string, minLength: 1, maxLength: 500 }
+        source_record_id: { type: string, format: uuid, description: Server-owned case source record. }
 
     ClueDraft:
       type: object

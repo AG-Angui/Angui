@@ -387,6 +387,7 @@ pub struct IntakeRouteEstimate {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct IntakeProfileDraft {
+    pub id: String,
     pub status: String,
     pub source_scope: String,
     pub generated_at: String,
@@ -952,6 +953,32 @@ pub struct CaseSummaryTask {
 #[serde(deny_unknown_fields)]
 pub struct CreateClueDraftRequest {
     pub source_record_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewIntakeProfileDraftRequest {
+    pub action: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreIntakeProfileDraftRequest {
+    pub draft_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeProfileDraftVersionsResponse {
+    pub items: Vec<IntakeProfileDraft>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeProfileDraftDiffResponse {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub changed_fields: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

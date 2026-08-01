@@ -115,9 +115,14 @@ const phaseTwoSession: IntakeSession = {
 };
 
 const profileDraft: IntakeDraft = {
+  id: "profile-draft-test-1",
   status: "draft",
   source_scope: "family_provided intake answers from this session only",
   generated_at: "2026-07-25T08:00:00Z",
+  provider_model: null,
+  template_version: "test",
+  degradation_status: "rule_based_fallback",
+  version: 1,
   requires_human_confirmation: true,
   profile: {
     physical_description: "佩戴眼镜，穿蓝色外套。",

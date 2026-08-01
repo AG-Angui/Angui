@@ -19,9 +19,11 @@ use crate::{
         CreateIntakeSessionRequest, IntakeAiFollowUp, IntakeAiFollowUpResponse,
         IntakeAiInitialReviewIssue, IntakeAiInitialReviewResponse, IntakeAnswerRevisionResponse,
         IntakeInitialAnswers, IntakePhaseProgress, IntakeProfileDraft,
-        IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields, IntakeQuestion,
-        IntakeSessionResponse, IntakeStructuredFacts, RestoreIntakeAnswerRequest,
-        StartIntakeAiInitialReviewRequest, SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
+        IntakeProfileDraftDiffResponse, IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields,
+        IntakeProfileDraftVersionsResponse, IntakeQuestion, IntakeSessionResponse,
+        IntakeStructuredFacts, RestoreIntakeAnswerRequest, RestoreIntakeProfileDraftRequest,
+        ReviewIntakeProfileDraftRequest, StartIntakeAiInitialReviewRequest,
+        SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
 };
@@ -328,6 +330,7 @@ pub async fn get_intake_profile_draft(
         .collect();
 
     Ok(IntakeProfileDraft {
+        id: "unpersisted-family-draft".to_owned(),
         status: "draft".to_owned(),
         source_scope: "family_provided intake answers from this session only".to_owned(),
         generated_at: session.updated_at.clone(),
@@ -917,10 +920,176 @@ fn profile_draft_field_metadata(
     .collect()
 }
 
+pub async fn list_intake_profile_draft_versions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<IntakeProfileDraftVersionsResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    Ok(IntakeProfileDraftVersionsResponse {
+        items: intake_profile_drafts::Entity::find()
+            .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+            .order_by_desc(intake_profile_drafts::Column::Version)
+            .all(db)
+            .await?
+            .into_iter()
+            .map(profile_draft_from_model)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+pub async fn diff_intake_profile_drafts(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    from_id: &str,
+    to_id: &str,
+) -> Result<IntakeProfileDraftDiffResponse, ApiError> {
+    let _ = list_intake_profile_draft_versions(db, auth, session_id).await?;
+    let from = intake_profile_drafts::Entity::find_by_id(from_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("profile draft version was not found".to_owned()))?;
+    let from = profile_draft_from_model(from)?;
+    let to = intake_profile_drafts::Entity::find_by_id(to_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("profile draft version was not found".to_owned()))?;
+    let to = profile_draft_from_model(to)?;
+    let mut changed_fields = Vec::new();
+    for field in [
+        "physical_description",
+        "clothing_description",
+        "health_notes",
+        "mobility_notes",
+        "transportation_ability",
+        "frequent_locations",
+        "last_seen_information",
+        "behavior_habits",
+        "suspicious_motive",
+    ] {
+        if serde_json::to_value(&from.profile)
+            .ok()
+            .and_then(|value| value.get(field).cloned())
+            != serde_json::to_value(&to.profile)
+                .ok()
+                .and_then(|value| value.get(field).cloned())
+        {
+            changed_fields.push(field.to_owned());
+        }
+    }
+    Ok(IntakeProfileDraftDiffResponse {
+        from_version: from.version,
+        to_version: to.version,
+        changed_fields,
+    })
+}
+
+pub async fn review_intake_profile_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    draft_id: &str,
+    request: ReviewIntakeProfileDraftRequest,
+) -> Result<IntakeProfileDraft, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let action = request.action.trim().to_lowercase();
+    if !matches!(action.as_str(), "confirm" | "reject") {
+        return Err(ApiError::Validation(
+            "action must be confirm or reject".to_owned(),
+        ));
+    }
+    validate_review_reason(request.reason)?;
+    let draft = intake_profile_drafts::Entity::find_by_id(draft_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id && item.status == "draft")
+        .ok_or_else(|| ApiError::Conflict("profile draft is not awaiting review".to_owned()))?;
+    let mut active = draft.into_active_model();
+    active.status = Set(if action == "confirm" {
+        "confirmed".to_owned()
+    } else {
+        "superseded".to_owned()
+    });
+    active.confirmed_by_user_id = Set(Some(auth.id.clone()));
+    active.confirmed_at = Set(Some(now()));
+    let model = active.update(db).await?;
+    profile_draft_from_model(model)
+}
+
+pub async fn restore_intake_profile_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: RestoreIntakeProfileDraftRequest,
+) -> Result<IntakeProfileDraft, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    validate_review_reason(request.reason)?;
+    let source = intake_profile_drafts::Entity::find_by_id(&request.draft_id)
+        .one(db)
+        .await?
+        .filter(|item| item.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("profile draft version was not found".to_owned()))?;
+    let version = intake_profile_drafts::Entity::find()
+        .filter(intake_profile_drafts::Column::SessionId.eq(session_id))
+        .order_by_desc(intake_profile_drafts::Column::Version)
+        .one(db)
+        .await?
+        .map_or(1, |item| item.version + 1);
+    let timestamp = now();
+    let model = intake_profile_drafts::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        session_id: Set(session_id.to_owned()),
+        version: Set(version),
+        parent_draft_id: Set(Some(source.id)),
+        profile_json: Set(source.profile_json),
+        field_metadata_json: Set(source.field_metadata_json),
+        status: Set("draft".to_owned()),
+        degradation_status: Set("restored_human_review_required".to_owned()),
+        provider_model: Set(None),
+        template_version: Set("intake-profile-restored-v1".to_owned()),
+        generated_at: Set(timestamp.clone()),
+        confirmed_by_user_id: Set(None),
+        confirmed_at: Set(None),
+        created_at: Set(timestamp),
+    }
+    .insert(db)
+    .await?;
+    profile_draft_from_model(model)
+}
+
+fn validate_review_reason(reason: String) -> Result<(), ApiError> {
+    let length = reason.trim().chars().count();
+    if !(1..=1_000).contains(&length) {
+        return Err(ApiError::Validation(
+            "reason must contain 1 to 1000 characters".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn profile_draft_from_model(
     model: intake_profile_drafts::Model,
 ) -> Result<IntakeProfileDraft, ApiError> {
     Ok(IntakeProfileDraft {
+        id: model.id,
         status: model.status,
         source_scope: "family_provided intake answers from this session only".to_owned(),
         generated_at: model.generated_at,

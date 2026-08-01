@@ -5,7 +5,8 @@ use crate::{
     error::ApiError,
     models::{
         AcknowledgeIntakeAiInitialReviewRequest, AuthenticatedUser, ConfirmIntakeSessionRequest,
-        CreateIntakeSessionRequest, RestoreIntakeAnswerRequest, StartIntakeAiInitialReviewRequest,
+        CreateIntakeSessionRequest, RestoreIntakeAnswerRequest, RestoreIntakeProfileDraftRequest,
+        ReviewIntakeProfileDraftRequest, StartIntakeAiInitialReviewRequest,
         SubmitIntakeAnswerRequest,
     },
     services::intake_session_service,
@@ -26,6 +27,22 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route(
                 "/{session_id}/profile-draft/generate",
                 web::post().to(generate_intake_profile_draft),
+            )
+            .route(
+                "/{session_id}/profile-draft/versions",
+                web::get().to(list_intake_profile_draft_versions),
+            )
+            .route(
+                "/{session_id}/profile-draft/{draft_id}/diff/{to_id}",
+                web::get().to(diff_intake_profile_drafts),
+            )
+            .route(
+                "/{session_id}/profile-draft/{draft_id}/review",
+                web::patch().to(review_intake_profile_draft),
+            )
+            .route(
+                "/{session_id}/profile-draft/restore",
+                web::post().to(restore_intake_profile_draft),
             )
             .route(
                 "/{session_id}/ai-follow-up",
@@ -79,6 +96,68 @@ async fn generate_intake_profile_draft(
             &auth,
             &session_id,
             &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn list_intake_profile_draft_versions(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::list_intake_profile_draft_versions(&state.db, &auth, &session_id)
+            .await?,
+    ))
+}
+async fn diff_intake_profile_drafts(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, from_id, to_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::diff_intake_profile_drafts(
+            &state.db,
+            &auth,
+            &session_id,
+            &from_id,
+            &to_id,
+        )
+        .await?,
+    ))
+}
+async fn review_intake_profile_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    request: web::Json<ReviewIntakeProfileDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, draft_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::review_intake_profile_draft(
+            &state.db,
+            &auth,
+            &session_id,
+            &draft_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+async fn restore_intake_profile_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    request: web::Json<RestoreIntakeProfileDraftRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        intake_session_service::restore_intake_profile_draft(
+            &state.db,
+            &auth,
+            &session_id,
+            request.into_inner(),
         )
         .await?,
     ))
