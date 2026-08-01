@@ -224,6 +224,23 @@ Optional preview secret:
   secret of the same name also works, but grants the credential to every
   eligible preview deployment and is therefore less restrictive.
 
+AI preview configuration uses two GitHub configuration mechanisms because the
+provider policy is not a credential while the transport values are:
+
+- Environment Variable `ANGUI_AI_PROVIDERS_JSON`: the complete JSON provider
+  policy array. It may name the endpoint and credential environment variables,
+  but must not embed their values.
+- Environment Secrets `ANGUI_PREVIEW_AI_ENDPOINT` and
+  `ANGUI_PREVIEW_AI_KEY`: the server-only API base URL and credential.
+
+The preview, PR-preview, and tag-preview workflows read the policy from the
+selected GitHub Environment's `vars` context, and the endpoint/key from its
+`secrets` context. Defining `ANGUI_AI_PROVIDERS_JSON` as a Secret will not make
+it available to those workflows. Conversely, do not put the endpoint or key in
+a GitHub Variable. A deployment with either AI transport value but no policy
+now fails before it can deploy a rule-only instance. Formatted multi-line JSON is
+accepted and flattened for the Compose dotenv file during deployment.
+
 The VM needs Docker Engine, Compose v2, `curl`, port 80 reachable from the
 parent Nginx, and permission for the runner service account to run Docker. No
 SSH deployment secrets, GHCR read token, preview port range, DNS credentials, or
