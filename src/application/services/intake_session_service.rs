@@ -29,8 +29,7 @@ use crate::{
 };
 
 use crate::ai_gateway::{
-    AiCapability, AiExecutionAudit, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus,
-    DataLevel,
+    AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel,
 };
 
 pub async fn create_intake_session(
@@ -404,9 +403,9 @@ pub async fn generate_intake_profile_draft(
         input_scope_reference: "intake-session-family-answers-only".to_owned(), redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
     };
     let execution = gateway.execute(&request).await;
-    let decision = execution.decision();
-    let (profile, metadata, provider_model, degradation_status, audit_status) = match execution {
-        AiExecutionResult::Completed { route, output } => {
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&request, &execution);
+    let (profile, metadata, provider_model, degradation_status, _audit_status) = match execution {
+        AiExecutionResult::Completed { route, output, .. } => {
             match gateway.decode_json::<ProfileExtractionOutput>(&output) {
                 Ok(out) => match validate_profile_extraction(out, &answers) {
                     Ok((profile, metadata)) => (
@@ -450,13 +449,8 @@ pub async fn generate_intake_profile_draft(
     }
     .insert(&transaction)
     .await?;
-    crate::ai_gateway::persist_execution_audit(
-        &transaction,
-        &AiExecutionAudit::for_request(&request, &decision, audit_status),
-        &auth.id,
-        None,
-    )
-    .await?;
+    crate::ai_gateway::persist_execution_audits(&transaction, &execution_audits, &auth.id, None)
+        .await?;
     write_audit(&transaction, auth, "intake_profile_draft.generated", session_id.to_owned(), Some(json!({"version": version, "degradation_status": model.degradation_status, "provider_configured": model.provider_model.is_some()}))).await?;
     transaction.commit().await?;
     profile_draft_from_model(model)
@@ -519,8 +513,8 @@ pub async fn start_ai_initial_review(
         redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
     };
     let execution = gateway.execute(&ai_request).await;
-    let decision = execution.decision();
-    let (issues, review_status, audit_status) = match execution {
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+    let (issues, review_status, _audit_status) = match execution {
         AiExecutionResult::Completed { output, .. } => {
             match gateway.decode_json::<InitialReviewModelOutput>(&output) {
                 Ok(output) => match validate_initial_review_output(output, &answers) {
@@ -580,8 +574,8 @@ pub async fn start_ai_initial_review(
     updated.ai_initial_reviewed_at = Set(Some(reviewed_at.clone()));
     updated.updated_at = Set(reviewed_at.clone());
     let updated = updated.update(&transaction).await?;
-    let audit = AiExecutionAudit::for_request(&ai_request, &decision, audit_status);
-    crate::ai_gateway::persist_execution_audit(&transaction, &audit, &auth.id, None).await?;
+    crate::ai_gateway::persist_execution_audits(&transaction, &execution_audits, &auth.id, None)
+        .await?;
     write_audit(
         &transaction,
         auth,
@@ -721,8 +715,8 @@ pub async fn get_ai_follow_up(
         redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
     };
     let execution = gateway.execute(&ai_request).await;
-    let decision = execution.decision();
-    let (question, degradation_status, audit_status) = match execution {
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+    let (question, degradation_status, _audit_status) = match execution {
         AiExecutionResult::Completed { output, .. } => {
             match gateway.decode_json::<IntakeAiFollowUp>(&output) {
                 Ok(question) if valid_follow_up(&question, &missing, &questions) => (
@@ -748,8 +742,7 @@ pub async fn get_ai_follow_up(
             AiTaskStatus::Failed,
         ),
     };
-    let audit = AiExecutionAudit::for_request(&ai_request, &decision, audit_status);
-    crate::ai_gateway::persist_execution_audit(db, &audit, &auth.id, None).await?;
+    crate::ai_gateway::persist_execution_audits(db, &execution_audits, &auth.id, None).await?;
     Ok(IntakeAiFollowUpResponse {
         question,
         degradation_status,

@@ -7,10 +7,7 @@ use sea_orm::{
 use serde_json::json;
 
 use crate::{
-    ai_gateway::{
-        AiCapability, AiExecutionAudit, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus,
-        DataLevel,
-    },
+    ai_gateway::{AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel},
     amap_service::{Coordinate, PoiSearch},
     entities::{
         archive_drafts, archive_review_materials, case_places, case_source_records, cases,
@@ -115,7 +112,11 @@ struct ArchiveOrganizationCandidate {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SummaryCandidate {
-    content: String,
+    confirmed_information: Vec<String>,
+    pending_verification: Vec<String>,
+    excluded_directions: Vec<String>,
+    safety_reminders: Vec<String>,
+    uncertainty_notice: String,
 }
 
 pub async fn create_archive_draft(
@@ -319,9 +320,9 @@ pub async fn deidentify_archive_draft(
         .await?;
         let ai_request = AiRequest { capability: AiCapability::CaseOrganization, data_level: DataLevel::Internal, purpose: AiPurpose::CaseArchiveDraft, data_region: "CN".to_owned(), system_instruction: Some("Return JSON only: {timeline:string[],lessons:string[],uncertainty:string}. Use only this administrator-approved de-identified material. Do not infer identities, exact locations, health details, causes, or operational outcomes.".to_owned()), output_schema: Some(archive_candidate_schema()), output_schema_name: Some("case_archive_candidate".to_owned()), input: serde_json::to_string(&json!({"deidentified_material": material_text})).map_err(|_| ApiError::Internal)?, requested_output_tokens: 500, template_version: "case-archive-ai-v2".to_owned(), input_scope_reference: format!("approved-deidentified-material:{}:v{}", material.id, material.version), redaction_policy_version: "archive-approved-material-v1".to_owned() };
         let execution = gateway.execute(&ai_request).await;
-        let decision = execution.decision();
-        let (content, provider_model, audit_status) = match execution {
-            AiExecutionResult::Completed { route, output } => {
+        let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+        let (content, provider_model, _audit_status) = match execution {
+            AiExecutionResult::Completed { route, output, .. } => {
                 match gateway.decode_json::<ArchiveOrganizationCandidate>(&output) {
                     Ok(candidate) if valid_archive_candidate(&candidate) => (
                         archive_candidate_content(candidate),
@@ -352,11 +353,7 @@ pub async fn deidentify_archive_draft(
             "case-archive-ai-v2".to_owned(),
             "deidentified",
             Some(material.id),
-            Some(AiExecutionAudit::for_request(
-                &ai_request,
-                &decision,
-                audit_status,
-            )),
+            Some(execution_audits),
         )
     } else {
         (
@@ -419,10 +416,10 @@ pub async fn deidentify_archive_draft(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::Internal)?;
-    if let Some(execution_audit) = execution_audit {
-        crate::ai_gateway::persist_execution_audit(
+    if let Some(execution_audits) = execution_audit {
+        crate::ai_gateway::persist_execution_audits(
             &transaction,
-            &execution_audit,
+            &execution_audits,
             &auth.id,
             Some(&model.case_id),
         )
@@ -675,9 +672,9 @@ pub async fn create_clue_drafts(
         redaction_policy_version: "case-collaboration-v1".to_owned(),
     };
     let execution = gateway.execute(&ai_request).await;
-    let decision = execution.decision();
-    let (candidate, provider_model, degradation_status, audit_status) = match execution {
-        AiExecutionResult::Completed { route, output } => {
+    let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+    let (candidate, provider_model, degradation_status, _audit_status) = match execution {
+        AiExecutionResult::Completed { route, output, .. } => {
             match gateway.decode_json::<ClueDraftCandidate>(&output) {
                 Ok(candidate) => (
                     normalized_candidate(candidate, &text),
@@ -707,7 +704,6 @@ pub async fn create_clue_drafts(
         ),
     };
     let candidate_json = serde_json::to_string(&candidate).map_err(|_| ApiError::Internal)?;
-    let execution_audit = AiExecutionAudit::for_request(&ai_request, &decision, audit_status);
     let timestamp = now();
     let transaction = db.begin().await?;
     let draft = clue_drafts::ActiveModel {
@@ -738,9 +734,9 @@ pub async fn create_clue_drafts(
     }
     .insert(&transaction)
     .await?;
-    crate::ai_gateway::persist_execution_audit(
+    crate::ai_gateway::persist_execution_audits(
         &transaction,
-        &execution_audit,
+        &execution_audits,
         &auth.id,
         Some(case_id),
     )
@@ -813,12 +809,13 @@ pub async fn create_summary_draft(
                 redaction_policy_version: "case-summary-v1".to_owned(),
             };
                 let execution = gateway.execute(&ai_request).await;
-                let decision = execution.decision();
-                let (content, provider_model, audit_status) = match execution {
-                    AiExecutionResult::Completed { route, output } => {
+                let execution_audits =
+                    crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
+                let (content, provider_model, _audit_status) = match execution {
+                    AiExecutionResult::Completed { route, output, .. } => {
                         match gateway.decode_json::<SummaryCandidate>(&output).and_then(
                             |candidate| {
-                                required_text("content", candidate.content, 12_000).map_err(|_| {
+                                validate_summary_candidate(candidate, &summary).map_err(|_| {
                                     crate::ai_gateway::AiGatewayError::InvalidStructuredOutput
                                 })
                             },
@@ -845,11 +842,7 @@ pub async fn create_summary_draft(
                 (
                     content,
                     provider_model,
-                    Some(AiExecutionAudit::for_request(
-                        &ai_request,
-                        &decision,
-                        audit_status,
-                    )),
+                    Some(execution_audits),
                     "pending_review",
                     true,
                 )
@@ -891,10 +884,10 @@ pub async fn create_summary_draft(
     }
     .insert(&transaction)
     .await?;
-    if let Some(execution_audit) = execution_audit {
-        crate::ai_gateway::persist_execution_audit(
+    if let Some(execution_audits) = execution_audit {
+        crate::ai_gateway::persist_execution_audits(
             &transaction,
-            &execution_audit,
+            &execution_audits,
             &auth.id,
             Some(case_id),
         )
@@ -1216,10 +1209,66 @@ fn clue_candidate_schema() -> serde_json::Value {
 fn summary_candidate_schema() -> serde_json::Value {
     json!({
         "type": "object",
-        "properties": { "content": { "type": "string" } },
-        "required": ["content"],
+        "properties": {
+            "confirmed_information": { "type": "array", "items": { "type": "string" } },
+            "pending_verification": { "type": "array", "items": { "type": "string" } },
+            "excluded_directions": { "type": "array", "items": { "type": "string" } },
+            "safety_reminders": { "type": "array", "items": { "type": "string" } },
+            "uncertainty_notice": { "type": "string" }
+        },
+        "required": ["confirmed_information", "pending_verification", "excluded_directions", "safety_reminders", "uncertainty_notice"],
         "additionalProperties": false
     })
+}
+
+fn validate_summary_candidate(
+    candidate: SummaryCandidate,
+    summary: &crate::models::CaseSummaryResponse,
+) -> Result<String, ()> {
+    let confirmed = summary
+        .confirmed_clues
+        .iter()
+        .map(|item| item.content.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let pending = summary
+        .pending_verification
+        .iter()
+        .map(|item| item.content.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let bounded = |items: &[String]| {
+        items.len() <= 20
+            && items
+                .iter()
+                .all(|item| !item.trim().is_empty() && item.chars().count() <= 500)
+    };
+    if !bounded(&candidate.confirmed_information)
+        || !bounded(&candidate.pending_verification)
+        || !bounded(&candidate.excluded_directions)
+        || !bounded(&candidate.safety_reminders)
+        || candidate.uncertainty_notice.trim().is_empty()
+        || candidate.uncertainty_notice.chars().count() > 500
+    {
+        return Err(());
+    }
+    if !candidate
+        .confirmed_information
+        .iter()
+        .all(|item| confirmed.contains(item.trim()))
+        || !candidate
+            .pending_verification
+            .iter()
+            .all(|item| pending.contains(item.trim()))
+    {
+        return Err(());
+    }
+    Ok(format!(
+        "Confirmed information:\n- {}\n\nPending verification:\n- {}\n\nExcluded directions:\n- {}\n\nSafety reminders:\n- {}\n\nUncertainty notice: {}",
+        candidate.confirmed_information.join("\n- "),
+        candidate.pending_verification.join("\n- "),
+        candidate.excluded_directions.join("\n- "),
+        candidate.safety_reminders.join("\n- "),
+        candidate.uncertainty_notice.trim()
+    ))
 }
 
 fn deterministic_archive_material_content(material: &str) -> String {

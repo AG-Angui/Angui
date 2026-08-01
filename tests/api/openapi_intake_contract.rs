@@ -400,7 +400,7 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
             "usage_scope:",
             "retention_status:",
             "version:",
-            "Internal deterministic draft content containing no raw case materials.",
+            "Initial drafts contain no raw case materials.",
         ],
     );
     let public_progress_item = schema("CasePublicProgressItem");
@@ -441,7 +441,12 @@ fn archive_review_openapi_contract_requires_admin_and_manual_deidentification() 
     }
     assert_schema_contains(
         "DeidentifyArchiveDraftRequest",
-        &["enum: [confirm, reject]", "reason:"],
+        &[
+            "enum: [confirm, reject]",
+            "reason:",
+            "deidentified_material:",
+            "Human-supplied de-identified material",
+        ],
     );
     assert_schema_contains(
         "ReviewArchiveDraftRequest",

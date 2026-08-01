@@ -82,7 +82,10 @@ async fn post_archive_drafts_requires_finished_commander_case_and_keeps_raw_mate
     assert_eq!(created["deidentification_status"], "manual_review_required");
     assert_eq!(
         created["source_scope"],
-        json!(["confirmed_clue_metadata", "completed_task_metadata"])
+        json!([
+            "confirmed_clue_review_material",
+            "completed_task_review_material"
+        ])
     );
     assert!(created["provider_model"].is_null());
     assert!(!created.to_string().contains("测试线索"));

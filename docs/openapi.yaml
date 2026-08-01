@@ -349,7 +349,7 @@ paths:
       tags: [Intake sessions]
       operationId: startIntakeAiInitialReview
       summary: Start the family-visible AI initial review
-      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case.
+      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-data-classification: sensitive
@@ -1160,7 +1160,7 @@ paths:
       tags: [Cases]
       operationId: getLatestSummaryDraft
       summary: Get the latest pending automated summary draft
-      description: Commander only. A pending-review draft is created automatically after a commander completes a clue review. The response is null when there is no draft awaiting review. A deterministic, source-scoped fallback is used when AI generation is unavailable, and it is still subject to the same human review before publication.
+      description: Commander only. A pending-review draft is created automatically after a commander completes a clue review. The response is null when there is no draft awaiting review. AI candidates are source-checked five-part JSON (`confirmed_information`, `pending_verification`, `excluded_directions`, `safety_reminders`, `uncertainty_notice`); transport failure, invalid JSON, or semantic validation use a deterministic source-scoped fallback, which is still subject to the same human review before publication.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
@@ -1174,7 +1174,7 @@ paths:
       tags: [Cases]
       operationId: createSummaryDraft
       summary: Create a commander-only summary draft
-      description: Internal re-generation endpoint. Ordinary summary drafts are created automatically after a commander completes a clue review. Server-generated drafts are built from the commander's authorized summary scope and start in pending_review; when all AI providers are unavailable, a deterministic source-scoped fallback is generated instead. Free-form commander drafts remain internal and are not publication eligible.
+      description: Internal re-generation endpoint. Ordinary summary drafts are created automatically after a commander completes a clue review. Server-generated drafts are built from the commander's authorized summary scope and start in pending_review; the Gateway permits at most two total HTTP calls per execution (one JSON repair or one compliant provider failover, never both), then uses a deterministic source-scoped fallback on failure. Free-form commander drafts remain internal and are not publication eligible.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
@@ -3212,11 +3212,11 @@ components:
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
         status: { type: string, enum: [draft, pending_review, published, rejected, withdrawn] }
-        content: { type: string, description: Internal deterministic draft content containing no raw case materials. }
-        source_scope: { type: array, items: { type: string, enum: [confirmed_clue_metadata, completed_task_metadata] } }
+        content: { type: string, description: Initial drafts contain no raw case materials. After an administrator confirms de-identification, a reviewed, de-identified organization draft may replace it. }
+        source_scope: { type: array, items: { type: string, enum: [confirmed_clue_review_material, completed_task_review_material] } }
         deidentification_status: { type: string, enum: [manual_review_required, deidentified, rejected] }
         template_version: { type: string }
-        provider_model: { type: [string, "null"], description: Always null for the rule-based draft generator. }
+        provider_model: { type: [string, "null"], description: Null before administrator-confirmed de-identification; otherwise the audited model identifier for a reviewed organization draft. }
         version: { type: integer, minimum: 1 }
         usage_scope: { type: string, enum: [internal_archive, learning_resource] }
         retention_status: { type: string, enum: [retained, withdrawn] }
@@ -3232,6 +3232,11 @@ components:
       properties:
         outcome: { type: string, enum: [confirm, reject] }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+        deidentified_material:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 12000
+          description: Required when outcome is confirm. Human-supplied de-identified material; it is the only archive material eligible for AI organization.
 
     ReviewArchiveDraftRequest:
       type: object

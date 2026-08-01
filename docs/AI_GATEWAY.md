@@ -113,13 +113,24 @@ Before a provider can become a candidate, the Gateway checks all of the followin
 
 Candidates are ordered deterministically by priority, then weight, then provider ID. A gateway with no configured providers returns `rule_based / no_provider_configured`. When providers exist but none meet every policy requirement, it returns `manual_required / no_compliant_provider`.
 
-For a routed request, the Gateway makes at most two attempts against the selected provider. A structured request whose provider response is not valid JSON is treated as a failed attempt rather than being passed to a business service. If the selected provider has `allow_fallback: true`, all attempts fail, and another provider independently satisfies the same capability, data-level, purpose, residency, and limit policy, the Gateway tries the next eligible provider. Business writes occur only after execution returns, so these transport retries cannot create duplicate cases, clues, summaries, or archive records. Circuit breaking remains a deployment/observability concern and is not represented as persistent mutable Gateway state.
+For a routed request, the Gateway makes at most **two total HTTP calls** for one business execution. The budget is shared across all recovery paths; it is not two attempts per provider. The execution state machine is deliberately small and deterministic:
+
+| Initial result | Optional second call | Terminal behavior |
+| --- | --- | --- |
+| Successful provider response | None | Return the response for business-schema validation |
+| Invalid JSON for a requested structured output | One same-provider JSON repair | Return the repaired JSON or fail |
+| Connection failure, request timeout, or HTTP 5xx | One policy-eligible provider failover, only when the selected route enables `allow_fallback` | Return the fallback response or fail |
+| HTTP 4xx, authentication/configuration error, or other permanent transport failure | None | Fail immediately |
+
+JSON repair and provider failover are mutually exclusive. A repair request contains only the invalid-output diagnosis and the required schema, never the original business input; it has a bounded output-token limit and a distinct `:json-repair-v1` template version. A failed repair never triggers a provider failover or a third request. A fallback candidate must independently satisfy the original capability, data-level, purpose, residency, and limit policy.
+
+The Gateway classifies failure attempts as `invalid_structured_output`, `transient_provider_failure`, `permanent_provider_failure`, `missing_runtime_configuration`, `invalid_provider_response`, or `gateway_error`. Business writes occur only after execution returns, so these bounded transport attempts cannot create duplicate cases, clues, summaries, or archive records. Circuit breaking remains a deployment/observability concern and is not represented as persistent mutable Gateway state.
 
 `AiRequest` can carry a purpose-specific JSON Schema. The OpenAI Chat Completions and Responses adapters send strict named JSON-schema controls; Gemini sends `application/json` and its response JSON schema. Anthropic remains prompt-plus-server-validation because this adapter currently uses its text-message protocol rather than a tool-use response contract. All providers still receive server-side parsing and purpose-specific semantic validation before any draft is saved.
 
 ## Audit Boundary
 
-Each controlled execution persists the Gateway's `AiExecutionAudit` through `persist_execution_audit`. The record includes the selected Provider ID, model, template version, input-scope reference, SHA-256 input hash, redaction-policy version, and task status. It never contains the raw request, response, health history, contact data, or precise locations.
+Each controlled execution persists one Gateway `AiExecutionAudit` for every attempted HTTP call through `persist_execution_audits`. The record includes the selected Provider ID, model, template version, input-scope reference, SHA-256 input hash, redaction-policy version, task status, `attempt_number`, `attempt_role` (`initial`, `json_repair`, or `provider_failover`), and the stable `failure_kind` when applicable. It never contains the raw prompt/request, raw model response, provider health history, contact data, or precise locations.
 
 The Gateway resolves provider endpoint and credential references only at its transport boundary, executes a policy-approved request with the configured timeout, and extracts response text for the supported protocols. Business services must still validate the response against their purpose-specific schema before saving a draft. Transport failures, non-success responses, empty responses, and invalid structured output must use the deterministic or manual fallback path.
 
@@ -129,8 +140,8 @@ The Gateway never allows an AI result to create a confirmed clue, publish a case
 
 - Intake follow-up uses `inquiry / intake_draft` only for the session creator's currently authorized answers. The response is a single optional JSON question with its purpose and missing fields. Invalid output, unavailable providers, timeout, and policy mismatch return the fixed question set; a family member can always mark an answer unknown, edit it, or use the static flow.
 - Clue extraction uses `structured_extraction / clue_draft`. Candidate fields never create facts directly. A commander must accept, edit, clear, or reject fields; acceptance creates a normal `pending_review` clue which remains subject to the existing clue-review state machine.
-- Case summaries use `case_summary / case_summary_draft`. Rule-based output remains available when execution fails. Drafts are immutable versions with a parent reference; commanders can list versions, compare line-level changes, submit, publish, reject, or withdraw them.
-- Archive organization uses `case_organization / case_archive_draft` over aggregate metadata only. Raw conversations, identities, contacts, health data, exact locations, routes, attachments, and unreviewed clues are excluded. The draft remains non-reusable until the existing manual de-identification and administrator review lifecycle completes.
+- Case summaries use `case_summary / case_summary_draft`. A model candidate must contain `confirmed_information`, `pending_verification`, `excluded_directions`, `safety_reminders`, and a non-empty `uncertainty_notice`. Each section is length-bounded and source-checked against the commander's authorized, already-reviewed summary scope. Rule-based output remains available when execution or semantic validation fails. Drafts are immutable versions with a parent reference; commanders can list versions, compare line-level changes, submit, publish, reject, or withdraw them.
+- Archive organization uses `case_organization / case_archive_draft` only after an administrator has confirmed a separate de-identified review-material version. The initial archive draft is a non-reusable placeholder; its controlled review material is limited to confirmed clue and completed-task review content and stays outside the AI input boundary until that human confirmation. Raw conversations, identities, contacts, health data, exact locations, routes, attachments, and unreviewed clues are excluded. The resulting organization draft remains non-reusable until the existing administrator review lifecycle completes.
 
 ## Prompt Templates
 
