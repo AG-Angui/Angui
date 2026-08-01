@@ -32,6 +32,9 @@ mod m0029_add_task_operation_request_fingerprint;
 mod m0030_allow_multiple_task_volunteers;
 mod m0031_create_task_applications;
 mod m0032_translate_default_intake_questions;
+mod m0033_add_clue_draft_candidates;
+mod m0034_add_summary_versions;
+mod m0035_add_clue_promotion;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -73,6 +76,9 @@ impl MigratorTrait for Migrator {
             Box::new(m0030_allow_multiple_task_volunteers::Migration),
             Box::new(m0031_create_task_applications::Migration),
             Box::new(m0032_translate_default_intake_questions::Migration),
+            Box::new(m0033_add_clue_draft_candidates::Migration),
+            Box::new(m0034_add_summary_versions::Migration),
+            Box::new(m0035_add_clue_promotion::Migration),
         ]
     }
 }

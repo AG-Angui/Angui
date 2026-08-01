@@ -916,6 +916,83 @@ pub struct ClueDraftResponse {
     pub template_version: String,
     pub provider_model: Option<String>,
     pub degradation_status: String,
+    pub candidate: ClueDraftCandidate,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub review_reason: Option<String>,
+    pub version: i32,
+    pub promoted_clue_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeAiFollowUp {
+    pub field: String,
+    pub prompt: String,
+    pub purpose: String,
+    pub missing_fields: Vec<String>,
+    pub skippable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeAiFollowUpResponse {
+    pub question: Option<IntakeAiFollowUp>,
+    pub degradation_status: String,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntakeAnswerRevisionResponse {
+    pub id: String,
+    pub field: String,
+    pub answer: String,
+    pub revision_kind: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreIntakeAnswerRequest {
+    pub revision_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClueDraftCandidate {
+    pub content_summary: Option<String>,
+    pub occurred_at: Option<String>,
+    pub location_text: Option<String>,
+    pub source_text: Option<String>,
+    pub action_candidates: Vec<String>,
+    pub missing_fields: Vec<String>,
+    pub source_excerpt: String,
+    #[serde(default)]
+    pub field_sources: std::collections::BTreeMap<String, ClueDraftFieldSource>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClueDraftFieldSource {
+    pub reference: Option<String>,
+    pub excerpt: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewClueDraftRequest {
+    pub action: String,
+    pub reason: String,
+    pub candidate: ClueDraftCandidate,
+    #[serde(default)]
+    pub field_decisions: std::collections::BTreeMap<String, ClueDraftFieldDecision>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClueDraftFieldDecision {
+    pub action: String,
+    pub value: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -953,6 +1030,8 @@ pub struct ReviewSummaryDraftRequest {
 pub struct SummaryDraftResponse {
     pub id: String,
     pub case_id: String,
+    pub parent_draft_id: Option<String>,
+    pub version: i32,
     pub status: String,
     pub content: String,
     pub source_scope: Vec<String>,
@@ -964,6 +1043,19 @@ pub struct SummaryDraftResponse {
     pub created_at: String,
     pub updated_at: String,
     pub publication_eligible: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SummaryDraftVersionResponse {
+    pub items: Vec<SummaryDraftResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SummaryDraftDiffResponse {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -12,6 +12,7 @@ import { ApiClientError } from "../api/client";
 import {
   confirmIntakeSession,
   createIntakeSession,
+  getIntakeAiFollowUp,
   getIntakeDraft,
   submitIntakeAnswer,
 } from "../api/intake";
@@ -275,8 +276,23 @@ export function FamilyIntakeForm({
         replace,
       });
       const next = sessionFromAnswerResponse(response);
-      setSession(next);
-      if (next.phase !== "phase_two") setIsReviewingBasicInformation(false);
+      const guidance = await getIntakeAiFollowUp(token, next.id);
+      const guidedSession = guidance.question
+        ? {
+            ...next,
+            next_question: {
+              field: guidance.question.field,
+              prompt: guidance.question.prompt,
+              required: false,
+            },
+            guidance_mode:
+              guidance.degradation_status === "available"
+                ? ("ai_assisted" as const)
+                : ("rule_based" as const),
+          }
+        : next;
+      setSession(guidedSession);
+      if (guidedSession.phase !== "phase_two") setIsReviewingBasicInformation(false);
       setAssessments(response.assessments);
       if (replace) {
         if (draft) {
@@ -285,7 +301,7 @@ export function FamilyIntakeForm({
             .map((item) => item.field);
           setEditSource(null);
           setEditAnswer("");
-          const refreshed = await loadDraft(next.id, false);
+          const refreshed = await loadDraft(guidedSession.id, false);
           if (refreshed)
             setProfile((current) =>
               syncProfileFields(current, refreshed, replacedFields),
@@ -294,7 +310,7 @@ export function FamilyIntakeForm({
       } else {
         setAnswer("");
         if (next.status === "ready_for_confirmation") {
-          await loadDraft(next.id, true, basicInformation);
+          await loadDraft(guidedSession.id, true, basicInformation);
         }
       }
       return true;

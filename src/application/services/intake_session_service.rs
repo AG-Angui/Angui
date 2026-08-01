@@ -15,12 +15,18 @@ use crate::{
     error::ApiError,
     models::{
         AuthenticatedUser, ConfirmIntakeSessionRequest, ConfirmIntakeSessionResponse,
-        CreateCaseRequest, CreateIntakeSessionRequest, IntakeInitialAnswers, IntakePhaseProgress,
+        CreateCaseRequest, CreateIntakeSessionRequest, IntakeAiFollowUp, IntakeAiFollowUpResponse,
+        IntakeAnswerRevisionResponse, IntakeInitialAnswers, IntakePhaseProgress,
         IntakeProfileDraft, IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields,
-        IntakeQuestion, IntakeSessionResponse, IntakeStructuredFacts, SubmitIntakeAnswerRequest,
-        SubmitIntakeAnswerResponse,
+        IntakeQuestion, IntakeSessionResponse, IntakeStructuredFacts, RestoreIntakeAnswerRequest,
+        SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
+};
+
+use crate::ai_gateway::{
+    AiCapability, AiExecutionAudit, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus,
+    DataLevel,
 };
 
 pub async fn create_intake_session(
@@ -322,6 +328,187 @@ pub async fn get_intake_profile_draft(
         confirmation_blocked_reasons,
         direction_hypotheses: direction_hypotheses(&answers, &session.updated_at),
     })
+}
+
+pub async fn get_ai_follow_up(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    gateway: &crate::ai_gateway::AiGateway,
+) -> Result<IntakeAiFollowUpResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let questions = questions_for_version(db, session.question_set_version).await?;
+    let answers = parse_answers(&session)?;
+    let missing = missing_fields(&answers, &questions);
+    let fallback = next_question_for_phase(
+        &questions,
+        &missing,
+        &IntakePhaseProgress::for_answers(&answers),
+    );
+    let Some(fallback) = fallback else {
+        return Ok(IntakeAiFollowUpResponse {
+            question: None,
+            degradation_status: "rule_based_complete".to_owned(),
+            generated_at: now(),
+        });
+    };
+    let input = serde_json::to_string(&serde_json::json!({
+        "answers": answers,
+        "missing_fields": missing,
+        "fallback_field": fallback.field.clone(),
+    }))
+    .map_err(|_| ApiError::Internal)?;
+    let ai_request = AiRequest {
+        capability: AiCapability::Inquiry,
+        data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft,
+        data_region: "CN".to_owned(),
+        system_instruction: Some("Return JSON only: {field,prompt,purpose,missing_fields,skippable}. Ask one optional factual follow-up for a listed missing field. Do not infer a location, diagnosis, action, or emergency conclusion.".to_owned()),
+        input,
+        requested_output_tokens: 220,
+        template_version: "intake-follow-up-ai-v1".to_owned(),
+        input_scope_reference: "intake-session-authorized-answers".to_owned(),
+        redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+    };
+    let execution = gateway.execute(&ai_request).await;
+    let decision = execution.decision();
+    let (question, degradation_status, audit_status) = match execution {
+        AiExecutionResult::Completed { output, .. } => {
+            match gateway.decode_json::<IntakeAiFollowUp>(&output) {
+                Ok(question) if valid_follow_up(&question, &missing, &questions) => (
+                    Some(normalize_follow_up(question)),
+                    "available".to_owned(),
+                    AiTaskStatus::Completed,
+                ),
+                _ => (
+                    Some(static_follow_up(fallback, missing.clone())),
+                    "rule_based_fallback".to_owned(),
+                    AiTaskStatus::Failed,
+                ),
+            }
+        }
+        AiExecutionResult::Degraded { .. } => (
+            Some(static_follow_up(fallback, missing.clone())),
+            "rule_based_fallback".to_owned(),
+            AiTaskStatus::Degraded,
+        ),
+        AiExecutionResult::Failed { .. } => (
+            Some(static_follow_up(fallback, missing.clone())),
+            "rule_based_fallback".to_owned(),
+            AiTaskStatus::Failed,
+        ),
+    };
+    let audit = AiExecutionAudit::for_request(&ai_request, &decision, audit_status);
+    crate::ai_gateway::persist_execution_audit(db, &audit, &auth.id, None).await?;
+    Ok(IntakeAiFollowUpResponse {
+        question,
+        degradation_status,
+        generated_at: now(),
+    })
+}
+
+pub async fn list_answer_revisions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<Vec<IntakeAnswerRevisionResponse>, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    Ok(intake_answer_revisions::Entity::find()
+        .filter(intake_answer_revisions::Column::SessionId.eq(session_id))
+        .order_by_asc(intake_answer_revisions::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|revision| IntakeAnswerRevisionResponse {
+            id: revision.id,
+            field: revision.field_code,
+            answer: revision.raw_answer,
+            revision_kind: revision.revision_kind,
+            created_at: revision.created_at,
+        })
+        .collect())
+}
+
+pub async fn restore_answer_revision(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    field: &str,
+    request: RestoreIntakeAnswerRequest,
+    answer_hard_max: usize,
+) -> Result<SubmitIntakeAnswerResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let revision = intake_answer_revisions::Entity::find_by_id(request.revision_id)
+        .one(db)
+        .await?
+        .filter(|revision| revision.session_id == session_id && revision.field_code == field)
+        .ok_or_else(|| ApiError::NotFound("intake answer revision was not found".to_owned()))?;
+    submit_intake_answer(
+        db,
+        auth,
+        session_id,
+        SubmitIntakeAnswerRequest {
+            field: field.to_owned(),
+            answer: revision.raw_answer,
+            replace: true,
+            structured: None,
+        },
+        answer_hard_max,
+    )
+    .await
+}
+
+fn static_follow_up(question: IntakeQuestion, missing_fields: Vec<String>) -> IntakeAiFollowUp {
+    IntakeAiFollowUp {
+        field: question.field,
+        prompt: question.prompt,
+        purpose: "Collect a missing factual field for human review.".to_owned(),
+        missing_fields,
+        skippable: true,
+    }
+}
+
+fn valid_follow_up(
+    question: &IntakeAiFollowUp,
+    missing: &[String],
+    questions: &[intake_question_definitions::Model],
+) -> bool {
+    question.skippable
+        && missing.contains(&question.field)
+        && questions
+            .iter()
+            .any(|definition| definition.field_code == question.field)
+        && !question.prompt.trim().is_empty()
+        && question.prompt.chars().count() <= 500
+        && !question.purpose.trim().is_empty()
+        && question.purpose.chars().count() <= 300
+        && question
+            .missing_fields
+            .iter()
+            .all(|field| missing.contains(field))
+}
+
+fn normalize_follow_up(mut question: IntakeAiFollowUp) -> IntakeAiFollowUp {
+    question.prompt = question.prompt.trim().chars().take(500).collect();
+    question.purpose = question.purpose.trim().chars().take(300).collect();
+    question.missing_fields.sort();
+    question.missing_fields.dedup();
+    question
 }
 
 fn profile_draft_field_metadata(

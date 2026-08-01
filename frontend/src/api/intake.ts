@@ -15,8 +15,22 @@ export interface IntakeSession {
   missing_phase_one_fields: string[];
   phase_transition_ready: boolean;
   next_question: IntakeQuestion | null;
-  guidance_mode: "rule_based";
+  guidance_mode: "rule_based" | "ai_assisted";
   privacy_notice: string;
+}
+
+export interface IntakeAiFollowUp {
+  field: string;
+  prompt: string;
+  purpose: string;
+  missing_fields: string[];
+  skippable: boolean;
+}
+
+export interface IntakeAiFollowUpResponse {
+  question: IntakeAiFollowUp | null;
+  degradation_status: string;
+  generated_at: string;
 }
 
 export type IntakeSessionUpdate = Omit<IntakeSession, "id">;
@@ -143,6 +157,17 @@ export function getIntakeDraft(
 ): Promise<IntakeDraft> {
   return apiRequest<IntakeDraft>(
     `/intake-sessions/${sessionId}/profile-draft`,
+    {},
+    token,
+  );
+}
+
+export function getIntakeAiFollowUp(
+  token: string,
+  sessionId: string,
+): Promise<IntakeAiFollowUpResponse> {
+  return apiRequest<IntakeAiFollowUpResponse>(
+    `/intake-sessions/${sessionId}/ai-follow-up`,
     {},
     token,
   );

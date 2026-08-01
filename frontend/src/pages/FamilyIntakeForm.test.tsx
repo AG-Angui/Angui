@@ -11,6 +11,7 @@ import { FamilyIntakeForm } from "./FamilyIntakeForm";
 const mocked = vi.hoisted(() => ({
   confirmIntakeSession: vi.fn(),
   createIntakeSession: vi.fn(),
+  getIntakeAiFollowUp: vi.fn(),
   getIntakeDraft: vi.fn(),
   submitIntakeAnswer: vi.fn(),
 }));
@@ -24,6 +25,8 @@ vi.mock("../api/intake", () => ({
     mocked.confirmIntakeSession(...args),
   createIntakeSession: (...args: unknown[]) =>
     mocked.createIntakeSession(...args),
+  getIntakeAiFollowUp: (...args: unknown[]) =>
+    mocked.getIntakeAiFollowUp(...args),
   getIntakeDraft: (...args: unknown[]) => mocked.getIntakeDraft(...args),
   submitIntakeAnswer: (...args: unknown[]) =>
     mocked.submitIntakeAnswer(...args),
@@ -170,7 +173,12 @@ function answerResponse(session: IntakeSession): SubmitIntakeAnswerResponse {
 }
 
 describe("FamilyIntakeForm", () => {
-  beforeEach(() => {
+beforeEach(() => {
+  mocked.getIntakeAiFollowUp.mockResolvedValue({
+    question: null,
+    degradation_status: "rule_based_fallback",
+    generated_at: "2026-07-25T08:00:00Z",
+  });
     window.sessionStorage.clear();
     vi.clearAllMocks();
   });

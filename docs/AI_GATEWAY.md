@@ -117,7 +117,16 @@ Candidates are ordered deterministically by priority, then weight, then provider
 
 Each future execution is expected to persist the Gateway's `AiExecutionAudit` through `persist_execution_audit`. The record includes Provider ID, model, template version, input-scope reference, SHA-256 input hash, redaction-policy version, and task status. It never contains the raw request, response, health history, contact data, or precise locations.
 
-This PR provides the shared boundary and audit writer only. It does not yet call external AI services or allow an AI result to create a confirmed clue, publish a case update, or dispatch a task.
+The Gateway resolves provider endpoint and credential references only at its transport boundary, executes a policy-approved request with the configured timeout, and extracts response text for the supported protocols. Business services must still validate the response against their purpose-specific schema before saving a draft. Transport failures, non-success responses, empty responses, and invalid structured output must use the deterministic or manual fallback path.
+
+The Gateway never allows an AI result to create a confirmed clue, publish a case update, or dispatch a task. Those transitions remain separate, human-reviewed business operations.
+
+## Implemented controlled-assistance paths
+
+- Intake follow-up uses `inquiry / intake_draft` only for the session creator's currently authorized answers. The response is a single optional JSON question with its purpose and missing fields. Invalid output, unavailable providers, timeout, and policy mismatch return the fixed question set; a family member can always mark an answer unknown, edit it, or use the static flow.
+- Clue extraction uses `structured_extraction / clue_draft`. Candidate fields never create facts directly. A commander must accept, edit, clear, or reject fields; acceptance creates a normal `pending_review` clue which remains subject to the existing clue-review state machine.
+- Case summaries use `case_summary / case_summary_draft`. Rule-based output remains available when execution fails. Drafts are immutable versions with a parent reference; commanders can list versions, compare line-level changes, submit, publish, reject, or withdraw them.
+- Archive organization uses `case_organization / case_archive_draft` over aggregate metadata only. Raw conversations, identities, contacts, health data, exact locations, routes, attachments, and unreviewed clues are excluded. The draft remains non-reusable until the existing manual de-identification and administrator review lifecycle completes.
 
 ## Prompt Templates
 

@@ -1,9 +1,9 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, env, sync::Arc, time::Duration};
 
 use chrono::{SecondsFormat, Utc};
 use http::Request as HttpRequest;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, Set};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -210,6 +210,45 @@ pub enum AiTaskStatus {
     Failed,
 }
 
+/// The result of one provider execution. Business services must treat every
+/// non-completed result as a signal to use their deterministic or manual path.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AiExecutionResult {
+    Completed {
+        route: ProviderRoute,
+        output: String,
+    },
+    Degraded {
+        status: DegradationStatus,
+        reason: DegradationReason,
+    },
+    Failed {
+        route: ProviderRoute,
+    },
+}
+
+impl AiExecutionResult {
+    pub fn decision(&self) -> GatewayDecision {
+        match self {
+            Self::Completed { route, .. } | Self::Failed { route } => {
+                GatewayDecision::Routed(route.clone())
+            }
+            Self::Degraded { status, reason } => GatewayDecision::Degraded {
+                status: *status,
+                reason: *reason,
+            },
+        }
+    }
+
+    pub fn audit_status(&self) -> AiTaskStatus {
+        match self {
+            Self::Completed { .. } => AiTaskStatus::Completed,
+            Self::Degraded { .. } => AiTaskStatus::Degraded,
+            Self::Failed { .. } => AiTaskStatus::Failed,
+        }
+    }
+}
+
 impl AiTaskStatus {
     fn as_str(self) -> &'static str {
         match self {
@@ -302,6 +341,12 @@ pub enum AiGatewayError {
     EmptyRequest,
     #[error("invalid native AI request: {0}")]
     InvalidNativeRequest(String),
+    #[error("AI provider environment variable {0} is unavailable")]
+    MissingRuntimeConfiguration(String),
+    #[error("AI provider response was invalid")]
+    InvalidProviderResponse,
+    #[error("AI provider output was invalid")]
+    InvalidStructuredOutput,
 }
 
 /// Provider adapters only produce protocol requests. A later transport layer
@@ -525,6 +570,99 @@ impl AiGateway {
         self.build_provider_request(route, request)?
             .into_native_request(endpoint, credential)
     }
+
+    /// Executes a policy-approved provider request. All runtime configuration
+    /// is resolved here so application services never handle provider
+    /// credentials, endpoints, or protocol payloads directly.
+    pub async fn execute(&self, request: &AiRequest) -> AiExecutionResult {
+        let decision = self.route(request);
+        let route = match decision {
+            GatewayDecision::Routed(route) => route,
+            GatewayDecision::Degraded { status, reason } => {
+                return AiExecutionResult::Degraded { status, reason };
+            }
+        };
+
+        let outcome = async {
+            let endpoint = env::var(&route.endpoint_env).map_err(|_| {
+                AiGatewayError::MissingRuntimeConfiguration(route.endpoint_env.clone())
+            })?;
+            let credential = env::var(&route.credential_env).map_err(|_| {
+                AiGatewayError::MissingRuntimeConfiguration(route.credential_env.clone())
+            })?;
+            let native = self.build_native_request(&route, request, &endpoint, &credential)?;
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_millis(route.timeout_ms))
+                .build()
+                .map_err(|_| {
+                    AiGatewayError::InvalidNativeRequest(
+                        "failed to build provider client".to_owned(),
+                    )
+                })?;
+            let method =
+                reqwest::Method::from_bytes(native.method().as_str().as_bytes()).map_err(|_| {
+                    AiGatewayError::InvalidNativeRequest(
+                        "unsupported provider HTTP method".to_owned(),
+                    )
+                })?;
+            let mut provider_request = client.request(method, native.uri().to_string());
+            for (name, value) in native.headers() {
+                provider_request = provider_request.header(name.as_str(), value.as_bytes());
+            }
+            let response = provider_request
+                .json(native.body())
+                .send()
+                .await
+                .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
+            if !response.status().is_success() {
+                return Err(AiGatewayError::InvalidProviderResponse);
+            }
+            let payload = response
+                .json::<Value>()
+                .await
+                .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
+            extract_provider_output(route.protocol, &payload)
+        }
+        .await;
+
+        match outcome {
+            Ok(output) => AiExecutionResult::Completed { route, output },
+            Err(_) => AiExecutionResult::Failed { route },
+        }
+    }
+
+    pub fn decode_json<T: DeserializeOwned>(&self, output: &str) -> Result<T, AiGatewayError> {
+        serde_json::from_str(output).map_err(|_| AiGatewayError::InvalidStructuredOutput)
+    }
+}
+
+fn extract_provider_output(
+    protocol: ProviderProtocol,
+    payload: &Value,
+) -> Result<String, AiGatewayError> {
+    let output = match protocol {
+        ProviderProtocol::OpenAiChatCompletions => payload
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str),
+        ProviderProtocol::OpenAiResponses => payload
+            .get("output_text")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                payload
+                    .pointer("/output/0/content/0/text")
+                    .and_then(Value::as_str)
+            }),
+        ProviderProtocol::AnthropicMessages => {
+            payload.pointer("/content/0/text").and_then(Value::as_str)
+        }
+        ProviderProtocol::GeminiGenerateContent => payload
+            .pointer("/candidates/0/content/parts/0/text")
+            .and_then(Value::as_str),
+    }
+    .map(str::trim)
+    .filter(|output| !output.is_empty())
+    .ok_or(AiGatewayError::InvalidProviderResponse)?;
+    Ok(output.to_owned())
 }
 
 fn route_for(config: &ProviderConfig) -> ProviderRoute {

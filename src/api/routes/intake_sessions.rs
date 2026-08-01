@@ -5,7 +5,7 @@ use crate::{
     error::ApiError,
     models::{
         AuthenticatedUser, ConfirmIntakeSessionRequest, CreateIntakeSessionRequest,
-        SubmitIntakeAnswerRequest,
+        RestoreIntakeAnswerRequest, SubmitIntakeAnswerRequest,
     },
     services::intake_session_service,
 };
@@ -23,6 +23,18 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 web::get().to(get_intake_profile_draft),
             )
             .route(
+                "/{session_id}/ai-follow-up",
+                web::get().to(get_ai_follow_up),
+            )
+            .route(
+                "/{session_id}/answer-revisions",
+                web::get().to(list_answer_revisions),
+            )
+            .route(
+                "/{session_id}/answers/{field}/restore",
+                web::post().to(restore_answer_revision),
+            )
+            .route(
                 "/{session_id}/confirm",
                 web::post().to(confirm_intake_session),
             ),
@@ -37,6 +49,46 @@ async fn get_intake_profile_draft(
     let draft =
         intake_session_service::get_intake_profile_draft(&state.db, &auth, &session_id).await?;
     Ok(HttpResponse::Ok().json(draft))
+}
+
+async fn get_ai_follow_up(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::get_ai_follow_up(&state.db, &auth, &session_id, &state.ai_gateway)
+            .await?,
+    ))
+}
+
+async fn list_answer_revisions(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(intake_session_service::list_answer_revisions(&state.db, &auth, &session_id).await?))
+}
+
+async fn restore_answer_revision(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    request: web::Json<RestoreIntakeAnswerRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, field) = path.into_inner();
+    Ok(HttpResponse::Created().json(
+        intake_session_service::restore_answer_revision(
+            &state.db,
+            &auth,
+            &session_id,
+            &field,
+            request.into_inner(),
+            state.intake_answer_hard_max,
+        )
+        .await?,
+    ))
 }
 
 async fn confirm_intake_session(

@@ -277,6 +277,12 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
             "#/components/schemas/CreateClueDraftRequest",
         ),
         (
+            "/api/cases/{case_id}/clue-drafts/{draft_id}/review:\n",
+            "operationId: reviewClueDraft",
+            "x-case-roles: [commander]",
+            "#/components/schemas/ReviewClueDraftRequest",
+        ),
+        (
             "/api/cases/{case_id}/pois:\n",
             "operationId: listCasePois",
             "x-case-roles: [commander, volunteer]",
@@ -327,6 +333,26 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
             "raw_record_reference:",
             "uncertainty_notice:",
             "rule_based_fallback",
+            "candidate:",
+            "review_status:",
+            "version:",
+        ],
+    );
+    assert_schema_contains(
+        "ClueDraftCandidate",
+        &[
+            "content_summary:",
+            "missing_fields:",
+            "source_excerpt:",
+            "action_candidates:",
+            "maxItems: 8",
+        ],
+    );
+    assert_schema_contains(
+        "ReviewClueDraftRequest",
+        &[
+            "required: [action, reason, candidate]",
+            "enum: [accept, reject]",
         ],
     );
     assert_schema_contains(

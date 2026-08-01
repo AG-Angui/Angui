@@ -1031,6 +1031,28 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/cases/{case_id}/clue-drafts/{draft_id}/review:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }, { name: draft_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [Cases]
+      operationId: reviewClueDraft
+      summary: Human-review structured clue candidates without confirming a fact
+      description: Commander-only. Accepts or rejects a persisted clue draft and records a reason. Accepting a candidate does not create a confirmed clue.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReviewClueDraftRequest" } } }
+      responses:
+        "200": { description: Reviewed clue draft, content: { application/json: { schema: { $ref: "#/components/schemas/ClueDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/cases/{case_id}/pois:
     parameters: [{ $ref: "#/components/parameters/CaseId" }]
     get:
@@ -2870,12 +2892,17 @@ components:
     ClueDraft:
       type: object
       additionalProperties: false
-      required: [id, case_id, status, content, source_type, uncertainty_notice, template_version, provider_model, degradation_status]
+      required: [id, case_id, status, content, source_type, uncertainty_notice, template_version, provider_model, degradation_status, candidate, review_status, version]
       properties:
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
         status: { type: string, enum: [draft, pending_review] }
         content: { type: string }
+        candidate: { $ref: "#/components/schemas/ClueDraftCandidate" }
+        review_status: { type: string, enum: [pending_review, accepted, rejected] }
+        reviewed_at: { type: string, format: date-time, nullable: true }
+        review_reason: { type: string, nullable: true }
+        version: { type: integer, minimum: 1 }
         source_type: { type: string, enum: [manual_report, field_report] }
         raw_record_reference: { type: [string, "null"] }
         occurred_at: { type: [string, "null"], format: date-time }
@@ -2884,6 +2911,65 @@ components:
         template_version: { type: string }
         provider_model: { type: [string, "null"] }
         degradation_status: { type: string, enum: [manual_review_required, rule_based_fallback] }
+
+    ClueDraftCandidate:
+      type: object
+      additionalProperties: false
+      description: >-
+        A non-factual field proposal produced from a controlled source record. Null or
+        empty candidate values mean that a person must supply or verify the field;
+        they must not be inferred by a client.
+      required: [content_summary, occurred_at, location_text, source_text, action_candidates, missing_fields, source_excerpt]
+      properties:
+        content_summary:
+          type: [string, "null"]
+          maxLength: 1000
+          description: Short draft summary only; it is not a confirmed statement.
+        occurred_at:
+          type: [string, "null"]
+          maxLength: 80
+          description: Candidate time as supplied or extracted; null means human completion is required.
+        location_text:
+          type: [string, "null"]
+          maxLength: 500
+          description: Candidate textual location only; the API does not make a location conclusion.
+        source_text:
+          type: [string, "null"]
+          maxLength: 300
+          description: Candidate source attribution; null means human verification is required.
+        action_candidates:
+          type: array
+          maxItems: 8
+          items: { type: string, minLength: 1, maxLength: 300 }
+          description: Proposed follow-up actions, requiring human review before use.
+        missing_fields:
+          type: array
+          uniqueItems: true
+          items: { type: string, enum: [occurred_at, location_text, source_text, action_candidates] }
+          description: Fields still requiring human completion or verification.
+        source_excerpt:
+          type: string
+          maxLength: 500
+          description: Server-derived excerpt of the original controlled text. During review, any submitted value is ignored and recomputed by the server.
+
+    ReviewClueDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason, candidate]
+      properties:
+        action:
+          type: string
+          enum: [accept, reject]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Mandatory human review rationale retained in the audit trail.
+        candidate:
+          allOf: [{ $ref: "#/components/schemas/ClueDraftCandidate" }]
+          description: >-
+            Human-corrected candidate. The service normalizes missing_fields and
+            derives source_excerpt from the persisted controlled text.
 
     CasePoi:
       type: object
@@ -2911,7 +2997,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        content: { type: string, minLength: 1, maxLength: 12000, description: Internal-only commander draft content; it is never publication eligible. }
+        content: { type: string, minLength: 1, maxLength: 12000, description: Optional commander edit that creates a new pending-review internal version; it cannot publish without the separate human review action. }
 
     ReviewSummaryDraftRequest:
       type: object

@@ -17,6 +17,7 @@ import {
   applyForTask,
   createCasePlace,
   createClueDraft,
+  createSummaryDraft,
   createCaseTask,
   getCaseMapView,
   getCaseSummary,
@@ -32,6 +33,7 @@ import {
   listCases,
   listCommandIntake,
   reviewClue,
+  reviewClueDraft,
   reviewSummaryDraft,
   updateCaseStatus,
   updateElderProfile,
@@ -2515,6 +2517,7 @@ function CaseCollaborationPanel({
   const [pois, setPois] = useState<CasePois | null>(null);
   const [summaryDraft, setSummaryDraft] = useState<SummaryDraft | null>(null);
   const [summary, setSummary] = useState<CaseSummary | null>(null);
+  const [summaryEdit, setSummaryEdit] = useState("");
   const [reviewReason, setReviewReason] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -2555,6 +2558,7 @@ function CaseCollaborationPanel({
       ]);
       setSummary(loadedSummary);
       setSummaryDraft(latestDraft);
+      setSummaryEdit(latestDraft?.content ?? "");
     } catch (cause) {
       setError(messageFrom(cause));
     }
@@ -2568,6 +2572,7 @@ function CaseCollaborationPanel({
     setPois(null);
     setSummaryDraft(null);
     setSummary(null);
+    setSummaryEdit("");
     setReviewReason("");
     setError("");
     void loadPublicProgress();
@@ -2779,17 +2784,25 @@ function CaseCollaborationPanel({
           </Button>
         </div>
         {clueDrafts.map((draft) => (
-          <div
+          <ClueDraftReviewCard
             key={draft.id}
-            className="mt-3 rounded-md border border-amber-200 bg-white p-3"
-          >
-            <p className="m-0 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-              {draft.content}
-            </p>
-            <p className="mb-0 mt-2 text-xs text-amber-800">
-              {draft.uncertainty_notice}
-            </p>
-          </div>
+            draft={draft}
+            isBusy={busy === `clue-draft:${draft.id}`}
+            onReview={(payload) =>
+              void run(`clue-draft:${draft.id}`, async () => {
+                if (!token) return;
+                const reviewed = await reviewClueDraft(
+                  token,
+                  detail.id,
+                  draft.id,
+                  payload,
+                );
+                setClueDrafts((current) =>
+                  current.map((item) => (item.id === reviewed.id ? reviewed : item)),
+                );
+              })
+            }
+          />
         ))}
         </div>
       )}
@@ -2876,6 +2889,35 @@ function CaseCollaborationPanel({
               <p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                 {summaryDraft.content}
               </p>
+              <Field label="编辑为新的待审核版本">
+                <TextArea
+                  value={summaryEdit}
+                  maxLength={12000}
+                  rows={5}
+                  onChange={(event) => setSummaryEdit(event.target.value)}
+                  fullWidth
+                />
+              </Field>
+              <div className="mt-2 flex justify-end">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  isDisabled={!token || !summaryEdit.trim() || busy === "summary-edit"}
+                  onPress={() =>
+                    void run("summary-edit", async () => {
+                      if (!token) return;
+                      const created = await createSummaryDraft(
+                        token,
+                        detail.id,
+                        summaryEdit,
+                      );
+                      setSummaryDraft(created);
+                    })
+                  }
+                >
+                  创建待审核版本
+                </Button>
+              </div>
               {summaryDraft.status === "pending_review" && (
                 <>
                   <Field label="审核理由" required>
@@ -2950,6 +2992,144 @@ function CaseCollaborationPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function ClueDraftReviewCard({
+  draft,
+  isBusy,
+  onReview,
+}: {
+  draft: ClueDraft;
+  isBusy: boolean;
+  onReview: (payload: {
+    action: "accept" | "reject";
+    reason: string;
+    candidate: ClueDraft["candidate"];
+  }) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [candidate, setCandidate] = useState(draft.candidate);
+  useEffect(() => setCandidate(draft.candidate), [draft]);
+  const fields = [
+    ["时间", candidate.occurred_at],
+    ["地点", candidate.location_text],
+    ["来源", candidate.source_text],
+    ["动作候选", candidate.action_candidates.join("；") || null],
+  ];
+
+  return (
+    <div className="mt-3 rounded-md border border-amber-200 bg-white p-3">
+      <p className="m-0 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+        {draft.content}
+      </p>
+      <p className="mb-0 mt-2 text-xs text-amber-800">
+        {draft.uncertainty_notice}
+      </p>
+      <dl className="mb-0 mt-3 grid gap-2 text-sm text-slate-700">
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt className="inline font-medium text-slate-900">{label}：</dt>
+            <dd className="inline">
+              {value || "需要人工补充"}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mb-0 mt-2 text-xs text-slate-500">
+        来源片段：{candidate.source_excerpt}
+      </p>
+      {draft.review_status === "pending_review" ? (
+        <>
+          <Field label="时间候选">
+            <Input
+              value={candidate.occurred_at ?? ""}
+              maxLength={80}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  occurred_at: event.target.value || null,
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="地点候选">
+            <Input
+              value={candidate.location_text ?? ""}
+              maxLength={500}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  location_text: event.target.value || null,
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="来源候选">
+            <Input
+              value={candidate.source_text ?? ""}
+              maxLength={300}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  source_text: event.target.value || null,
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="动作候选（每行一项）">
+            <TextArea
+              value={candidate.action_candidates.join("\n")}
+              maxLength={2400}
+              rows={3}
+              onChange={(event) =>
+                setCandidate((current) => ({
+                  ...current,
+                  action_candidates: event.target.value
+                    .split("\n")
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                }))
+              }
+              fullWidth
+            />
+          </Field>
+          <Field label="草稿审核理由" required>
+            <Input
+              value={reason}
+              maxLength={1000}
+              onChange={(event) => setReason(event.target.value)}
+              fullWidth
+            />
+          </Field>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              isDisabled={!reason.trim() || isBusy}
+              onPress={() => onReview({ action: "reject", reason, candidate })}
+            >
+              拒绝候选
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              isDisabled={!reason.trim() || isBusy}
+              onPress={() => onReview({ action: "accept", reason, candidate })}
+            >
+              人工接受候选
+            </Button>
+          </div>
+        </>
+      ) : (
+        <p className="mb-0 mt-3 text-xs text-slate-600">
+          已{draft.review_status === "accepted" ? "接受" : "拒绝"}；正式线索仍需按既有流程人工审核。
+        </p>
+      )}
+    </div>
   );
 }
 

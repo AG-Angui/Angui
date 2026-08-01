@@ -1,0 +1,1 @@
+ALTER TABLE clue_drafts ADD COLUMN promoted_clue_id TEXT;

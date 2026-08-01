@@ -224,6 +224,20 @@ export interface ClueDraft {
   template_version: string;
   provider_model: string | null;
   degradation_status: string;
+  candidate: ClueDraftCandidate;
+  review_status: "pending_review" | "accepted" | "rejected";
+  reviewed_at: string | null;
+  review_reason: string | null;
+  version: number;
+}
+export interface ClueDraftCandidate {
+  content_summary: string | null;
+  occurred_at: string | null;
+  location_text: string | null;
+  source_text: string | null;
+  action_candidates: string[];
+  missing_fields: string[];
+  source_excerpt: string;
 }
 export interface SummaryDraft {
   id: string;
@@ -686,6 +700,23 @@ export function createClueDraft(
   return apiRequest<ClueDraft[]>(
     `/cases/${caseId}/clue-drafts`,
     { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export function reviewClueDraft(
+  token: string,
+  caseId: string,
+  draftId: string,
+  payload: {
+    action: "accept" | "reject";
+    reason: string;
+    candidate: ClueDraftCandidate;
+  },
+): Promise<ClueDraft> {
+  return apiRequest<ClueDraft>(
+    `/cases/${caseId}/clue-drafts/${draftId}/review`,
+    { method: "PATCH", body: JSON.stringify(payload) },
     token,
   );
 }
