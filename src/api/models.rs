@@ -125,6 +125,37 @@ pub struct ReviewArchiveDraftRequest {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ArchiveReviewMaterialResponse {
+    pub id: String,
+    pub case_id: String,
+    pub version: i32,
+    pub parent_material_id: Option<String>,
+    pub content: String,
+    pub source_scope: Vec<String>,
+    pub status: String,
+    pub created_by_user_id: String,
+    pub reviewed_by_user_id: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub review_reason: Option<String>,
+    pub created_at: String,
+    pub selected_for_ai: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ArchiveReviewMaterialDiffResponse {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreArchiveReviewMaterialRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AdminAuditEventResponse {
     pub id: String,
     pub case_id: Option<String>,

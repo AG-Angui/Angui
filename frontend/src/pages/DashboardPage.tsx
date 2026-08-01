@@ -9,13 +9,17 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   deidentifyArchiveDraft,
+  diffArchiveReviewMaterials,
   getCase,
+  listArchiveReviewMaterials,
   listAdminArchiveDrafts,
   listCases,
   listCommandIntake,
   reviewArchiveDraft,
+  restoreArchiveReviewMaterial,
 } from "../api/cases";
 import type {
+  ArchiveReviewMaterial,
   ArchiveDraft,
   CaseDetail,
   CaseListItem,
@@ -362,6 +366,18 @@ function ArchiveReviewCard({
   const [deidentifiedMaterial, setDeidentifiedMaterial] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [materials, setMaterials] = useState<ArchiveReviewMaterial[]>([]);
+  const [materialError, setMaterialError] = useState("");
+  const [diff, setDiff] = useState<{ from: number; to: number; added: string[]; removed: string[] } | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    void listArchiveReviewMaterials(token, draft.id)
+      .then(setMaterials)
+      .catch((cause) =>
+        setMaterialError(cause instanceof Error ? cause.message : "Unable to load material versions."),
+      );
+  }, [draft.id, token]);
   const action = async (run: () => Promise<ArchiveDraft>) => {
     if (!token || !reason.trim()) return;
     setBusy(true);
@@ -392,6 +408,67 @@ function ArchiveReviewCard({
         来源范围：{draft.source_scope.join("、")} · 脱敏：
         {draft.deidentification_status}
       </p>
+      <div className="mt-3 border-t border-slate-100 pt-3">
+        <div className="flex items-center justify-between gap-3">
+          <strong className="text-xs text-slate-800">Review material versions</strong>
+          <span className="text-xs text-slate-500">{materials.length} version(s)</span>
+        </div>
+        {materials.length > 0 && (
+          <div className="mt-2 space-y-2">
+            {materials.map((material) => (
+              <div key={material.id} className="rounded border border-slate-200 bg-slate-50 p-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>v{material.version} · {material.status}{material.selected_for_ai ? " · selected for AI" : ""}</span>
+                  {material.status === "deidentified" && !material.selected_for_ai && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={busy || !reason.trim()}
+                      onPress={() => {
+                        if (!token) return;
+                        setBusy(true);
+                        void restoreArchiveReviewMaterial(token, draft.id, material.version, reason)
+                          .then(onChanged)
+                          .catch((cause) => setMaterialError(cause instanceof Error ? cause.message : "Unable to restore material."))
+                          .finally(() => setBusy(false));
+                      }}
+                    >
+                      Restore
+                    </Button>
+                  )}
+                </div>
+                <p className="mb-0 mt-1 whitespace-pre-wrap text-slate-600">{material.content}</p>
+                <p className="mb-0 mt-1 text-slate-500">Scope: {material.source_scope.join(", ")}</p>
+                {materials.length > 1 && material.version !== materials[materials.length - 1].version && (
+                  <Button
+                    className="mt-1"
+                    size="sm"
+                    variant="ghost"
+                    onPress={() => {
+                      if (!token) return;
+                      const oldest = materials[materials.length - 1].version;
+                      void diffArchiveReviewMaterials(token, draft.id, oldest, material.version)
+                        .then((value) => setDiff({ from: value.from_version, to: value.to_version, added: value.added, removed: value.removed }))
+                        .catch((cause) => setMaterialError(cause instanceof Error ? cause.message : "Unable to compare versions."));
+                    }}
+                  >
+                    Compare with first version
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {diff && (
+          <div className="mt-2 rounded border border-violet-200 bg-violet-50 p-2 text-xs">
+            <strong>Diff v{diff.from} to v{diff.to}</strong>
+            {diff.added.length > 0 && <p className="mb-0 mt-1 text-green-800">Added: {diff.added.join(" | ")}</p>}
+            {diff.removed.length > 0 && <p className="mb-0 mt-1 text-red-800">Removed: {diff.removed.join(" | ")}</p>}
+            {diff.added.length === 0 && diff.removed.length === 0 && <p className="mb-0 mt-1">No line changes.</p>}
+          </div>
+        )}
+        {materialError && <p className="mb-0 mt-2 text-xs text-red-700">{materialError}</p>}
+      </div>
       {draft.status !== "rejected" && draft.status !== "withdrawn" && (
         <>
           <Input

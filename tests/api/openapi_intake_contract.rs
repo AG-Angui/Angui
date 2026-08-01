@@ -424,15 +424,36 @@ fn archive_review_openapi_contract_requires_admin_and_manual_deidentification() 
             "#/components/schemas/ArchiveDraft",
             "#/components/schemas/ReviewArchiveDraftRequest",
         ),
+        (
+            "/api/admin/archive-drafts/{draft_id}/review-materials:\n",
+            "operationId: listArchiveReviewMaterials",
+            "#/components/schemas/ArchiveReviewMaterial",
+            "",
+        ),
+        (
+            "/api/admin/archive-drafts/{draft_id}/review-materials/diff/{from_version}/{to_version}:\n",
+            "operationId: diffArchiveReviewMaterials",
+            "#/components/schemas/ArchiveReviewMaterialDiff",
+            "",
+        ),
+        (
+            "/api/admin/archive-drafts/{draft_id}/review-materials/{version}/restore:\n",
+            "operationId: restoreArchiveReviewMaterial",
+            "#/components/schemas/ArchiveDraft",
+            "#/components/schemas/RestoreArchiveReviewMaterialRequest",
+        ),
     ] {
         let operation = operation(path);
-        for expected in [
+        let mut expected_items = vec![
             operation_id,
             "x-global-capabilities: [admin]",
             "x-data-classification: restricted-admin",
             schema_name,
-            request_schema,
-        ] {
+        ];
+        if !request_schema.is_empty() {
+            expected_items.push(request_schema);
+        }
+        for expected in expected_items {
             assert!(
                 operation.contains(expected),
                 "OpenAPI operation {path} must declare {expected:?}"

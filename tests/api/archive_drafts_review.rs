@@ -296,3 +296,152 @@ async fn archive_deidentification_rejection_and_missing_drafts_do_not_publish_or
     .await;
     assert_error(missing, StatusCode::NOT_FOUND, "not_found").await;
 }
+
+#[actix_web::test]
+async fn archive_review_material_versions_support_admin_list_diff_restore_and_rbac() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let commander_token = context.token(COMMANDER).await;
+    let admin_token = context.token(ADMIN).await;
+    let (case_id, draft_id) = create_finished_archive_draft!(&context, &app, &commander_token);
+
+    let family_list = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(FAMILY).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_error(family_list, StatusCode::FORBIDDEN, "forbidden").await;
+
+    let initial = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(initial.status(), StatusCode::OK);
+    let initial: Vec<Value> = test::read_body_json(initial).await;
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0]["version"], 1);
+    assert_eq!(initial[0]["status"], "draft");
+    assert_eq!(initial[0]["selected_for_ai"], true);
+    assert_eq!(
+        initial[0]["source_scope"][0],
+        "confirmed_clue_review_material"
+    );
+
+    let deidentified = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/admin/archive-drafts/{draft_id}/deidentify"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({
+                "outcome": "confirm",
+                "reason": "version test",
+                "deidentified_material": "line one\nline two"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(deidentified.status(), StatusCode::OK);
+
+    let versions = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    let versions: Vec<Value> = test::read_body_json(versions).await;
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0]["version"], 2);
+    assert_eq!(versions[0]["status"], "deidentified");
+    assert_eq!(versions[0]["selected_for_ai"], true);
+    assert_eq!(versions[1]["selected_for_ai"], false);
+
+    let diff = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/diff/1/2"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(diff.status(), StatusCode::OK);
+    let diff: Value = test::read_body_json(diff).await;
+    assert_eq!(diff["from_version"], 1);
+    assert_eq!(diff["to_version"], 2);
+    assert!(
+        diff["added"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+
+    let restored = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({"reason": "restore approved version for correction"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored: Value = test::read_body_json(restored).await;
+    assert_eq!(restored["status"], "pending_review");
+    assert_eq!(restored["version"], 3);
+    let selected_id = restored["review_material_id"]
+        .as_str()
+        .expect("restored draft should select a material");
+
+    let versions_after_restore = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    let versions_after_restore: Vec<Value> = test::read_body_json(versions_after_restore).await;
+    assert_eq!(versions_after_restore.len(), 3);
+    assert_eq!(versions_after_restore[0]["version"], 3);
+    assert_eq!(versions_after_restore[0]["status"], "deidentified");
+    assert_eq!(versions_after_restore[0]["selected_for_ai"], true);
+    assert_eq!(
+        versions_after_restore[0]["parent_material_id"],
+        versions_after_restore[1]["id"]
+    );
+    assert_eq!(versions_after_restore[0]["id"], selected_id);
+    assert_eq!(versions_after_restore[1]["content"], "line one\nline two");
+
+    let audit = audit_events::Entity::find()
+        .filter(audit_events::Column::EntityType.eq("archive_review_material"))
+        .filter(audit_events::Column::EntityId.eq(selected_id))
+        .one(&context.database)
+        .await
+        .expect("material audit query should succeed")
+        .expect("restore should be audited");
+    assert_eq!(audit.action, "archive_review_material.restored");
+    assert!(!audit.metadata_json.unwrap_or_default().contains("line one"));
+    assert_eq!(case_id, restored["case_id"]);
+}

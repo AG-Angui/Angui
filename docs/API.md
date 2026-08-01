@@ -51,6 +51,9 @@
 | `PATCH` | `/api/admin/users/{user_id}/status` | `200` | 管理员启用、停用或锁定账号 |
 | `POST` | `/api/admin/archive-drafts/{draft_id}/deidentify` | `200` | 管理员记录归档草稿的人工脱敏确认或拒绝 |
 | `PATCH` | `/api/admin/archive-drafts/{draft_id}/review` | `200` | 管理员发布、拒绝或撤回已脱敏归档草稿 |
+| `GET` | `/api/admin/archive-drafts/{draft_id}/review-materials` | `200` | 管理员查看不可变 review material 版本链和当前 AI 输入版本 |
+| `GET` | `/api/admin/archive-drafts/{draft_id}/review-materials/diff/{from_version}/{to_version}` | `200` | 管理员比较两个脱敏材料版本 |
+| `POST` | `/api/admin/archive-drafts/{draft_id}/review-materials/{version}/restore` | `200` | 管理员从历史已脱敏版本创建新的恢复版本 |
 
 除健康检查和登录外，所有接口都要求：
 
@@ -322,6 +325,8 @@ Example:
 `POST /api/admin/archive-drafts/{draft_id}/deidentify` 只接受人工 `confirm` 或 `reject` 结果、长度受限的理由，以及在确认时提交的人工脱敏文本。确认会创建新的已脱敏材料版本，再以该版本作为唯一允许交给 AI 的输入，并把草稿转为 `pending_review` 和 `deidentified`；拒绝会转为 `rejected`，不能发布。每次结果记录操作者、时间、版本和理由长度，审计不保存理由原文。
 
 `PATCH /api/admin/archive-drafts/{draft_id}/review` 只允许已确认脱敏的 `pending_review` 草稿 `publish` 或 `reject`，以及将 `published` 草稿 `withdraw`。发布仅把该受控版本标记为 `learning_resource`；当前不会创建知识问答/RAG 索引、导出、打印、公开读取或跨案件读取接口。撤回立即将用途恢复为 `internal_archive` 并标记 `withdrawn`，同时保留版本和审计历史；拒绝或撤回绝不修改或删除原案件。
+
+管理员可通过 `GET /api/admin/archive-drafts/{draft_id}/review-materials` 查看不可变的 review material 版本链、来源范围、审核状态和当前 AI 输入版本；`GET .../review-materials/diff/{from_version}/{to_version}` 提供两个版本的增删行差异。`POST .../review-materials/{version}/restore` 只能恢复管理员已确认的 `deidentified` 版本，恢复操作会生成带 `parent_material_id` 的新版本、切换草稿的 AI 输入指针并将草稿重新置为 `pending_review`，不会修改任何历史版本。审计只记录版本、ID 和理由长度，不记录材料原文。
 # Controlled AI draft endpoints
 
 The following authenticated endpoints produce only drafts; none confirms a clue, publishes a summary, dispatches a task, or inserts material into a knowledge base automatically.
