@@ -326,6 +326,8 @@ Example:
 
 The following authenticated endpoints produce only drafts; none confirms a clue, publishes a summary, dispatches a task, or inserts material into a knowledge base automatically.
 
+Family intake now has a separate first-confirmation path: `POST /api/intake-sessions/{session_id}/ai-initial-review` stores a family-only initial-review draft and never creates a case. `GET /api/intake-sessions/{session_id}/ai-initial-review` returns the current result. The family must acknowledge every displayed issue through `POST /api/intake-sessions/{session_id}/ai-initial-review/acknowledge` before the existing `/confirm` endpoint performs the second confirmation and creates the case. Model failures, policy mismatches, and invalid JSON use the deterministic rule-check fallback; no fallback result confirms a fact or location.
+
 - `GET /api/intake-sessions/{session_id}/ai-follow-up` returns one optional, skippable AI follow-up question or the static-question fallback. `GET /api/intake-sessions/{session_id}/answer-revisions` lists immutable answers for the session creator; `POST /api/intake-sessions/{session_id}/answers/{field}/restore` restores a selected answer by creating a new revision.
 - `PATCH /api/cases/{case_id}/clue-drafts/{draft_id}/review` accepts `field_decisions` for `content_summary`, `occurred_at`, `location_text`, `source_text`, and `action_candidates`. Decisions are `accept`, `edit`, or `clear`; only an accepted draft is promoted to a normal pending-review clue.
 - `GET /api/cases/{case_id}/summary-drafts/versions` lists immutable summary versions. `GET /api/cases/{case_id}/summary-drafts/{from_id}/diff/{to_id}` returns the readable line-level added/removed difference for two versions.

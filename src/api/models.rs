@@ -229,7 +229,26 @@ pub struct ConfirmIntakeSessionRequest {
     pub human_confirmed: bool,
 }
 
+/// Starts the family-visible AI initial review. It does not create a case or
+/// change any submitted answer; the supplied profile is kept as the exact
+/// snapshot that must be submitted at the later second confirmation.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartIntakeAiInitialReviewRequest {
+    pub profile: ConfirmedIntakeProfile,
+}
+
+/// The family must explicitly acknowledge every AI-raised item before the
+/// second confirmation. A blocking deterministic consistency check cannot be
+/// acknowledged away and still requires an actual correction.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgeIntakeAiInitialReviewRequest {
+    pub confirmed_issue_ids: Vec<String>,
+    pub human_confirmed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfirmedIntakeProfile {
     pub display_name: String,
@@ -240,6 +259,29 @@ pub struct ConfirmedIntakeProfile {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeAiInitialReviewIssue {
+    pub id: String,
+    pub field: String,
+    pub severity: String,
+    pub evidence_summary: String,
+    pub clarification_question: String,
+    pub source_fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakeAiInitialReviewResponse {
+    pub session_id: String,
+    pub status: String,
+    pub degradation_status: String,
+    pub issues: Vec<IntakeAiInitialReviewIssue>,
+    pub blocking_assessments: Vec<IntakeAssessment>,
+    pub generated_at: String,
+    pub requires_family_acknowledgement: bool,
+    pub ready_for_second_confirmation: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -276,6 +318,7 @@ pub struct IntakeSessionResponse {
     pub phase_transition_ready: bool,
     pub next_question: Option<IntakeQuestion>,
     pub guidance_mode: String,
+    pub ai_initial_review_status: String,
     pub privacy_notice: String,
     pub created_at: String,
     pub updated_at: String,
@@ -301,6 +344,7 @@ impl IntakeSessionResponse {
             phase_transition_ready: phase.phase_transition_ready,
             next_question,
             guidance_mode: "rule_based".to_owned(),
+            ai_initial_review_status: model.ai_initial_review_status,
             privacy_notice: "Answers are visible only to the session creator and, after case authorization, the case's authorized commanders. They are unconfirmed drafts and are not copied into audit metadata.".to_owned(),
             created_at: model.created_at,
             updated_at: model.updated_at,
@@ -411,6 +455,7 @@ pub struct SubmitIntakeAnswerResponse {
     pub assessments: Vec<IntakeAssessment>,
     pub next_question: Option<IntakeQuestion>,
     pub guidance_mode: String,
+    pub ai_initial_review_status: String,
     pub privacy_notice: String,
     pub updated_at: String,
 }
@@ -447,6 +492,7 @@ impl SubmitIntakeAnswerResponse {
             next_question,
             assessments,
             guidance_mode: "rule_based".to_owned(),
+            ai_initial_review_status: session.ai_initial_review_status,
             privacy_notice: "Answers and candidate fields are unconfirmed drafts. They remain visible only to the session creator and are not copied into audit metadata.".to_owned(),
             updated_at: session.updated_at,
         }

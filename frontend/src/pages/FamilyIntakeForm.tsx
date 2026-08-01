@@ -10,14 +10,18 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
+  acknowledgeIntakeAiInitialReview,
   confirmIntakeSession,
   createIntakeSession,
+  getIntakeAiInitialReview,
   getIntakeAiFollowUp,
   getIntakeDraft,
+  startIntakeAiInitialReview,
   submitIntakeAnswer,
 } from "../api/intake";
 import type {
   ConfirmedIntakeProfile,
+  IntakeAiInitialReviewResponse,
   IntakeAssessment,
   IntakeDraft,
   IntakeDraftProfile,
@@ -97,6 +101,7 @@ type StoredIntakeSession = Pick<
   | "phase_transition_ready"
   | "next_question"
   | "guidance_mode"
+  | "ai_initial_review_status"
   | "privacy_notice"
 >;
 
@@ -142,10 +147,20 @@ export function FamilyIntakeForm({
     useState<IntakeProfileDraftFieldMetadata | null>(null);
   const [editAnswer, setEditAnswer] = useState("");
   const [confirmReviewOpen, setConfirmReviewOpen] = useState(false);
+  const [initialReview, setInitialReview] =
+    useState<IntakeAiInitialReviewResponse | null>(null);
+  const [confirmedInitialReviewIssues, setConfirmedInitialReviewIssues] =
+    useState<string[]>([]);
   const [isReviewingBasicInformation, setIsReviewingBasicInformation] =
     useState(false);
   const [busyAction, setBusyAction] = useState<
-    "begin" | "answer" | "replace" | "confirm" | null
+    | "begin"
+    | "answer"
+    | "replace"
+    | "initial_review"
+    | "acknowledge_initial_review"
+    | "confirm"
+    | null
   >(null);
   const [error, setError] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
@@ -208,8 +223,30 @@ export function FamilyIntakeForm({
       setSession(stored.session);
       setAnswer(stored.answer);
       setBasicInformation(stored.basicInformation);
-      if (stored.session.status === "ready_for_confirmation") {
+      if (
+        [
+          "ready_for_confirmation",
+          "awaiting_family_review",
+          "ready_for_second_confirmation",
+        ].includes(stored.session.status)
+      ) {
         void loadDraft(stored.session.id, true, stored.basicInformation);
+      }
+      if (
+        ["awaiting_family_review", "ready_for_second_confirmation"].includes(
+          stored.session.status,
+        )
+      ) {
+        void getIntakeAiInitialReview(token, stored.session.id)
+          .then((review) => {
+            setInitialReview(review);
+            setConfirmedInitialReviewIssues(
+              review.ready_for_second_confirmation
+                ? review.issues.map((item) => item.id)
+                : [],
+            );
+          })
+          .catch((cause) => setError(messageFrom(cause)));
       }
     }
     setHasHydrated(true);
@@ -247,6 +284,8 @@ export function FamilyIntakeForm({
       const nextSession = await createIntakeSession(token);
       setSession(nextSession);
       setDraft(null);
+      setInitialReview(null);
+      setConfirmedInitialReviewIssues([]);
       setAssessments([]);
       setAnswer("");
       setBasicInformation(blankBasicInformation);
@@ -292,6 +331,8 @@ export function FamilyIntakeForm({
           }
         : next;
       setSession(guidedSession);
+      setInitialReview(null);
+      setConfirmedInitialReviewIssues([]);
       if (guidedSession.phase !== "phase_two") setIsReviewingBasicInformation(false);
       setAssessments(response.assessments);
       if (replace) {
@@ -366,8 +407,8 @@ export function FamilyIntakeForm({
       setError("请先确认姓名或称呼，以及最后出现地点。");
       return;
     }
-    if (!confirmReviewOpen) {
-      setConfirmReviewOpen(true);
+    if (!initialReview?.ready_for_second_confirmation) {
+      setError("请先完成 AI 初步审核和家属疑点确认，再进行二次确认提交。");
       return;
     }
 
@@ -390,6 +431,65 @@ export function FamilyIntakeForm({
     } finally {
       setBusyAction(null);
     }
+  }
+
+  async function startInitialReview() {
+    if (!token || !session || !draft) return;
+    if (draft.confirmation_blocked_reasons.length > 0) {
+      setError("请先修正阻断性的规则核对项，再提交 AI 初步审核。");
+      return;
+    }
+    setBusyAction("initial_review");
+    setError("");
+    try {
+      const review = await startIntakeAiInitialReview(
+        token,
+        session.id,
+        normalizedProfile(profile),
+      );
+      setInitialReview(review);
+      setConfirmedInitialReviewIssues([]);
+      setSession((current) =>
+        current ? { ...current, status: review.status } : current,
+      );
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function acknowledgeInitialReview() {
+    if (!token || !session || !initialReview) return;
+    if (confirmedInitialReviewIssues.length !== initialReview.issues.length) {
+      setError("请逐项确认所有标注内容，或返回修改问询后重新初审。");
+      return;
+    }
+    setBusyAction("acknowledge_initial_review");
+    setError("");
+    try {
+      const review = await acknowledgeIntakeAiInitialReview(
+        token,
+        session.id,
+        confirmedInitialReviewIssues,
+      );
+      setInitialReview(review);
+      setSession((current) =>
+        current ? { ...current, status: review.status } : current,
+      );
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function toggleInitialReviewIssue(issueId: string) {
+    setConfirmedInitialReviewIssues((current) =>
+      current.includes(issueId)
+        ? current.filter((item) => item !== issueId)
+        : [...current, issueId],
+    );
   }
 
   function openSourceEditor(source: IntakeProfileDraftFieldMetadata) {
@@ -627,8 +727,15 @@ export function FamilyIntakeForm({
               profile={profile}
               onChange={(nextProfile) => {
                 setProfile(nextProfile);
-                setConfirmReviewOpen(false);
+                setInitialReview(null);
+                setConfirmedInitialReviewIssues([]);
               }}
+            />
+            <InitialReviewPanel
+              review={initialReview}
+              isReviewing={busyAction === "initial_review"}
+              confirmedIssueIds={confirmedInitialReviewIssues}
+              onToggleIssue={toggleInitialReviewIssue}
             />
             {confirmReviewOpen && (
               <div
@@ -673,14 +780,38 @@ export function FamilyIntakeForm({
             <div className="mt-5 flex flex-wrap gap-2">
               <Button
                 variant="primary"
-                onPress={() => void confirmCase()}
+                onPress={() => {
+                  if (!initialReview) {
+                    void startInitialReview();
+                  } else if (initialReview.requires_family_acknowledgement) {
+                    void acknowledgeInitialReview();
+                  } else {
+                    void confirmCase();
+                  }
+                }}
                 isDisabled={
                   isBusy ||
                   confirmReviewOpen ||
-                  draft.confirmation_blocked_reasons.length > 0
+                  draft.confirmation_blocked_reasons.length > 0 ||
+                  (initialReview?.requires_family_acknowledgement === true &&
+                    confirmedInitialReviewIssues.length !==
+                      initialReview.issues.length)
                 }
               >
-                {confirmReviewOpen ? "请完成二次确认" : "人工确认并创建案件"}
+                {busyAction === "initial_review" && (
+                  <Spinner size="sm" aria-label="正在进行 AI 初步审核" />
+                )}
+                {busyAction === "acknowledge_initial_review" && (
+                  <Spinner size="sm" aria-label="正在确认初审标注" />
+                )}
+                {busyAction === "confirm" && (
+                  <Spinner size="sm" aria-label="正在提交指挥端" />
+                )}
+                {!initialReview
+                  ? "首次确认并进行 AI 初步审核"
+                  : initialReview.requires_family_acknowledgement
+                    ? "确认初审标注"
+                    : "二次确认并提交指挥端"}
               </Button>
               <Button
                 variant="ghost"
@@ -898,6 +1029,112 @@ export function FamilyIntakeForm({
           >
             重新获取草稿
           </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function InitialReviewPanel({
+  review,
+  isReviewing,
+  confirmedIssueIds,
+  onToggleIssue,
+}: {
+  review: IntakeAiInitialReviewResponse | null;
+  isReviewing: boolean;
+  confirmedIssueIds: string[];
+  onToggleIssue: (issueId: string) => void;
+}) {
+  if (!review) {
+    return (
+      <div
+        className="mt-4 rounded-md border border-brand-100 bg-brand-50 p-3 text-sm leading-6 text-slate-700"
+        role={isReviewing ? "status" : undefined}
+      >
+        {isReviewing ? (
+          <span className="flex items-center gap-2">
+            <Spinner size="sm" aria-label="正在进行 AI 初步审核" />
+            正在进行 AI 初步审核，请稍候；审核完成前不会创建案件或向指挥端提交资料。
+          </span>
+        ) : (
+          "首次确认后，系统会进行 AI 初步审核。它只标注需要您核对的疑点，不能确认事实、修改资料或判断位置。"
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <section
+      className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4"
+      aria-labelledby="initial-review-title"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3
+            id="initial-review-title"
+            className="m-0 text-base font-bold text-slate-950"
+          >
+            AI 初步审核结果
+          </h3>
+          <p className="mb-0 mt-1 text-sm leading-6 text-slate-700">
+            {review.degradation_status === "rule_based_fallback"
+              ? "AI 服务不可用或输出未通过校验，已使用规则一致性检查回退。"
+              : "以下内容仅是待家属确认的提醒，不是事实结论、位置判断或行动指令。"}
+          </p>
+        </div>
+        <Chip size="sm" variant="soft">
+          <Chip.Label>
+            {review.ready_for_second_confirmation
+              ? "已完成家属确认"
+              : "等待家属确认"}
+          </Chip.Label>
+        </Chip>
+      </div>
+
+      {review.blocking_assessments.length > 0 && (
+        <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-900">
+          <strong>需要先修正的规则核对项</strong>
+          {review.blocking_assessments.map((item) => (
+            <p key={`${item.field_path}-${item.conflict_type}`} className="mb-0 mt-2">
+              {item.evidence_summary} {item.suggested_action}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {review.issues.length === 0 ? (
+        <p className="mb-0 mt-3 text-sm leading-6 text-slate-700">
+          未发现需要额外确认的 AI 疑点。请确认后进行二次提交；这不代表资料已经被系统认定为真实无误。
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-3">
+          {review.issues.map((item) => {
+            const checked = confirmedIssueIds.includes(item.id);
+            return (
+              <label
+                key={item.id}
+                className="flex cursor-pointer gap-3 rounded-md border border-amber-200 bg-white p-3 text-sm leading-6 text-slate-700"
+              >
+                <input
+                  className="mt-1 h-4 w-4 shrink-0"
+                  type="checkbox"
+                  checked={checked}
+                  disabled={review.ready_for_second_confirmation}
+                  onChange={() => onToggleIssue(item.id)}
+                />
+                <span>
+                  <strong className="block text-slate-950">
+                    {questionLabels[item.field] ?? item.field}
+                  </strong>
+                  <span className="block">{item.evidence_summary}</span>
+                  <span className="mt-1 block text-slate-900">
+                    请确认：{item.clarification_question}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
         </div>
       )}
     </section>
@@ -1313,6 +1550,7 @@ function sessionFromAnswerResponse(
     phase_transition_ready: response.phase_transition_ready,
     next_question: response.next_question,
     guidance_mode: response.guidance_mode,
+    ai_initial_review_status: response.ai_initial_review_status,
     privacy_notice: response.privacy_notice,
   };
 }
@@ -1405,6 +1643,7 @@ function toStoredSession(session: IntakeSession): StoredIntakeSession {
     phase_transition_ready: session.phase_transition_ready,
     next_question: session.next_question,
     guidance_mode: session.guidance_mode,
+    ai_initial_review_status: session.ai_initial_review_status,
     privacy_notice: session.privacy_notice,
   };
 }
@@ -1417,7 +1656,14 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
     const session = parsed.session;
     if (!session || typeof session.id !== "string")
       return discardStoredState(storageKey);
-    if (!["collecting", "ready_for_confirmation"].includes(session.status))
+    if (
+      ![
+        "collecting",
+        "ready_for_confirmation",
+        "awaiting_family_review",
+        "ready_for_second_confirmation",
+      ].includes(session.status)
+    )
       return discardStoredState(storageKey);
     if (!["phase_one", "phase_two"].includes(session.phase))
       return discardStoredState(storageKey);
@@ -1437,7 +1683,16 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
         typeof session.next_question.required !== "boolean")
     )
       return discardStoredState(storageKey);
-    if (!session.next_question && session.status !== "ready_for_confirmation")
+    if (
+      !session.next_question &&
+      ![
+        "ready_for_confirmation",
+        "awaiting_family_review",
+        "ready_for_second_confirmation",
+      ].includes(session.status)
+    )
+      return discardStoredState(storageKey);
+    if (typeof session.ai_initial_review_status !== "string")
       return discardStoredState(storageKey);
     return {
       session: session as StoredIntakeSession,

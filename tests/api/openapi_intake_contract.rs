@@ -92,7 +92,8 @@ fn intake_openapi_contract_covers_runtime_requests_and_responses() {
             "completed_phase_one_fields:",
             "missing_phase_one_fields:",
             "phase_transition_ready:",
-            "enum: [collecting, ready_for_confirmation]",
+            "enum: [collecting, ready_for_confirmation, awaiting_family_review, ready_for_second_confirmation, confirmed, closed]",
+            "ai_initial_review_status:",
         ],
     );
     assert_schema_contains(
@@ -104,6 +105,7 @@ fn intake_openapi_contract_covers_runtime_requests_and_responses() {
             "phase_transition_ready:",
             "assessments:",
             "#/components/schemas/IntakeAssessment",
+            "ai_initial_review_status:",
         ],
     );
 }
@@ -162,7 +164,41 @@ fn intake_openapi_contract_covers_draft_provenance_assessments_and_confirmation(
     assert!(!confirmed_profile.contains("format: date-time"));
     assert_schema_contains(
         "ConfirmIntakeSessionResponse",
-        &["#/components/schemas/CaseStatus"],
+        &[
+            "#/components/schemas/CaseStatus",
+            "human_confirmed_after_ai_initial_review",
+        ],
+    );
+    assert_schema_contains(
+        "StartIntakeAiInitialReviewRequest",
+        &["required: [profile]", "ConfirmedIntakeProfile"],
+    );
+    assert_schema_contains(
+        "AcknowledgeIntakeAiInitialReviewRequest",
+        &["human_confirmed", "confirmed_issue_ids"],
+    );
+    assert_schema_contains(
+        "IntakeAiInitialReviewResponse",
+        &[
+            "degradation_status:",
+            "issues:",
+            "blocking_assessments:",
+            "requires_family_acknowledgement:",
+            "ready_for_second_confirmation:",
+        ],
+    );
+    for expected in [
+        "operationId: getIntakeAiInitialReview",
+        "operationId: startIntakeAiInitialReview",
+    ] {
+        assert!(
+            operation("/api/intake-sessions/{session_id}/ai-initial-review").contains(expected),
+            "initial-review API must declare {expected:?}"
+        );
+    }
+    assert!(
+        operation("/api/intake-sessions/{session_id}/ai-initial-review/acknowledge")
+            .contains("operationId: acknowledgeIntakeAiInitialReview")
     );
 }
 

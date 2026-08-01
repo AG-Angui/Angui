@@ -14,12 +14,14 @@ use crate::{
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, ConfirmIntakeSessionRequest, ConfirmIntakeSessionResponse,
-        CreateCaseRequest, CreateIntakeSessionRequest, IntakeAiFollowUp, IntakeAiFollowUpResponse,
-        IntakeAnswerRevisionResponse, IntakeInitialAnswers, IntakePhaseProgress,
-        IntakeProfileDraft, IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields,
-        IntakeQuestion, IntakeSessionResponse, IntakeStructuredFacts, RestoreIntakeAnswerRequest,
-        SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
+        AcknowledgeIntakeAiInitialReviewRequest, AuthenticatedUser, ConfirmIntakeSessionRequest,
+        ConfirmIntakeSessionResponse, ConfirmedIntakeProfile, CreateCaseRequest,
+        CreateIntakeSessionRequest, IntakeAiFollowUp, IntakeAiFollowUpResponse,
+        IntakeAiInitialReviewIssue, IntakeAiInitialReviewResponse, IntakeAnswerRevisionResponse,
+        IntakeInitialAnswers, IntakePhaseProgress, IntakeProfileDraft,
+        IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields, IntakeQuestion,
+        IntakeSessionResponse, IntakeStructuredFacts, RestoreIntakeAnswerRequest,
+        StartIntakeAiInitialReviewRequest, SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
 };
@@ -72,6 +74,10 @@ pub async fn create_intake_session(
         answers_json: Set(answers_json),
         assessment_json: Set("[]".to_owned()),
         structured_answers_json: Set("{}".to_owned()),
+        ai_initial_review_status: Set("not_started".to_owned()),
+        ai_initial_review_json: Set("[]".to_owned()),
+        ai_initial_review_profile_json: Set(None),
+        ai_initial_reviewed_at: Set(None),
         confirmed_by_user_id: Set(None),
         confirmed_at: Set(None),
         created_at: Set(timestamp.clone()),
@@ -254,6 +260,13 @@ pub async fn submit_intake_answer_with_map(
         Set(serde_json::to_string(&structured_answers).map_err(|_| ApiError::Internal)?);
     updated_session.assessment_json =
         Set(serde_json::to_string(&assessments).map_err(|_| ApiError::Internal)?);
+    // A correction changes the exact material seen by the initial review. Do
+    // not let a family reuse acknowledgements that were made against the old
+    // values or profile snapshot.
+    updated_session.ai_initial_review_status = Set("not_started".to_owned());
+    updated_session.ai_initial_review_json = Set("[]".to_owned());
+    updated_session.ai_initial_review_profile_json = Set(None);
+    updated_session.ai_initial_reviewed_at = Set(None);
     updated_session.updated_at = Set(timestamp);
     let updated_session = updated_session.update(&transaction).await?;
 
@@ -328,6 +341,215 @@ pub async fn get_intake_profile_draft(
         confirmation_blocked_reasons,
         direction_hypotheses: direction_hypotheses(&answers, &session.updated_at),
     })
+}
+
+/// Runs the controlled initial review after the family's first confirmation.
+/// The result remains a family-only draft and cannot create a case, change an
+/// answer, or make a location/fact conclusion. The exact reviewed profile is
+/// saved so the later second confirmation cannot silently submit different
+/// content.
+pub async fn start_ai_initial_review(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: StartIntakeAiInitialReviewRequest,
+    gateway: &crate::ai_gateway::AiGateway,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    if session.case_id.is_some() || session.status == "confirmed" {
+        return Err(ApiError::Conflict(
+            "a confirmed intake session cannot be reviewed again".to_owned(),
+        ));
+    }
+    if !matches!(
+        session.status.as_str(),
+        "ready_for_confirmation" | "awaiting_family_review" | "ready_for_second_confirmation"
+    ) {
+        return Err(ApiError::Conflict(
+            "complete the required intake answers before starting initial review".to_owned(),
+        ));
+    }
+
+    let answers = parse_answers(&session)?;
+    let assessments = parse_assessments(&session)?;
+    let input = serde_json::to_string(&json!({
+        "family_answers": answers,
+        "family_reviewed_profile": request.profile,
+        "rule_consistency_checks": assessments,
+        "review_task": "Identify only ambiguous, incomplete, or internally inconsistent family-provided information that needs the family's confirmation."
+    }))
+    .map_err(|_| ApiError::Internal)?;
+    let reviewed_at = now();
+    let ai_request = AiRequest {
+        capability: AiCapability::Inquiry,
+        data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft,
+        data_region: "CN".to_owned(),
+        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family text. `field` must be one of the supplied family answer field names or `profile`. `source_fields` must name only supplied fields. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
+        input,
+        requested_output_tokens: 700,
+        template_version: "intake-initial-review-ai-v1".to_owned(),
+        input_scope_reference: "intake-session-authorized-family-review".to_owned(),
+        redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+    };
+    let execution = gateway.execute(&ai_request).await;
+    let decision = execution.decision();
+    let (issues, review_status, audit_status) = match execution {
+        AiExecutionResult::Completed { output, .. } => {
+            match gateway.decode_json::<InitialReviewModelOutput>(&output) {
+                Ok(output) => match validate_initial_review_output(output, &answers) {
+                    Ok(issues) => (
+                        issues,
+                        "available_pending".to_owned(),
+                        AiTaskStatus::Completed,
+                    ),
+                    Err(_) => (
+                        rule_based_initial_review_issues(&assessments),
+                        "rule_based_fallback_pending".to_owned(),
+                        AiTaskStatus::Failed,
+                    ),
+                },
+                Err(_) => (
+                    rule_based_initial_review_issues(&assessments),
+                    "rule_based_fallback_pending".to_owned(),
+                    AiTaskStatus::Failed,
+                ),
+            }
+        }
+        AiExecutionResult::Degraded { .. } => (
+            rule_based_initial_review_issues(&assessments),
+            "rule_based_fallback_pending".to_owned(),
+            AiTaskStatus::Degraded,
+        ),
+        AiExecutionResult::Failed { .. } => (
+            rule_based_initial_review_issues(&assessments),
+            "rule_based_fallback_pending".to_owned(),
+            AiTaskStatus::Failed,
+        ),
+    };
+
+    let transaction = db.begin().await?;
+    let current = intake_sessions::Entity::find_by_id(session_id)
+        .lock_exclusive()
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&current, auth)?;
+    if current.updated_at != session.updated_at
+        || current.case_id.is_some()
+        || current.status == "confirmed"
+    {
+        return Err(ApiError::Conflict(
+            "intake answers changed while the initial review was running; start it again"
+                .to_owned(),
+        ));
+    }
+    let profile_json = serde_json::to_string(&request.profile).map_err(|_| ApiError::Internal)?;
+    let issues_json = serde_json::to_string(&issues).map_err(|_| ApiError::Internal)?;
+    let mut updated = current.into_active_model();
+    updated.status = Set("awaiting_family_review".to_owned());
+    updated.ai_initial_review_status = Set(review_status);
+    updated.ai_initial_review_json = Set(issues_json);
+    updated.ai_initial_review_profile_json = Set(Some(profile_json));
+    updated.ai_initial_reviewed_at = Set(Some(reviewed_at.clone()));
+    updated.updated_at = Set(reviewed_at.clone());
+    let updated = updated.update(&transaction).await?;
+    let audit = AiExecutionAudit::for_request(&ai_request, &decision, audit_status);
+    crate::ai_gateway::persist_execution_audit(&transaction, &audit, &auth.id, None).await?;
+    write_audit(
+        &transaction,
+        auth,
+        "intake_session.ai_initial_review_completed",
+        session_id.to_owned(),
+        Some(json!({
+            "review_status": updated.ai_initial_review_status,
+            "issue_count": issues.len(),
+            "has_blocking_rule_checks": assessments.iter().any(|item| item.severity == "blocking"),
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    initial_review_response(&updated)
+}
+
+pub async fn get_ai_initial_review(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    initial_review_response(&session)
+}
+
+pub async fn acknowledge_ai_initial_review(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    request: AcknowledgeIntakeAiInitialReviewRequest,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    require_operational_member(auth)?;
+    if !request.human_confirmed {
+        return Err(ApiError::Validation(
+            "human_confirmed must be true before the second confirmation".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .lock_exclusive()
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    if session.status != "awaiting_family_review" {
+        return Err(ApiError::Conflict(
+            "this intake session is not awaiting family review acknowledgement".to_owned(),
+        ));
+    }
+    let issues = parse_initial_review_issues(&session)?;
+    let mut expected = issues
+        .iter()
+        .map(|issue| issue.id.clone())
+        .collect::<Vec<_>>();
+    expected.sort();
+    let mut submitted = request.confirmed_issue_ids;
+    submitted.sort();
+    submitted.dedup();
+    if submitted != expected {
+        return Err(ApiError::Validation(
+            "confirm every displayed initial-review item, or correct an answer and run initial review again"
+                .to_owned(),
+        ));
+    }
+    let assessments = parse_assessments(&session)?;
+    let next_review_status = acknowledged_review_status(&session.ai_initial_review_status);
+    let mut updated = session.into_active_model();
+    updated.status = Set("ready_for_second_confirmation".to_owned());
+    updated.ai_initial_review_status = Set(next_review_status);
+    updated.updated_at = Set(now());
+    let updated = updated.update(&transaction).await?;
+    write_audit(
+        &transaction,
+        auth,
+        "intake_session.ai_initial_review_acknowledged",
+        session_id.to_owned(),
+        Some(json!({
+            "issue_count": issues.len(),
+            "has_blocking_rule_checks": assessments.iter().any(|item| item.severity == "blocking"),
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    initial_review_response(&updated)
 }
 
 pub async fn get_ai_follow_up(
@@ -579,9 +801,10 @@ pub async fn confirm_intake_session(
     require_operational_member(auth)?;
     if !request.human_confirmed {
         return Err(ApiError::Validation(
-            "human_confirmed must be true before creating a case".to_owned(),
+            "human_confirmed must be true before the second confirmation creates a case".to_owned(),
         ));
     }
+    let submitted_profile = request.profile.clone();
     let case_request = case_request_from_confirmed_profile(request);
     let transaction = db.begin().await?;
     let session = intake_sessions::Entity::find_by_id(session_id)
@@ -599,9 +822,27 @@ pub async fn confirm_intake_session(
         transaction.commit().await?;
         return Ok(confirmed_response(case_model, session.confirmed_at));
     }
-    if session.status != "ready_for_confirmation" {
+    if session.status != "ready_for_second_confirmation" {
         return Err(ApiError::Conflict(
-            "intake session is not ready for confirmation".to_owned(),
+            "complete the initial review and family acknowledgement before the second confirmation"
+                .to_owned(),
+        ));
+    }
+    let reviewed_profile = session
+        .ai_initial_review_profile_json
+        .as_deref()
+        .ok_or_else(|| {
+            ApiError::Conflict(
+                "the initial review profile is unavailable; start initial review again".to_owned(),
+            )
+        })
+        .and_then(|profile| {
+            serde_json::from_str::<ConfirmedIntakeProfile>(profile).map_err(|_| ApiError::Internal)
+        })?;
+    if reviewed_profile != submitted_profile {
+        return Err(ApiError::Conflict(
+            "profile values changed after initial review; review the updated information again"
+                .to_owned(),
         ));
     }
     let assessments = parse_assessments(&session)?;
@@ -665,12 +906,173 @@ pub async fn confirm_intake_session(
         auth,
         "intake_session.confirmed",
         session_id.to_owned(),
-        Some(json!({ "case_id": case_model.id, "confirmation_status": "human_confirmed" })),
+        Some(json!({
+            "case_id": case_model.id,
+            "confirmation_status": "human_confirmed_after_ai_initial_review"
+        })),
     )
     .await?;
 
     transaction.commit().await?;
     Ok(confirmed_response(case_model, Some(timestamp)))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialReviewModelOutput {
+    issues: Vec<InitialReviewModelIssue>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialReviewModelIssue {
+    field: String,
+    severity: String,
+    evidence_summary: String,
+    clarification_question: String,
+    source_fields: Vec<String>,
+}
+
+fn initial_review_response(
+    session: &intake_sessions::Model,
+) -> Result<IntakeAiInitialReviewResponse, ApiError> {
+    let issues = parse_initial_review_issues(session)?;
+    let blocking_assessments = parse_assessments(session)?
+        .into_iter()
+        .filter(|assessment| assessment.severity == "blocking")
+        .collect::<Vec<_>>();
+    let degradation_status = if session
+        .ai_initial_review_status
+        .starts_with("rule_based_fallback")
+    {
+        "rule_based_fallback"
+    } else if session.ai_initial_review_status == "not_started" {
+        "not_started"
+    } else {
+        "available"
+    };
+    Ok(IntakeAiInitialReviewResponse {
+        session_id: session.id.clone(),
+        status: session.status.clone(),
+        degradation_status: degradation_status.to_owned(),
+        issues,
+        blocking_assessments,
+        generated_at: session
+            .ai_initial_reviewed_at
+            .clone()
+            .unwrap_or_else(|| session.updated_at.clone()),
+        requires_family_acknowledgement: session.status == "awaiting_family_review",
+        ready_for_second_confirmation: session.status == "ready_for_second_confirmation",
+    })
+}
+
+fn parse_initial_review_issues(
+    session: &intake_sessions::Model,
+) -> Result<Vec<IntakeAiInitialReviewIssue>, ApiError> {
+    serde_json::from_str(&session.ai_initial_review_json).map_err(|_| ApiError::Internal)
+}
+
+fn acknowledged_review_status(status: &str) -> String {
+    match status {
+        "available_pending" => "available_acknowledged".to_owned(),
+        "rule_based_fallback_pending" => "rule_based_fallback_acknowledged".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn validate_initial_review_output(
+    output: InitialReviewModelOutput,
+    answers: &IntakeInitialAnswers,
+) -> Result<Vec<IntakeAiInitialReviewIssue>, ApiError> {
+    if output.issues.len() > 12 {
+        return Err(ApiError::Validation(
+            "initial review returned too many issues".to_owned(),
+        ));
+    }
+    let allowed_fields = [
+        "basic_information",
+        "health_status",
+        "behavior_habits",
+        "last_seen",
+        "frequent_locations",
+        "belongings",
+        "transport_ability",
+        "follow_up_clues",
+        "suspicious_motive",
+        "profile",
+    ]
+    .into_iter()
+    .filter(|field| *field == "profile" || answer_for(answers, field).is_some())
+    .collect::<std::collections::HashSet<_>>();
+    let mut seen = std::collections::HashSet::new();
+    output
+        .issues
+        .into_iter()
+        .map(|candidate| {
+            let field = candidate.field.trim().to_owned();
+            let severity = candidate.severity.trim().to_owned();
+            let evidence_summary = candidate.evidence_summary.trim().to_owned();
+            let clarification_question = candidate.clarification_question.trim().to_owned();
+            let mut source_fields = candidate
+                .source_fields
+                .into_iter()
+                .map(|value| value.trim().to_owned())
+                .collect::<Vec<_>>();
+            source_fields.sort();
+            source_fields.dedup();
+            if !allowed_fields.contains(field.as_str())
+                || !matches!(severity.as_str(), "needs_confirmation" | "warning")
+                || evidence_summary.is_empty()
+                || evidence_summary.chars().count() > 360
+                || clarification_question.is_empty()
+                || clarification_question.chars().count() > 300
+                || source_fields.is_empty()
+                || source_fields.len() > 4
+                || source_fields
+                    .iter()
+                    .any(|source| !allowed_fields.contains(source.as_str()))
+            {
+                return Err(ApiError::Validation(
+                    "initial review output did not match the approved schema".to_owned(),
+                ));
+            }
+            let fingerprint = format!(
+                "{field}|{severity}|{evidence_summary}|{clarification_question}|{}",
+                source_fields.join("|")
+            );
+            if !seen.insert(fingerprint) {
+                return Err(ApiError::Validation(
+                    "initial review output contained duplicate issues".to_owned(),
+                ));
+            }
+            Ok(IntakeAiInitialReviewIssue {
+                id: Uuid::new_v4().to_string(),
+                field,
+                severity,
+                evidence_summary,
+                clarification_question,
+                source_fields,
+            })
+        })
+        .collect()
+}
+
+fn rule_based_initial_review_issues(
+    assessments: &[crate::models::IntakeAssessment],
+) -> Vec<IntakeAiInitialReviewIssue> {
+    assessments
+        .iter()
+        .filter(|assessment| assessment.severity != "blocking")
+        .take(12)
+        .map(|assessment| IntakeAiInitialReviewIssue {
+            id: Uuid::new_v4().to_string(),
+            field: assessment.field_path.clone(),
+            severity: "needs_confirmation".to_owned(),
+            evidence_summary: assessment.evidence_summary.clone(),
+            clarification_question: assessment.suggested_action.clone(),
+            source_fields: vec![assessment.field_path.clone()],
+        })
+        .collect()
 }
 
 fn require_operational_member(auth: &AuthenticatedUser) -> Result<(), ApiError> {
@@ -773,7 +1175,7 @@ fn confirmed_response(
         case_id: case_model.id,
         case_code: case_model.case_code,
         status: case_model.status,
-        confirmation_status: "human_confirmed".to_owned(),
+        confirmation_status: "human_confirmed_after_ai_initial_review".to_owned(),
         confirmed_at: confirmed_at.unwrap_or(case_model.updated_at),
     }
 }

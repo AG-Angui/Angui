@@ -35,6 +35,7 @@ mod m0032_translate_default_intake_questions;
 mod m0033_add_clue_draft_candidates;
 mod m0034_add_summary_versions;
 mod m0035_add_clue_promotion;
+mod m0036_add_intake_ai_initial_review;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -79,6 +80,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0033_add_clue_draft_candidates::Migration),
             Box::new(m0034_add_summary_versions::Migration),
             Box::new(m0035_add_clue_promotion::Migration),
+            Box::new(m0036_add_intake_ai_initial_review::Migration),
         ]
     }
 }

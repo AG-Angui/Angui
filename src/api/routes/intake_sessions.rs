@@ -4,8 +4,9 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AuthenticatedUser, ConfirmIntakeSessionRequest, CreateIntakeSessionRequest,
-        RestoreIntakeAnswerRequest, SubmitIntakeAnswerRequest,
+        AcknowledgeIntakeAiInitialReviewRequest, AuthenticatedUser, ConfirmIntakeSessionRequest,
+        CreateIntakeSessionRequest, RestoreIntakeAnswerRequest, StartIntakeAiInitialReviewRequest,
+        SubmitIntakeAnswerRequest,
     },
     services::intake_session_service,
 };
@@ -25,6 +26,18 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route(
                 "/{session_id}/ai-follow-up",
                 web::get().to(get_ai_follow_up),
+            )
+            .route(
+                "/{session_id}/ai-initial-review",
+                web::get().to(get_ai_initial_review),
+            )
+            .route(
+                "/{session_id}/ai-initial-review",
+                web::post().to(start_ai_initial_review),
+            )
+            .route(
+                "/{session_id}/ai-initial-review/acknowledge",
+                web::post().to(acknowledge_ai_initial_review),
             )
             .route(
                 "/{session_id}/answer-revisions",
@@ -59,6 +72,50 @@ async fn get_ai_follow_up(
     Ok(HttpResponse::Ok().json(
         intake_session_service::get_ai_follow_up(&state.db, &auth, &session_id, &state.ai_gateway)
             .await?,
+    ))
+}
+
+async fn get_ai_initial_review(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(intake_session_service::get_ai_initial_review(&state.db, &auth, &session_id).await?))
+}
+
+async fn start_ai_initial_review(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    request: web::Json<StartIntakeAiInitialReviewRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        intake_session_service::start_ai_initial_review(
+            &state.db,
+            &auth,
+            &session_id,
+            request.into_inner(),
+            &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn acknowledge_ai_initial_review(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    request: web::Json<AcknowledgeIntakeAiInitialReviewRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        intake_session_service::acknowledge_ai_initial_review(
+            &state.db,
+            &auth,
+            &session_id,
+            request.into_inner(),
+        )
+        .await?,
     ))
 }
 

@@ -296,8 +296,8 @@ paths:
     post:
       tags: [Intake sessions]
       operationId: confirmIntakeSession
-      summary: Human-confirm a profile and create the formal case
-      description: The session creator submits family-reviewed final values. Only display_name and last_seen_location are required by the current service; all other profile fields are optional overrides. Creation of the case, elder profile, family membership, `case.created` audit event, and session link is one transaction. A successful repeat is idempotent and returns the linked case's current status.
+      summary: Second human confirmation creates the formal case
+      description: This endpoint is available only after the session creator has started the family-visible initial review and acknowledged every displayed non-blocking item. The submitted profile must exactly match the reviewed snapshot. AI output remains an unconfirmed draft; it cannot create, publish, dispatch, or confirm anything. Creation of the case, elder profile, family membership, `case.created` audit event, and session link is one transaction. A successful repeat is idempotent and returns the linked case's current status.
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -327,6 +327,70 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /api/intake-sessions/{session_id}/ai-initial-review:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    get:
+      tags: [Intake sessions]
+      operationId: getIntakeAiInitialReview
+      summary: Get the family-only initial-review draft
+      description: Only the session creator can read this sensitive review. It contains reviewable uncertainty prompts, never confirmed facts or location conclusions.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Current initial-review draft, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeAiInitialReviewResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Intake sessions]
+      operationId: startIntakeAiInitialReview
+      summary: Start the family-visible AI initial review
+      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartIntakeAiInitialReviewRequest" }
+      responses:
+        "201": { description: Family review draft created, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeAiInitialReviewResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/intake-sessions/{session_id}/ai-initial-review/acknowledge:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    post:
+      tags: [Intake sessions]
+      operationId: acknowledgeIntakeAiInitialReview
+      summary: Acknowledge each displayed initial-review item
+      description: The session creator must submit exactly the currently displayed issue IDs. Blocking deterministic consistency checks cannot be acknowledged away and require correction before second confirmation.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AcknowledgeIntakeAiInitialReviewRequest" }
+      responses:
+        "200": { description: Family acknowledgement recorded, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeAiInitialReviewResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /api/cases:
     get:
@@ -2018,7 +2082,7 @@ components:
     SubmitIntakeAnswerResponse:
       type: object
       additionalProperties: false
-      required: [session_id, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, privacy_notice, updated_at]
+      required: [session_id, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, ai_initial_review_status, privacy_notice, updated_at]
       properties:
         session_id: { type: string, format: uuid }
         status: { type: string, enum: [collecting, ready_for_confirmation] }
@@ -2048,6 +2112,7 @@ components:
             - $ref: "#/components/schemas/IntakeQuestion"
             - type: "null"
         guidance_mode: { type: string, const: rule_based }
+        ai_initial_review_status: { type: string }
         privacy_notice: { type: string }
         updated_at: { type: string, format: date-time }
 
@@ -2127,6 +2192,56 @@ components:
         human_confirmed: { type: boolean, const: true }
         profile: { $ref: "#/components/schemas/ConfirmedIntakeProfile" }
 
+    StartIntakeAiInitialReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [profile]
+      properties:
+        profile: { $ref: "#/components/schemas/ConfirmedIntakeProfile" }
+
+    AcknowledgeIntakeAiInitialReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [human_confirmed, confirmed_issue_ids]
+      properties:
+        human_confirmed: { type: boolean, const: true }
+        confirmed_issue_ids:
+          type: array
+          items: { type: string, format: uuid }
+          uniqueItems: true
+
+    IntakeAiInitialReviewIssue:
+      type: object
+      additionalProperties: false
+      required: [id, field, severity, evidence_summary, clarification_question, source_fields]
+      properties:
+        id: { type: string, format: uuid }
+        field: { type: string }
+        severity: { type: string, enum: [needs_confirmation, warning] }
+        evidence_summary: { type: string, maxLength: 360 }
+        clarification_question: { type: string, maxLength: 300 }
+        source_fields:
+          type: array
+          items: { type: string }
+
+    IntakeAiInitialReviewResponse:
+      type: object
+      additionalProperties: false
+      required: [session_id, status, degradation_status, issues, blocking_assessments, generated_at, requires_family_acknowledgement, ready_for_second_confirmation]
+      properties:
+        session_id: { type: string, format: uuid }
+        status: { type: string, enum: [collecting, ready_for_confirmation, awaiting_family_review, ready_for_second_confirmation, confirmed, closed] }
+        degradation_status: { type: string, enum: [available, rule_based_fallback, not_started] }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/IntakeAiInitialReviewIssue" }
+        blocking_assessments:
+          type: array
+          items: { $ref: "#/components/schemas/IntakeAssessment" }
+        generated_at: { type: string, format: date-time }
+        requires_family_acknowledgement: { type: boolean }
+        ready_for_second_confirmation: { type: boolean }
+
     ConfirmedIntakeProfile:
       type: object
       additionalProperties: false
@@ -2151,7 +2266,7 @@ components:
         status:
           $ref: "#/components/schemas/CaseStatus"
           description: Active on first confirmation; an idempotent retry returns the linked case's current status.
-        confirmation_status: { type: string, const: human_confirmed }
+        confirmation_status: { type: string, const: human_confirmed_after_ai_initial_review }
         confirmed_at: { type: string, format: date-time }
 
     IntakeQuestion:
@@ -2166,10 +2281,10 @@ components:
     IntakeSession:
       type: object
       additionalProperties: false
-      required: [id, status, question_set_version, initial_answers, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, next_question, guidance_mode, privacy_notice, created_at, updated_at]
+      required: [id, status, question_set_version, initial_answers, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, next_question, guidance_mode, ai_initial_review_status, privacy_notice, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
-        status: { type: string, enum: [collecting, ready_for_confirmation] }
+        status: { type: string, enum: [collecting, ready_for_confirmation, awaiting_family_review, ready_for_second_confirmation, confirmed, closed] }
         question_set_version: { type: integer, minimum: 1 }
         initial_answers: { $ref: "#/components/schemas/IntakeInitialAnswers" }
         missing_fields:
@@ -2188,6 +2303,7 @@ components:
             - $ref: "#/components/schemas/IntakeQuestion"
             - type: "null"
         guidance_mode: { type: string, const: rule_based }
+        ai_initial_review_status: { type: string }
         privacy_notice: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

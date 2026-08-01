@@ -8,7 +8,11 @@ export interface IntakeQuestion {
 
 export interface IntakeSession {
   id: string;
-  status: "collecting" | "ready_for_confirmation";
+  status:
+    | "collecting"
+    | "ready_for_confirmation"
+    | "awaiting_family_review"
+    | "ready_for_second_confirmation";
   missing_fields: string[];
   phase: "phase_one" | "phase_two";
   completed_phase_one_fields: string[];
@@ -16,6 +20,7 @@ export interface IntakeSession {
   phase_transition_ready: boolean;
   next_question: IntakeQuestion | null;
   guidance_mode: "rule_based" | "ai_assisted";
+  ai_initial_review_status: string;
   privacy_notice: string;
 }
 
@@ -127,7 +132,7 @@ export interface ConfirmIntakeResponse {
   case_id: string;
   case_code: string;
   status: "active" | "resolved" | "closed";
-  confirmation_status: "human_confirmed";
+  confirmation_status: "human_confirmed" | "human_confirmed_after_ai_initial_review";
   confirmed_at: string;
 }
 
@@ -162,6 +167,26 @@ export function getIntakeDraft(
   );
 }
 
+export interface IntakeAiInitialReviewIssue {
+  id: string;
+  field: string;
+  severity: "needs_confirmation" | "warning";
+  evidence_summary: string;
+  clarification_question: string;
+  source_fields: string[];
+}
+
+export interface IntakeAiInitialReviewResponse {
+  session_id: string;
+  status: IntakeSession["status"];
+  degradation_status: "available" | "rule_based_fallback" | "not_started";
+  issues: IntakeAiInitialReviewIssue[];
+  blocking_assessments: IntakeAssessment[];
+  generated_at: string;
+  requires_family_acknowledgement: boolean;
+  ready_for_second_confirmation: boolean;
+}
+
 export function getIntakeAiFollowUp(
   token: string,
   sessionId: string,
@@ -169,6 +194,47 @@ export function getIntakeAiFollowUp(
   return apiRequest<IntakeAiFollowUpResponse>(
     `/intake-sessions/${sessionId}/ai-follow-up`,
     {},
+    token,
+  );
+}
+
+export function getIntakeAiInitialReview(
+  token: string,
+  sessionId: string,
+): Promise<IntakeAiInitialReviewResponse> {
+  return apiRequest<IntakeAiInitialReviewResponse>(
+    `/intake-sessions/${sessionId}/ai-initial-review`,
+    {},
+    token,
+  );
+}
+
+export function startIntakeAiInitialReview(
+  token: string,
+  sessionId: string,
+  profile: ConfirmedIntakeProfile,
+): Promise<IntakeAiInitialReviewResponse> {
+  return apiRequest<IntakeAiInitialReviewResponse>(
+    `/intake-sessions/${sessionId}/ai-initial-review`,
+    { method: "POST", body: JSON.stringify({ profile }) },
+    token,
+  );
+}
+
+export function acknowledgeIntakeAiInitialReview(
+  token: string,
+  sessionId: string,
+  confirmedIssueIds: string[],
+): Promise<IntakeAiInitialReviewResponse> {
+  return apiRequest<IntakeAiInitialReviewResponse>(
+    `/intake-sessions/${sessionId}/ai-initial-review/acknowledge`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        human_confirmed: true,
+        confirmed_issue_ids: confirmedIssueIds,
+      }),
+    },
     token,
   );
 }

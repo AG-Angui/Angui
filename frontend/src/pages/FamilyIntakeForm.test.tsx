@@ -11,8 +11,11 @@ import { FamilyIntakeForm } from "./FamilyIntakeForm";
 const mocked = vi.hoisted(() => ({
   confirmIntakeSession: vi.fn(),
   createIntakeSession: vi.fn(),
+  getIntakeAiInitialReview: vi.fn(),
   getIntakeAiFollowUp: vi.fn(),
   getIntakeDraft: vi.fn(),
+  acknowledgeIntakeAiInitialReview: vi.fn(),
+  startIntakeAiInitialReview: vi.fn(),
   submitIntakeAnswer: vi.fn(),
 }));
 
@@ -25,9 +28,15 @@ vi.mock("../api/intake", () => ({
     mocked.confirmIntakeSession(...args),
   createIntakeSession: (...args: unknown[]) =>
     mocked.createIntakeSession(...args),
+  getIntakeAiInitialReview: (...args: unknown[]) =>
+    mocked.getIntakeAiInitialReview(...args),
   getIntakeAiFollowUp: (...args: unknown[]) =>
     mocked.getIntakeAiFollowUp(...args),
   getIntakeDraft: (...args: unknown[]) => mocked.getIntakeDraft(...args),
+  acknowledgeIntakeAiInitialReview: (...args: unknown[]) =>
+    mocked.acknowledgeIntakeAiInitialReview(...args),
+  startIntakeAiInitialReview: (...args: unknown[]) =>
+    mocked.startIntakeAiInitialReview(...args),
   submitIntakeAnswer: (...args: unknown[]) =>
     mocked.submitIntakeAnswer(...args),
 }));
@@ -46,6 +55,7 @@ const collectingSession: IntakeSession = {
     required: true,
   },
   guidance_mode: "rule_based",
+  ai_initial_review_status: "not_started",
   privacy_notice: "仅用于本次问询。",
 };
 
@@ -525,6 +535,44 @@ beforeEach(() => {
       JSON.stringify({ session: readySession, answer: "" }),
     );
     mocked.getIntakeDraft.mockResolvedValue(profileDraft);
+    mocked.startIntakeAiInitialReview.mockResolvedValue({
+      session_id: "intake-1",
+      status: "awaiting_family_review",
+      degradation_status: "available",
+      issues: [
+        {
+          id: "issue-1",
+          field: "last_seen",
+          severity: "needs_confirmation",
+          evidence_summary: "The reported time and place need family confirmation.",
+          clarification_question: "Please confirm the last-seen information is accurate.",
+          source_fields: ["last_seen"],
+        },
+      ],
+      blocking_assessments: [],
+      generated_at: "2026-07-25T08:10:00Z",
+      requires_family_acknowledgement: true,
+      ready_for_second_confirmation: false,
+    });
+    mocked.acknowledgeIntakeAiInitialReview.mockResolvedValue({
+      session_id: "intake-1",
+      status: "ready_for_second_confirmation",
+      degradation_status: "available",
+      issues: [
+        {
+          id: "issue-1",
+          field: "last_seen",
+          severity: "needs_confirmation",
+          evidence_summary: "The reported time and place need family confirmation.",
+          clarification_question: "Please confirm the last-seen information is accurate.",
+          source_fields: ["last_seen"],
+        },
+      ],
+      blocking_assessments: [],
+      generated_at: "2026-07-25T08:10:00Z",
+      requires_family_acknowledgement: false,
+      ready_for_second_confirmation: true,
+    });
     mocked.confirmIntakeSession.mockResolvedValue({
       case_id: "case-1",
       case_code: "AG-0001",
@@ -540,16 +588,27 @@ beforeEach(() => {
     fireEvent.change(screen.getByRole("textbox", { name: "姓名或称呼" }), {
       target: { value: "模拟老人" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "人工确认并创建案件" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "首次确认并进行 AI 初步审核" }),
+    );
 
     expect(mocked.confirmIntakeSession).not.toHaveBeenCalled();
-    const confirmationDialog = screen.getByRole("alertdialog");
-    expect(confirmationDialog).toHaveFocus();
-    expect(
-      screen.getByRole("button", { name: "请完成二次确认" }),
-    ).toBeDisabled();
+    await screen.findByText("AI 初步审核结果");
+    expect(mocked.startIntakeAiInitialReview).toHaveBeenCalledTimes(1);
+    expect(mocked.confirmIntakeSession).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "确认并创建案件" }));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "确认初审标注" }));
+    await waitFor(() =>
+      expect(mocked.acknowledgeIntakeAiInitialReview).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        ["issue-1"],
+      ),
+    );
+    expect(mocked.confirmIntakeSession).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "二次确认并提交指挥端" }));
     await waitFor(() =>
       expect(mocked.confirmIntakeSession).toHaveBeenCalledTimes(1),
     );
