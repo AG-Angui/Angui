@@ -91,6 +91,14 @@ deploy() {
   [[ -f "${PREVIEW_BACKEND_DIR}/migration" ]] || die "backend artifact migration is missing"
   [[ -d "${PREVIEW_FRONTEND_DIR}" ]] || die "frontend artifact directory is missing"
 
+  # GitHub artifact downloads do not reliably preserve executable bits. Restore
+  # them before running the configuration-only validation command; install below
+  # also applies the final mode to the files mounted into the containers.
+  chmod 755 \
+    "${PREVIEW_BACKEND_DIR}/angui" \
+    "${PREVIEW_BACKEND_DIR}/angui-admin" \
+    "${PREVIEW_BACKEND_DIR}/migration"
+
   if ! "${PREVIEW_BACKEND_DIR}/angui" validate-ai-config; then
     die "ANGUI_AI_PROVIDERS_JSON failed application configuration validation"
   fi
