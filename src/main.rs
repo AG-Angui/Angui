@@ -1,11 +1,11 @@
-use std::io;
+use std::{env, io};
 
 use actix_cors::Cors;
 use actix_web::{App, HttpServer, http, middleware::Logger, web};
 use angui::{
     api::{rate_limit::LoginRateLimiter, routes},
     application::{app_state::AppState, services::task_service},
-    config::Settings,
+    config::{Settings, validate_ai_provider_configurations_from_env},
     integrations::{ai_gateway::AiGateway, amap_service::AmapService},
 };
 use sea_orm::Database;
@@ -13,6 +13,11 @@ use sea_orm::Database;
 #[actix_web::main]
 async fn main() -> io::Result<()> {
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+
+    if env::args().nth(1).as_deref() == Some("validate-ai-config") {
+        return validate_ai_provider_configurations_from_env()
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message));
+    }
 
     let settings = Settings::from_env()
         .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;

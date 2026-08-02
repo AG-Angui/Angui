@@ -91,6 +91,10 @@ deploy() {
   [[ -f "${PREVIEW_BACKEND_DIR}/migration" ]] || die "backend artifact migration is missing"
   [[ -d "${PREVIEW_FRONTEND_DIR}" ]] || die "frontend artifact directory is missing"
 
+  if ! "${PREVIEW_BACKEND_DIR}/angui" validate-ai-config; then
+    die "ANGUI_AI_PROVIDERS_JSON failed application configuration validation"
+  fi
+
   ensure_runtime_image
   ensure_proxy
   install -d -m 700 "${PREVIEW_DIR}/runtime"

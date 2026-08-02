@@ -119,18 +119,9 @@ impl Settings {
         if !(100..=10_000).contains(&amap_timeout_ms) {
             return Err("AMAP_TIMEOUT_MS must be between 100 and 10000".to_owned());
         }
-        let provider_configurations_value =
-            value("ANGUI_AI_PROVIDERS_JSON").unwrap_or_else(|| "[]".to_owned());
-        let ai_provider_configurations: Vec<ProviderConfig> = serde_json::from_str(
-            &provider_configurations_value,
-        )
-        .map_err(|error| {
-            format!(
-                "ANGUI_AI_PROVIDERS_JSON must be a JSON array of provider configurations: {error}"
-            )
-        })?;
-        validate_provider_configurations(&ai_provider_configurations)
-            .map_err(|error| error.to_string())?;
+        let ai_provider_configurations = parse_ai_provider_configurations(
+            value("ANGUI_AI_PROVIDERS_JSON").unwrap_or_else(|| "[]".to_owned()),
+        )?;
 
         Ok(Self {
             host,
@@ -153,6 +144,23 @@ impl Settings {
     pub fn address(&self) -> (String, u16) {
         (self.host.clone(), self.port)
     }
+}
+
+/// Validate the AI provider policy without initializing any other runtime
+/// components. Preview deployment uses this before replacing an existing
+/// environment so malformed policy cannot take the old preview down first.
+pub fn validate_ai_provider_configurations_from_env() -> Result<(), String> {
+    load_local_env_file()?;
+    let value = env::var("ANGUI_AI_PROVIDERS_JSON").unwrap_or_else(|_| "[]".to_owned());
+    parse_ai_provider_configurations(value).map(|_| ())
+}
+
+fn parse_ai_provider_configurations(value: String) -> Result<Vec<ProviderConfig>, String> {
+    let configurations: Vec<ProviderConfig> = serde_json::from_str(&value).map_err(|error| {
+        format!("ANGUI_AI_PROVIDERS_JSON must be a JSON array of provider configurations: {error}")
+    })?;
+    validate_provider_configurations(&configurations).map_err(|error| error.to_string())?;
+    Ok(configurations)
 }
 
 fn parse_bounded_usize(
