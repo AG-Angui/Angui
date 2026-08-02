@@ -592,6 +592,41 @@ impl AiGateway {
         Ok(Self { providers })
     }
 
+    /// Validate provider endpoint and credential references without sending a
+    /// request. This uses the same native request materialization path as
+    /// execution, including endpoint URI and non-empty credential checks.
+    pub fn validate_runtime_configuration(&self) -> Result<(), AiGatewayError> {
+        let request = AiRequest {
+            capability: AiCapability::Inquiry,
+            data_level: DataLevel::Public,
+            purpose: AiPurpose::IntakeDraft,
+            data_region: "runtime-validation".to_owned(),
+            system_instruction: None,
+            output_schema: None,
+            output_schema_name: None,
+            input: "runtime configuration validation".to_owned(),
+            requested_output_tokens: 1,
+            template_version: "runtime-validation-v1".to_owned(),
+            input_scope_reference: "runtime-validation".to_owned(),
+            redaction_policy_version: "runtime-validation-v1".to_owned(),
+        };
+
+        for registered in &self.providers {
+            let route = registered.provider.route();
+            let endpoint = env::var(&route.endpoint_env).map_err(|_| {
+                AiGatewayError::MissingRuntimeConfiguration(route.endpoint_env.clone())
+            })?;
+            let credential = env::var(&route.credential_env).map_err(|_| {
+                AiGatewayError::MissingRuntimeConfiguration(route.credential_env.clone())
+            })?;
+            registered
+                .provider
+                .build_request(&request)?
+                .into_native_request(&endpoint, &credential)?;
+        }
+        Ok(())
+    }
+
     pub fn route(&self, request: &AiRequest) -> GatewayDecision {
         self.eligible_routes(request)
             .into_iter()
@@ -1140,6 +1175,53 @@ mod tests {
             }
         });
         (endpoint, calls)
+    }
+
+    #[tokio::test]
+    async fn runtime_configuration_validation_requires_usable_references() {
+        let _environment = ENV_LOCK.lock().await;
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
+        let gateway = AiGateway::from_configurations(vec![provider(
+            "runtime-validation",
+            ProviderProtocol::OpenAiResponses,
+        )])
+        .expect("fixture is valid");
+
+        assert!(matches!(
+            gateway.validate_runtime_configuration(),
+            Err(AiGatewayError::MissingRuntimeConfiguration(name)) if name == "ANGUI_TEST_AI_ENDPOINT"
+        ));
+
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", "https://ai.example.invalid");
+            env::set_var("ANGUI_TEST_AI_KEY", "");
+        }
+        assert!(matches!(
+            gateway.validate_runtime_configuration(),
+            Err(AiGatewayError::InvalidNativeRequest(_))
+        ));
+
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", "https://invalid endpoint");
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+        }
+        assert!(matches!(
+            gateway.validate_runtime_configuration(),
+            Err(AiGatewayError::InvalidNativeRequest(_))
+        ));
+
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", "https://ai.example.invalid");
+        }
+        assert!(gateway.validate_runtime_configuration().is_ok());
+
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
     }
 
     #[tokio::test]
