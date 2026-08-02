@@ -1,6 +1,7 @@
 use std::{collections::HashSet, env, sync::Arc, time::Duration};
 
 use chrono::{SecondsFormat, Utc};
+use futures_util::StreamExt;
 use http::Request as HttpRequest;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, Set};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -479,6 +480,7 @@ impl AiProvider for ProtocolProvider {
                         "model": self.config.model,
                         "input": openai_messages(instructions, request.input.as_str()),
                         "max_output_tokens": max_tokens,
+                        "stream": true,
                     });
                     if let Some(reasoning_effort) = self.config.reasoning_effort {
                         body["reasoning"] = json!({ "effort": reasoning_effort });
@@ -890,11 +892,21 @@ impl AiGateway {
                     AiGatewayError::PermanentProviderFailure
                 });
             }
-            let payload = response
-                .json::<Value>()
-                .await
-                .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
-            let output = extract_provider_output(route.protocol, &payload)?;
+            let output = if route.protocol == ProviderProtocol::OpenAiResponses
+                && response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value.starts_with("text/event-stream"))
+            {
+                collect_openai_responses_stream(response).await?
+            } else {
+                let payload = response
+                    .json::<Value>()
+                    .await
+                    .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
+                extract_provider_output(route.protocol, &payload)?
+            };
             if request.output_schema.is_some() {
                 serde_json::from_str::<Value>(&output)
                     .map_err(|_| AiGatewayError::InvalidStructuredOutput)?;
@@ -946,14 +958,7 @@ fn extract_provider_output(
         ProviderProtocol::OpenAiChatCompletions => payload
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str),
-        ProviderProtocol::OpenAiResponses => payload
-            .get("output_text")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                payload
-                    .pointer("/output/0/content/0/text")
-                    .and_then(Value::as_str)
-            }),
+        ProviderProtocol::OpenAiResponses => openai_responses_output(payload),
         ProviderProtocol::AnthropicMessages => {
             payload.pointer("/content/0/text").and_then(Value::as_str)
         }
@@ -965,6 +970,111 @@ fn extract_provider_output(
     .filter(|output| !output.is_empty())
     .ok_or(AiGatewayError::InvalidProviderResponse)?;
     Ok(output.to_owned())
+}
+
+async fn collect_openai_responses_stream(
+    response: reqwest::Response,
+) -> Result<String, AiGatewayError> {
+    let mut chunks = response.bytes_stream();
+    let mut buffered = Vec::new();
+    let mut output = String::new();
+
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(classify_transport_error)?;
+        buffered.extend_from_slice(&chunk);
+        while let Some((frame_end, delimiter_length)) = sse_frame_boundary(&buffered) {
+            let frame = buffered.drain(..frame_end).collect::<Vec<_>>();
+            buffered.drain(..delimiter_length);
+            append_openai_responses_sse_frame(&frame, &mut output)?;
+        }
+    }
+
+    if !buffered.iter().all(u8::is_ascii_whitespace) {
+        append_openai_responses_sse_frame(&buffered, &mut output)?;
+    }
+
+    let output = output.trim();
+    if output.is_empty() {
+        return Err(AiGatewayError::InvalidProviderResponse);
+    }
+    Ok(output.to_owned())
+}
+
+fn classify_transport_error(error: reqwest::Error) -> AiGatewayError {
+    if error.is_timeout() || error.is_connect() {
+        AiGatewayError::TransientProviderFailure
+    } else {
+        AiGatewayError::PermanentProviderFailure
+    }
+}
+
+fn sse_frame_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
+    buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| (index, 4))
+        .or_else(|| {
+            buffer
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| (index, 2))
+        })
+}
+
+fn append_openai_responses_sse_frame(
+    frame: &[u8],
+    output: &mut String,
+) -> Result<(), AiGatewayError> {
+    let frame = std::str::from_utf8(frame).map_err(|_| AiGatewayError::InvalidProviderResponse)?;
+    let data = frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() || data == "[DONE]" {
+        return Ok(());
+    }
+
+    let payload: Value =
+        serde_json::from_str(&data).map_err(|_| AiGatewayError::InvalidProviderResponse)?;
+    match payload.get("type").and_then(Value::as_str) {
+        Some("response.output_text.delta") => {
+            let delta = payload
+                .get("delta")
+                .and_then(Value::as_str)
+                .ok_or(AiGatewayError::InvalidProviderResponse)?;
+            output.push_str(delta);
+        }
+        Some("response.output_text.done") if output.is_empty() => {
+            let text = payload
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or(AiGatewayError::InvalidProviderResponse)?;
+            output.push_str(text);
+        }
+        Some("response.completed") if output.is_empty() => {
+            let text = payload
+                .get("response")
+                .and_then(openai_responses_output)
+                .ok_or(AiGatewayError::InvalidProviderResponse)?;
+            output.push_str(text);
+        }
+        Some("error") => return Err(AiGatewayError::PermanentProviderFailure),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn openai_responses_output(payload: &Value) -> Option<&str> {
+    payload
+        .get("output_text")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .pointer("/output/0/content/0/text")
+                .and_then(Value::as_str)
+        })
 }
 
 fn route_for(config: &ProviderConfig) -> ProviderRoute {
@@ -1173,6 +1283,26 @@ mod tests {
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
+        });
+        (endpoint, calls)
+    }
+
+    fn mock_responses_sse(frames: Vec<&'static str>) -> (String, Arc<StdMutex<usize>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
+        let endpoint = format!("http://{}", listener.local_addr().expect("mock address"));
+        let calls = Arc::new(StdMutex::new(0usize));
+        let count = Arc::clone(&calls);
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("mock accepts request");
+            let mut buffer = [0_u8; 16_384];
+            let _ = stream.read(&mut buffer);
+            *count.lock().expect("counter lock") += 1;
+            let body = frames.join("\n\n");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
         });
         (endpoint, calls)
     }
@@ -1527,6 +1657,89 @@ mod tests {
             .expect("provider request should be created");
 
         assert_eq!(outbound.body["reasoning"]["effort"], "high");
+        assert_eq!(outbound.body["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn responses_provider_assembles_sse_deltas_before_schema_validation() {
+        let _environment = ENV_LOCK.lock().await;
+        let (endpoint, calls) = mock_responses_sse(vec![
+            r#"data: {"type":"response.output_text.delta","delta":"{\"answer\":"}"#,
+            r#"data: {"type":"response.output_text.delta","delta":"\"ok\"}"}"#,
+            r#"data: {"type":"response.completed","response":{"output":[{"content":[{"text":"ignored"}]}]}}"#,
+        ]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+        }
+        let gateway = AiGateway::from_configurations(vec![provider(
+            "responses-sse",
+            ProviderProtocol::OpenAiResponses,
+        )])
+        .expect("gateway");
+        let mut request = request();
+        request.output_schema = Some(json!({"type":"object"}));
+        request.output_schema_name = Some("answer".to_owned());
+
+        let result = gateway.execute(&request).await;
+        assert!(matches!(
+            result,
+            AiExecutionResult::Completed { ref output, .. } if output == r#"{"answer":"ok"}"#
+        ));
+        assert_eq!(*calls.lock().expect("counter lock"), 1);
+
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
+    }
+
+    #[test]
+    fn responses_sse_deltas_are_assembled_without_exposing_intermediate_text() {
+        let mut output = String::new();
+        append_openai_responses_sse_frame(
+            br#"event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"{\"issues\":"}
+"#,
+            &mut output,
+        )
+        .expect("first delta should be valid");
+        append_openai_responses_sse_frame(
+            br#"data: {"type":"response.output_text.delta","delta":"[]}"}
+"#,
+            &mut output,
+        )
+        .expect("second delta should be valid");
+        append_openai_responses_sse_frame(
+            br#"data: {"type":"response.completed","response":{"output":[{"content":[{"text":"ignored completed text"}]}]}}
+"#,
+            &mut output,
+        )
+        .expect("completion event should be valid");
+
+        assert_eq!(output, r#"{"issues":[]}"#);
+    }
+
+    #[test]
+    fn responses_sse_completion_supplies_output_when_deltas_are_absent() {
+        let mut output = String::new();
+        append_openai_responses_sse_frame(
+            br#"data: {"type":"response.completed","response":{"output":[{"content":[{"text":"{\"issues\":[]}"}]}]}}
+"#,
+            &mut output,
+        )
+        .expect("completion event should be valid");
+
+        assert_eq!(output, r#"{"issues":[]}"#);
+    }
+
+    #[test]
+    fn sse_frame_boundaries_support_lf_and_crlf() {
+        assert_eq!(sse_frame_boundary(b"data: first\n\nnext"), Some((11, 2)));
+        assert_eq!(
+            sse_frame_boundary(b"data: first\r\n\r\nnext"),
+            Some((11, 4))
+        );
     }
 
     #[test]

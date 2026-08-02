@@ -134,6 +134,8 @@ Each controlled execution persists one Gateway `AiExecutionAudit` for every atte
 
 The Gateway resolves provider endpoint and credential references only at its transport boundary, executes a policy-approved request with the configured timeout, and extracts response text for the supported protocols. Business services must still validate the response against their purpose-specific schema before saving a draft. Transport failures, non-success responses, empty responses, and invalid structured output must use the deterministic or manual fallback path.
 
+`open_ai_responses` requests set `stream: true`. The Gateway consumes the provider's SSE response incrementally and assembles only `response.output_text.delta` content (with a completed-response fallback) before applying the existing JSON and purpose-specific validation. This keeps the provider connection active during long reasoning runs without exposing unvalidated intermediate text to browsers, audit records, or persistence. Providers that return a non-SSE JSON Responses payload remain supported through the normal response parser.
+
 The Gateway never allows an AI result to create a confirmed clue, publish a case update, or dispatch a task. Those transitions remain separate, human-reviewed business operations.
 
 ## Implemented controlled-assistance paths
