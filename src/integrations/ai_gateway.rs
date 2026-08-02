@@ -899,7 +899,11 @@ impl AiGateway {
                     .and_then(|value| value.to_str().ok())
                     .is_some_and(|value| value.starts_with("text/event-stream"))
             {
-                collect_openai_responses_stream(response).await?
+                collect_openai_responses_stream(
+                    response,
+                    request.requested_output_tokens.saturating_mul(16),
+                )
+                .await?
             } else {
                 let payload = response
                     .json::<Value>()
@@ -974,27 +978,55 @@ fn extract_provider_output(
 
 async fn collect_openai_responses_stream(
     response: reqwest::Response,
+    max_output_bytes: usize,
 ) -> Result<String, AiGatewayError> {
+    const MAX_SSE_FRAME_BYTES: usize = 64 * 1024;
+    const COMPACT_BUFFER_AFTER_BYTES: usize = 64 * 1024;
+
     let mut chunks = response.bytes_stream();
     let mut buffered = Vec::new();
+    let mut frame_start: usize = 0;
+    let mut scan_start: usize = 0;
     let mut output = String::new();
+    let mut completed = false;
 
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk.map_err(classify_transport_error)?;
         buffered.extend_from_slice(&chunk);
-        while let Some((frame_end, delimiter_length)) = sse_frame_boundary(&buffered) {
-            let frame = buffered.drain(..frame_end).collect::<Vec<_>>();
-            buffered.drain(..delimiter_length);
-            append_openai_responses_sse_frame(&frame, &mut output)?;
+        scan_start = scan_start.saturating_sub(3).max(frame_start);
+        while let Some((frame_end, delimiter_length)) =
+            sse_frame_boundary_from(&buffered, scan_start)
+        {
+            completed |= append_openai_responses_sse_frame(
+                &buffered[frame_start..frame_end],
+                &mut output,
+                max_output_bytes,
+            )?;
+            frame_start = frame_end + delimiter_length;
+            scan_start = frame_start;
+        }
+        scan_start = buffered.len();
+
+        if buffered.len() - frame_start > MAX_SSE_FRAME_BYTES {
+            return Err(AiGatewayError::InvalidProviderResponse);
+        }
+        if frame_start >= COMPACT_BUFFER_AFTER_BYTES {
+            buffered.drain(..frame_start);
+            frame_start = 0;
+            scan_start = buffered.len();
         }
     }
 
-    if !buffered.iter().all(u8::is_ascii_whitespace) {
-        append_openai_responses_sse_frame(&buffered, &mut output)?;
+    if !buffered[frame_start..].iter().all(u8::is_ascii_whitespace) {
+        completed |= append_openai_responses_sse_frame(
+            &buffered[frame_start..],
+            &mut output,
+            max_output_bytes,
+        )?;
     }
 
     let output = output.trim();
-    if output.is_empty() {
+    if !completed || output.is_empty() {
         return Err(AiGatewayError::InvalidProviderResponse);
     }
     Ok(output.to_owned())
@@ -1008,23 +1040,23 @@ fn classify_transport_error(error: reqwest::Error) -> AiGatewayError {
     }
 }
 
-fn sse_frame_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| (index, 4))
-        .or_else(|| {
-            buffer
-                .windows(2)
-                .position(|window| window == b"\n\n")
-                .map(|index| (index, 2))
-        })
+fn sse_frame_boundary_from(buffer: &[u8], start: usize) -> Option<(usize, usize)> {
+    for index in start..buffer.len() {
+        if buffer[index..].starts_with(b"\r\n\r\n") {
+            return Some((index, 4));
+        }
+        if buffer[index..].starts_with(b"\n\n") {
+            return Some((index, 2));
+        }
+    }
+    None
 }
 
 fn append_openai_responses_sse_frame(
     frame: &[u8],
     output: &mut String,
-) -> Result<(), AiGatewayError> {
+    max_output_bytes: usize,
+) -> Result<bool, AiGatewayError> {
     let frame = std::str::from_utf8(frame).map_err(|_| AiGatewayError::InvalidProviderResponse)?;
     let data = frame
         .lines()
@@ -1033,7 +1065,7 @@ fn append_openai_responses_sse_frame(
         .collect::<Vec<_>>()
         .join("\n");
     if data.is_empty() || data == "[DONE]" {
-        return Ok(());
+        return Ok(data == "[DONE]");
     }
 
     let payload: Value =
@@ -1044,25 +1076,40 @@ fn append_openai_responses_sse_frame(
                 .get("delta")
                 .and_then(Value::as_str)
                 .ok_or(AiGatewayError::InvalidProviderResponse)?;
-            output.push_str(delta);
+            append_stream_output(output, delta, max_output_bytes)?;
+            Ok(false)
         }
         Some("response.output_text.done") if output.is_empty() => {
             let text = payload
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or(AiGatewayError::InvalidProviderResponse)?;
-            output.push_str(text);
+            append_stream_output(output, text, max_output_bytes)?;
+            Ok(true)
         }
         Some("response.completed") if output.is_empty() => {
             let text = payload
                 .get("response")
                 .and_then(openai_responses_output)
                 .ok_or(AiGatewayError::InvalidProviderResponse)?;
-            output.push_str(text);
+            append_stream_output(output, text, max_output_bytes)?;
+            Ok(true)
         }
-        Some("error") => return Err(AiGatewayError::PermanentProviderFailure),
-        _ => {}
+        Some("error") => Err(AiGatewayError::PermanentProviderFailure),
+        Some("response.output_text.done") | Some("response.completed") => Ok(true),
+        _ => Ok(false),
     }
+}
+
+fn append_stream_output(
+    output: &mut String,
+    text: &str,
+    max_output_bytes: usize,
+) -> Result<(), AiGatewayError> {
+    if output.len().saturating_add(text.len()) > max_output_bytes {
+        return Err(AiGatewayError::InvalidProviderResponse);
+    }
+    output.push_str(text);
     Ok(())
 }
 
@@ -1287,17 +1334,23 @@ mod tests {
         (endpoint, calls)
     }
 
-    fn mock_responses_sse(frames: Vec<&'static str>) -> (String, Arc<StdMutex<usize>>) {
+    fn mock_responses_sse(
+        frames: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> (String, Arc<StdMutex<usize>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
         let endpoint = format!("http://{}", listener.local_addr().expect("mock address"));
         let calls = Arc::new(StdMutex::new(0usize));
         let count = Arc::clone(&calls);
+        let body = frames
+            .into_iter()
+            .map(|frame| frame.as_ref().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("mock accepts request");
             let mut buffer = [0_u8; 16_384];
             let _ = stream.read(&mut buffer);
             *count.lock().expect("counter lock") += 1;
-            let body = frames.join("\n\n");
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -1694,6 +1747,59 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn responses_provider_rejects_stream_without_terminal_event() {
+        let _environment = ENV_LOCK.lock().await;
+        let (endpoint, calls) = mock_responses_sse(vec![
+            r#"data: {"type":"response.output_text.delta","delta":"{\"answer\":\"partial\"}"}"#,
+        ]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+        }
+        let gateway = AiGateway::from_configurations(vec![provider(
+            "responses-incomplete-sse",
+            ProviderProtocol::OpenAiResponses,
+        )])
+        .expect("gateway");
+        let mut request = request();
+        request.output_schema = Some(json!({"type":"object"}));
+        request.output_schema_name = Some("answer".to_owned());
+
+        let result = gateway.execute(&request).await;
+        assert!(matches!(result, AiExecutionResult::Failed { .. }));
+        assert_eq!(*calls.lock().expect("counter lock"), 1);
+
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_provider_rejects_oversized_unterminated_sse_frame() {
+        let _environment = ENV_LOCK.lock().await;
+        let (endpoint, calls) = mock_responses_sse(vec![format!("data: {}", "x".repeat(65_537))]);
+        unsafe {
+            env::set_var("ANGUI_TEST_AI_ENDPOINT", endpoint);
+            env::set_var("ANGUI_TEST_AI_KEY", "test-key");
+        }
+        let gateway = AiGateway::from_configurations(vec![provider(
+            "responses-oversized-sse",
+            ProviderProtocol::OpenAiResponses,
+        )])
+        .expect("gateway");
+
+        let result = gateway.execute(&request()).await;
+        assert!(matches!(result, AiExecutionResult::Failed { .. }));
+        assert_eq!(*calls.lock().expect("counter lock"), 1);
+
+        unsafe {
+            env::remove_var("ANGUI_TEST_AI_ENDPOINT");
+            env::remove_var("ANGUI_TEST_AI_KEY");
+        }
+    }
+
     #[test]
     fn responses_sse_deltas_are_assembled_without_exposing_intermediate_text() {
         let mut output = String::new();
@@ -1702,18 +1808,21 @@ mod tests {
 data: {"type":"response.output_text.delta","delta":"{\"issues\":"}
 "#,
             &mut output,
+            1024,
         )
         .expect("first delta should be valid");
         append_openai_responses_sse_frame(
             br#"data: {"type":"response.output_text.delta","delta":"[]}"}
 "#,
             &mut output,
+            1024,
         )
         .expect("second delta should be valid");
         append_openai_responses_sse_frame(
             br#"data: {"type":"response.completed","response":{"output":[{"content":[{"text":"ignored completed text"}]}]}}
 "#,
             &mut output,
+            1024,
         )
         .expect("completion event should be valid");
 
@@ -1727,6 +1836,7 @@ data: {"type":"response.output_text.delta","delta":"{\"issues\":"}
             br#"data: {"type":"response.completed","response":{"output":[{"content":[{"text":"{\"issues\":[]}"}]}]}}
 "#,
             &mut output,
+            1024,
         )
         .expect("completion event should be valid");
 
@@ -1734,10 +1844,40 @@ data: {"type":"response.output_text.delta","delta":"{\"issues\":"}
     }
 
     #[test]
+    fn responses_sse_requires_terminal_event() {
+        let mut output = String::new();
+        let completed = append_openai_responses_sse_frame(
+            b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\r\n",
+            &mut output,
+            1024,
+        )
+        .expect("delta should be valid");
+
+        assert!(!completed);
+        assert_eq!(output, "partial");
+    }
+
+    #[test]
+    fn responses_sse_output_limit_is_enforced() {
+        let mut output = String::new();
+        let error = append_openai_responses_sse_frame(
+            b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"too long\"}\r\n",
+            &mut output,
+            3,
+        )
+        .expect_err("output limit should be enforced");
+
+        assert!(matches!(error, AiGatewayError::InvalidProviderResponse));
+    }
+
+    #[test]
     fn sse_frame_boundaries_support_lf_and_crlf() {
-        assert_eq!(sse_frame_boundary(b"data: first\n\nnext"), Some((11, 2)));
         assert_eq!(
-            sse_frame_boundary(b"data: first\r\n\r\nnext"),
+            sse_frame_boundary_from(b"data: first\n\nnext", 0),
+            Some((11, 2))
+        );
+        assert_eq!(
+            sse_frame_boundary_from(b"data: first\r\n\r\nnext", 0),
             Some((11, 4))
         );
     }
