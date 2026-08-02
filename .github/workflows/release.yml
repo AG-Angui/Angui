@@ -107,6 +107,8 @@ jobs:
 
       - name: Build release frontend
         working-directory: frontend
+        env:
+          VITE_AMAP_JS_API_KEY: ${{ secrets.AMAP_JS_API_KEY }}
         run: |
           yarn install --frozen-lockfile
           yarn lint

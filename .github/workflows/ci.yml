@@ -203,6 +203,8 @@ jobs:
 
       - name: Build
         working-directory: frontend
+        env:
+          VITE_AMAP_JS_API_KEY: ${{ secrets.AMAP_JS_API_KEY }}
         run: yarn build
 
       - name: Upload frontend bundle

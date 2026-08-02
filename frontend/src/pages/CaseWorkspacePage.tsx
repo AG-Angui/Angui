@@ -81,6 +81,7 @@ import {
   ErrorState,
   LoadingState,
 } from "../components/ContentState";
+import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
 import { FamilyIntakeForm } from "./FamilyIntakeForm";
 
 type WorkspaceMode = "family" | "commander" | "volunteer";
@@ -1379,6 +1380,16 @@ function CaseDetailView({
                     fullWidth
                   />
                 </Field>
+                <LocationConfirmationPicker
+                  onConfirm={(location) => {
+                    setClueLocation(location.address);
+                    setClueLocationPrecision("exact");
+                  }}
+                  onClear={() => {
+                    setClueLocation("");
+                    setClueLocationPrecision("");
+                  }}
+                />
                 <Field label="地点精度">
                   <select
                     className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
@@ -1573,6 +1584,24 @@ function CaseDetailView({
                     required
                   />
                 </Field>
+                <LocationConfirmationPicker
+                  onConfirm={(location) =>
+                    setPlace({
+                      ...place,
+                      address: location.address,
+                      longitude: location.longitude,
+                      latitude: location.latitude,
+                    })
+                  }
+                  onClear={() =>
+                    setPlace({
+                      ...place,
+                      address: "",
+                      longitude: null,
+                      latitude: null,
+                    })
+                  }
+                />
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Field label="经度（可选）">
                     <Input

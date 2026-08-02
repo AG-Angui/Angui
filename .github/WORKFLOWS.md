@@ -223,6 +223,10 @@ Optional preview secret:
   name, with deployment branch restrictions or required reviewers. A repository
   secret of the same name also works, but grants the credential to every
   eligible preview deployment and is therefore less restrictive.
+- `AMAP_JS_API_KEY`: an AMap JSAPI browser key, restricted to the preview and
+  production frontend domains. CI injects it only while building the static
+  frontend bundle as `VITE_AMAP_JS_API_KEY`; browser map keys are necessarily
+  public after build and must never be substituted with `AMAP_WEBSERVICE_KEY`.
 
 AI preview configuration uses two GitHub configuration mechanisms because the
 provider policy is not a credential while the transport values are:

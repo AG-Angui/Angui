@@ -57,3 +57,4 @@ npm --prefix frontend run test
 | 变量                | 默认值 | 用途                  |
 | ------------------- | ------ | --------------------- |
 | `VITE_API_BASE_URL` | `/api` | 浏览器调用的 API 前缀 |
+| `VITE_AMAP_JS_API_KEY` | 空 | 浏览器端 AMap JSAPI key；仅用于用户主动触发的位置确认地图，须按预览/生产域名限制，不能使用服务端 `AMAP_WEBSERVICE_KEY`。 |

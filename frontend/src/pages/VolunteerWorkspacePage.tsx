@@ -43,6 +43,7 @@ import {
   ErrorState,
   LoadingState,
 } from "../components/ContentState";
+import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
 
 const statusLabels: Record<TaskStatus, string> = {
   pending_claim: "待申请",
@@ -739,6 +740,26 @@ export function VolunteerWorkspacePage() {
                           }))
                         }
                         fullWidth
+                      />
+                      <LocationConfirmationPicker
+                        onConfirm={(location) =>
+                          setClueDrafts((value) => ({
+                            ...value,
+                            [workspace.detail.id]: {
+                              ...clueDraft,
+                              location: location.address,
+                            },
+                          }))
+                        }
+                        onClear={() =>
+                          setClueDrafts((value) => ({
+                            ...value,
+                            [workspace.detail.id]: {
+                              ...clueDraft,
+                              location: "",
+                            },
+                          }))
+                        }
                       />
                       <Button
                         type="submit"
