@@ -27,6 +27,18 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route(
                 "/archive-drafts/{draft_id}/review",
                 web::patch().to(review_archive_draft),
+            )
+            .route(
+                "/archive-drafts/{draft_id}/review-materials",
+                web::get().to(list_archive_review_materials),
+            )
+            .route(
+                "/archive-drafts/{draft_id}/review-materials/diff/{from_version}/{to_version}",
+                web::get().to(diff_archive_review_materials),
+            )
+            .route(
+                "/archive-drafts/{draft_id}/review-materials/{version}/restore",
+                web::post().to(restore_archive_review_material),
             ),
     );
 }
@@ -102,6 +114,57 @@ async fn review_archive_draft(
             &auth,
             &draft_id,
             request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn list_archive_review_materials(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    draft_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_archive_review_materials(
+            &state.db, &auth, &draft_id,
+        )
+        .await?,
+    ))
+}
+
+async fn diff_archive_review_materials(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, i32, i32)>,
+) -> Result<HttpResponse, ApiError> {
+    let (draft_id, from_version, to_version) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::diff_archive_review_materials(
+            &state.db,
+            &auth,
+            &draft_id,
+            from_version,
+            to_version,
+        )
+        .await?,
+    ))
+}
+
+async fn restore_archive_review_material(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, i32)>,
+    request: web::Json<crate::models::RestoreArchiveReviewMaterialRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (draft_id, version) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::restore_archive_review_material(
+            &state.db,
+            &auth,
+            &draft_id,
+            version,
+            request.into_inner(),
+            &state.ai_gateway,
         )
         .await?,
     ))

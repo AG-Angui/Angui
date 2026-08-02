@@ -1693,6 +1693,87 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/admin/archive-drafts/{draft_id}/review-materials:
+    parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Admin]
+      operationId: listArchiveReviewMaterials
+      summary: List immutable archive review-material versions
+      description: Admin capability only. Returns the version chain, source-scope metadata, review state, and the de-identified material currently selected as the AI input. Raw source records are never returned by this endpoint.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Archive review-material versions, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ArchiveReviewMaterial" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/archive-drafts/{draft_id}/review-materials/diff/{from_version}/{to_version}:
+    parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: from_version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+      - name: to_version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      tags: [Admin]
+      operationId: diffArchiveReviewMaterials
+      summary: Compare two archive review-material versions
+      description: Admin capability only. Returns line-level additions and removals without mutating either immutable material version.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Material version diff, content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveReviewMaterialDiff" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/archive-drafts/{draft_id}/review-materials/{version}/restore:
+    parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      tags: [Admin]
+      operationId: restoreArchiveReviewMaterial
+      summary: Restore an approved material version as a new immutable version
+      description: Admin capability only. The selected de-identified version is copied into a new version with a parent link, the archive draft points to that new version, and the draft returns to pending_review. No historical row is mutated.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RestoreArchiveReviewMaterialRequest" } } }
+      responses:
+        "200": { description: Archive draft regenerated from the restored approved material, content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -3224,6 +3305,42 @@ components:
         reviewed_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    ArchiveReviewMaterial:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, version, parent_material_id, content, source_scope, status, created_by_user_id, reviewed_by_user_id, reviewed_at, review_reason, created_at, selected_for_ai]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        parent_material_id: { type: [string, "null"], format: uuid }
+        content: { type: string, description: Administrator-visible de-identified review material or the initial controlled material awaiting de-identification. }
+        source_scope: { type: array, items: { type: string } }
+        status: { type: string, enum: [draft, deidentified, rejected] }
+        created_by_user_id: { type: string, format: uuid }
+        reviewed_by_user_id: { type: [string, "null"], format: uuid }
+        reviewed_at: { type: [string, "null"], format: date-time }
+        review_reason: { type: [string, "null"], description: Review reason is returned only within the administrator boundary. }
+        created_at: { type: string, format: date-time }
+        selected_for_ai: { type: boolean }
+
+    ArchiveReviewMaterialDiff:
+      type: object
+      additionalProperties: false
+      required: [from_version, to_version, added, removed]
+      properties:
+        from_version: { type: integer, minimum: 1 }
+        to_version: { type: integer, minimum: 1 }
+        added: { type: array, items: { type: string } }
+        removed: { type: array, items: { type: string } }
+
+    RestoreArchiveReviewMaterialRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
 
     DeidentifyArchiveDraftRequest:
       type: object

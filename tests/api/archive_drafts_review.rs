@@ -134,6 +134,19 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
         "the review reason must not be returned in the archive response"
     );
 
+    let restore_published = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "cannot restore published draft" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(restore_published, StatusCode::CONFLICT, "conflict").await;
+
     let withdrawn = test::call_service(
         &app,
         test::TestRequest::patch()
@@ -151,6 +164,19 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
     assert_eq!(withdrawn["usage_scope"], "internal_archive");
     assert_eq!(withdrawn["retention_status"], "withdrawn");
     assert_eq!(withdrawn["version"], 4);
+
+    let restore_withdrawn = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "cannot restore withdrawn draft" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(restore_withdrawn, StatusCode::CONFLICT, "conflict").await;
 
     let stored = archive_drafts::Entity::find_by_id(&draft_id)
         .one(&context.database)
@@ -272,6 +298,19 @@ async fn archive_deidentification_rejection_and_missing_drafts_do_not_publish_or
     assert_eq!(review_rejected["usage_scope"], "internal_archive");
     assert_eq!(review_rejected["retention_status"], "retained");
     assert_eq!(review_rejected["version"], 3);
+
+    let restore_rejected = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{review_rejection_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "cannot restore rejected draft" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(restore_rejected, StatusCode::CONFLICT, "conflict").await;
     assert!(
         !review_rejected
             .to_string()
@@ -295,4 +334,325 @@ async fn archive_deidentification_rejection_and_missing_drafts_do_not_publish_or
     )
     .await;
     assert_error(missing, StatusCode::NOT_FOUND, "not_found").await;
+}
+
+#[actix_web::test]
+async fn archive_review_material_versions_support_admin_list_diff_restore_and_rbac() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let commander_token = context.token(COMMANDER).await;
+    let admin_token = context.token(ADMIN).await;
+    let family_token = context.token(FAMILY).await;
+    let (case_id, draft_id) = create_finished_archive_draft!(&context, &app, &commander_token);
+
+    let family_list = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_error(family_list, StatusCode::FORBIDDEN, "forbidden").await;
+
+    let family_diff = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/diff/1/2"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_error(family_diff, StatusCode::FORBIDDEN, "forbidden").await;
+
+    let family_restore = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/1/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(json!({ "reason": "unauthorized restore attempt" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(family_restore, StatusCode::FORBIDDEN, "forbidden").await;
+
+    let initial = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(initial.status(), StatusCode::OK);
+    let initial: Vec<Value> = test::read_body_json(initial).await;
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0]["version"], 1);
+    assert_eq!(initial[0]["status"], "draft");
+    assert_eq!(initial[0]["selected_for_ai"], true);
+    assert_eq!(
+        initial[0]["source_scope"][0],
+        "confirmed_clue_review_material"
+    );
+
+    let deidentified = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/admin/archive-drafts/{draft_id}/deidentify"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({
+                "outcome": "confirm",
+                "reason": "version test",
+                "deidentified_material": "line one\nline one\nline two"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(deidentified.status(), StatusCode::OK);
+
+    let invalid_restore_version = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/0/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "invalid version" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        invalid_restore_version,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    let blank_restore_reason = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "  " }))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        blank_restore_reason,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    let restore_unapproved_material = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/1/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "draft material is not approved" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        restore_unapproved_material,
+        StatusCode::CONFLICT,
+        "conflict",
+    )
+    .await;
+
+    let missing_restore_material = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/99/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "missing material" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(missing_restore_material, StatusCode::NOT_FOUND, "not_found").await;
+
+    let missing_diff_material = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/diff/2/99"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_error(missing_diff_material, StatusCode::NOT_FOUND, "not_found").await;
+
+    let versions = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    let versions: Vec<Value> = test::read_body_json(versions).await;
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0]["version"], 2);
+    assert_eq!(versions[0]["status"], "deidentified");
+    assert_eq!(versions[0]["selected_for_ai"], true);
+    assert_eq!(versions[1]["selected_for_ai"], false);
+
+    let diff = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/diff/1/2"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(diff.status(), StatusCode::OK);
+    let diff: Value = test::read_body_json(diff).await;
+    assert_eq!(diff["from_version"], 1);
+    assert_eq!(diff["to_version"], 2);
+    assert_eq!(diff["added"], json!(["line one", "line one", "line two"]));
+
+    let restored = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({"reason": "restore approved version for correction"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored: Value = test::read_body_json(restored).await;
+    assert_eq!(restored["status"], "pending_review");
+    assert_eq!(restored["version"], 3);
+    let selected_id = restored["review_material_id"]
+        .as_str()
+        .expect("restored draft should select a material");
+
+    let versions_after_restore = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{draft_id}/review-materials"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .to_request(),
+    )
+    .await;
+    let versions_after_restore: Vec<Value> = test::read_body_json(versions_after_restore).await;
+    assert_eq!(versions_after_restore.len(), 3);
+    assert_eq!(versions_after_restore[0]["version"], 3);
+    assert_eq!(versions_after_restore[0]["status"], "deidentified");
+    assert_eq!(versions_after_restore[0]["selected_for_ai"], true);
+    assert_eq!(
+        versions_after_restore[0]["parent_material_id"],
+        versions_after_restore[1]["id"]
+    );
+    assert_eq!(versions_after_restore[0]["id"], selected_id);
+    assert_eq!(
+        versions_after_restore[1]["content"],
+        "line one\nline one\nline two"
+    );
+
+    let audit = audit_events::Entity::find()
+        .filter(audit_events::Column::EntityType.eq("archive_review_material"))
+        .filter(audit_events::Column::EntityId.eq(selected_id))
+        .one(&context.database)
+        .await
+        .expect("material audit query should succeed")
+        .expect("restore should be audited");
+    assert_eq!(audit.action, "archive_review_material.restored");
+    assert!(!audit.metadata_json.unwrap_or_default().contains("line one"));
+    assert_eq!(case_id, restored["case_id"]);
+}
+
+#[actix_web::test]
+async fn archive_material_restore_rejects_deidentified_versions_outside_the_draft_chain() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let commander_token = context.token(COMMANDER).await;
+    let admin_token = context.token(ADMIN).await;
+    let (case_id, first_draft_id) =
+        create_finished_archive_draft!(&context, &app, &commander_token);
+
+    let first_deidentified = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{first_draft_id}/deidentify"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({
+                "outcome": "confirm",
+                "reason": "first material confirmation",
+                "deidentified_material": "first approved material"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(first_deidentified.status(), StatusCode::OK);
+
+    let second_created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/archive-drafts"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(second_created.status(), StatusCode::CREATED);
+    let second_created: Value = test::read_body_json(second_created).await;
+    let second_draft_id = second_created["id"]
+        .as_str()
+        .expect("second archive draft id should be returned");
+
+    let second_deidentified = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{second_draft_id}/deidentify"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({
+                "outcome": "confirm",
+                "reason": "second material confirmation",
+                "deidentified_material": "second approved material"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(second_deidentified.status(), StatusCode::OK);
+
+    let cross_chain_restore = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/archive-drafts/{second_draft_id}/review-materials/2/restore"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "reason": "must not restore another draft material" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(cross_chain_restore, StatusCode::CONFLICT, "conflict").await;
 }

@@ -4,7 +4,9 @@ use std::{
     path::{Component, PathBuf},
 };
 
-use crate::integrations::ai_gateway::{ProviderConfig, validate_provider_configurations};
+use crate::integrations::ai_gateway::{
+    AiGateway, ProviderConfig, validate_provider_configurations,
+};
 
 /// Load a local development `.env` file without overriding process-level
 /// configuration. A missing file is normal in production and CI.
@@ -37,25 +39,25 @@ pub struct Settings {
 impl Settings {
     pub fn from_env() -> Result<Self, String> {
         load_local_env_file()?;
-        Self::from_values(|name| env::var(name).ok())
+        Self::from_values(environment_value)
     }
 
     /// Parses settings from a supplied lookup so validation can be tested without
     /// mutating process-global environment variables.
     fn from_values<F>(mut value: F) -> Result<Self, String>
     where
-        F: FnMut(&str) -> Option<String>,
+        F: FnMut(&str) -> Result<Option<String>, String>,
     {
-        let host = value("ANGUI_HOST").unwrap_or_else(|| "127.0.0.1".to_owned());
-        let port_value = value("ANGUI_PORT").unwrap_or_else(|| "8080".to_owned());
+        let host = value("ANGUI_HOST")?.unwrap_or_else(|| "127.0.0.1".to_owned());
+        let port_value = value("ANGUI_PORT")?.unwrap_or_else(|| "8080".to_owned());
         let port = port_value
             .parse::<u16>()
             .map_err(|_| format!("ANGUI_PORT must be a valid TCP port, got {port_value:?}"))?;
         let frontend_origin =
-            value("ANGUI_FRONTEND_ORIGIN").unwrap_or_else(|| "http://localhost:5173".to_owned());
+            value("ANGUI_FRONTEND_ORIGIN")?.unwrap_or_else(|| "http://localhost:5173".to_owned());
         let database_url =
-            value("DATABASE_URL").unwrap_or_else(|| "sqlite://data/angui.db?mode=rwc".to_owned());
-        let session_ttl_value = value("ANGUI_SESSION_TTL_HOURS").unwrap_or_else(|| "8".to_owned());
+            value("DATABASE_URL")?.unwrap_or_else(|| "sqlite://data/angui.db?mode=rwc".to_owned());
+        let session_ttl_value = value("ANGUI_SESSION_TTL_HOURS")?.unwrap_or_else(|| "8".to_owned());
         let session_ttl_hours = session_ttl_value.parse::<i64>().map_err(|_| {
             format!("ANGUI_SESSION_TTL_HOURS must be a positive integer, got {session_ttl_value:?}")
         })?;
@@ -63,7 +65,7 @@ impl Settings {
             return Err("ANGUI_SESSION_TTL_HOURS must be between 1 and 168".to_owned());
         }
         let intake_answer_hard_max_value =
-            value("ANGUI_INTAKE_ANSWER_HARD_MAX").unwrap_or_else(|| "2000".to_owned());
+            value("ANGUI_INTAKE_ANSWER_HARD_MAX")?.unwrap_or_else(|| "2000".to_owned());
         let intake_answer_hard_max = intake_answer_hard_max_value.parse::<usize>().map_err(|_| {
             format!(
                 "ANGUI_INTAKE_ANSWER_HARD_MAX must be a positive integer, got {intake_answer_hard_max_value:?}"
@@ -73,7 +75,7 @@ impl Settings {
             return Err("ANGUI_INTAKE_ANSWER_HARD_MAX must be between 1 and 10000".to_owned());
         }
         let attachment_storage_directory = PathBuf::from(
-            value("ANGUI_ATTACHMENT_STORAGE_DIRECTORY")
+            value("ANGUI_ATTACHMENT_STORAGE_DIRECTORY")?
                 .unwrap_or_else(|| "data/attachments".to_owned()),
         );
         if attachment_storage_directory.as_os_str().is_empty() {
@@ -89,48 +91,39 @@ impl Settings {
             );
         }
         let attachment_max_image_bytes = parse_bounded_usize(
-            value("ANGUI_ATTACHMENT_MAX_IMAGE_BYTES")
+            value("ANGUI_ATTACHMENT_MAX_IMAGE_BYTES")?
                 .unwrap_or_else(|| (5 * 1024 * 1024).to_string()),
             "ANGUI_ATTACHMENT_MAX_IMAGE_BYTES",
             1024,
             20 * 1024 * 1024,
         )?;
         let attachment_max_per_case = parse_bounded_u64(
-            value("ANGUI_ATTACHMENT_MAX_PER_CASE").unwrap_or_else(|| "12".to_owned()),
+            value("ANGUI_ATTACHMENT_MAX_PER_CASE")?.unwrap_or_else(|| "12".to_owned()),
             "ANGUI_ATTACHMENT_MAX_PER_CASE",
             1,
             100,
         )?;
         let case_place_types =
-            parse_case_place_types(&value("ANGUI_CASE_PLACE_TYPES").unwrap_or_else(|| {
+            parse_case_place_types(&value("ANGUI_CASE_PLACE_TYPES")?.unwrap_or_else(|| {
                 "frequent,key_location,last_seen_context,medical,shelter,other".to_owned()
             }))?;
         let amap_webservice_key =
-            value("AMAP_WEBSERVICE_KEY").filter(|value| !value.trim().is_empty());
-        let amap_webservice_base_url = value("AMAP_WEBSERVICE_BASE_URL")
+            value("AMAP_WEBSERVICE_KEY")?.filter(|value| !value.trim().is_empty());
+        let amap_webservice_base_url = value("AMAP_WEBSERVICE_BASE_URL")?
             .unwrap_or_else(|| "https://restapi.amap.com".to_owned());
         if !amap_webservice_base_url.starts_with("https://") {
             return Err("AMAP_WEBSERVICE_BASE_URL must use https".to_owned());
         }
-        let amap_timeout_value = value("AMAP_TIMEOUT_MS").unwrap_or_else(|| "2500".to_owned());
+        let amap_timeout_value = value("AMAP_TIMEOUT_MS")?.unwrap_or_else(|| "2500".to_owned());
         let amap_timeout_ms = amap_timeout_value.parse::<u64>().map_err(|_| {
             format!("AMAP_TIMEOUT_MS must be a positive integer, got {amap_timeout_value:?}")
         })?;
         if !(100..=10_000).contains(&amap_timeout_ms) {
             return Err("AMAP_TIMEOUT_MS must be between 100 and 10000".to_owned());
         }
-        let provider_configurations_value =
-            value("ANGUI_AI_PROVIDERS_JSON").unwrap_or_else(|| "[]".to_owned());
-        let ai_provider_configurations: Vec<ProviderConfig> = serde_json::from_str(
-            &provider_configurations_value,
-        )
-        .map_err(|error| {
-            format!(
-                "ANGUI_AI_PROVIDERS_JSON must be a JSON array of provider configurations: {error}"
-            )
-        })?;
-        validate_provider_configurations(&ai_provider_configurations)
-            .map_err(|error| error.to_string())?;
+        let ai_provider_configurations = parse_ai_provider_configurations(
+            value("ANGUI_AI_PROVIDERS_JSON")?.unwrap_or_else(|| "[]".to_owned()),
+        )?;
 
         Ok(Self {
             host,
@@ -153,6 +146,36 @@ impl Settings {
     pub fn address(&self) -> (String, u16) {
         (self.host.clone(), self.port)
     }
+}
+
+/// Validate the AI provider policy without initializing any other runtime
+/// components. Preview deployment uses this before replacing an existing
+/// environment so malformed policy cannot take the old preview down first.
+pub fn validate_ai_provider_configurations_from_env() -> Result<(), String> {
+    load_local_env_file()?;
+    let value = environment_value("ANGUI_AI_PROVIDERS_JSON")?.unwrap_or_else(|| "[]".to_owned());
+    let configurations = parse_ai_provider_configurations(value)?;
+    let gateway =
+        AiGateway::from_configurations(configurations).map_err(|error| error.to_string())?;
+    gateway
+        .validate_runtime_configuration()
+        .map_err(|error| error.to_string())
+}
+
+fn environment_value(name: &str) -> Result<Option<String>, String> {
+    match env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(format!("{name} must contain valid UTF-8 text")),
+    }
+}
+
+fn parse_ai_provider_configurations(value: String) -> Result<Vec<ProviderConfig>, String> {
+    let configurations: Vec<ProviderConfig> = serde_json::from_str(&value).map_err(|error| {
+        format!("ANGUI_AI_PROVIDERS_JSON must be a JSON array of provider configurations: {error}")
+    })?;
+    validate_provider_configurations(&configurations).map_err(|error| error.to_string())?;
+    Ok(configurations)
 }
 
 fn parse_bounded_usize(
@@ -216,7 +239,7 @@ mod tests {
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
             .collect();
-        Settings::from_values(|name| values.get(name).cloned())
+        Settings::from_values(|name| Ok(values.get(name).cloned()))
     }
 
     #[test]
@@ -300,6 +323,20 @@ mod tests {
             .expect("a blank optional key should not make settings invalid");
 
         assert_eq!(settings.amap_webservice_key, None);
+    }
+
+    #[test]
+    fn environment_lookup_errors_are_not_treated_as_missing_values() {
+        let error = Settings::from_values(|name| {
+            if name == "ANGUI_HOST" {
+                Err("ANGUI_HOST must contain valid UTF-8 text".to_owned())
+            } else {
+                Ok(None)
+            }
+        })
+        .expect_err("environment lookup failures must be propagated");
+
+        assert_eq!(error, "ANGUI_HOST must contain valid UTF-8 text");
     }
 
     #[test]

@@ -365,6 +365,27 @@ export interface ArchiveDraft {
   created_at: string;
   updated_at: string;
 }
+export interface ArchiveReviewMaterial {
+  id: string;
+  case_id: string;
+  version: number;
+  parent_material_id: string | null;
+  content: string;
+  source_scope: string[];
+  status: "draft" | "deidentified" | "rejected";
+  created_by_user_id: string;
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  review_reason: string | null;
+  created_at: string;
+  selected_for_ai: boolean;
+}
+export interface ArchiveReviewMaterialDiff {
+  from_version: number;
+  to_version: number;
+  added: string[];
+  removed: string[];
+}
 export type TaskStatus =
   | "pending_claim"
   | "assigned"
@@ -900,6 +921,43 @@ export function reviewArchiveDraft(
       method: "PATCH",
       body: JSON.stringify(payload),
     },
+    token,
+  );
+}
+
+export function listArchiveReviewMaterials(
+  token: string,
+  draftId: string,
+): Promise<ArchiveReviewMaterial[]> {
+  return apiRequest<ArchiveReviewMaterial[]>(
+    `/admin/archive-drafts/${draftId}/review-materials`,
+    {},
+    token,
+  );
+}
+
+export function diffArchiveReviewMaterials(
+  token: string,
+  draftId: string,
+  fromVersion: number,
+  toVersion: number,
+): Promise<ArchiveReviewMaterialDiff> {
+  return apiRequest<ArchiveReviewMaterialDiff>(
+    `/admin/archive-drafts/${draftId}/review-materials/diff/${fromVersion}/${toVersion}`,
+    {},
+    token,
+  );
+}
+
+export function restoreArchiveReviewMaterial(
+  token: string,
+  draftId: string,
+  version: number,
+  reason: string,
+): Promise<ArchiveDraft> {
+  return apiRequest<ArchiveDraft>(
+    `/admin/archive-drafts/${draftId}/review-materials/${version}/restore`,
+    { method: "POST", body: JSON.stringify({ reason }) },
     token,
   );
 }
