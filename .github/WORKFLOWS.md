@@ -227,6 +227,11 @@ Optional preview secret:
   production frontend domains. CI injects it only while building the static
   frontend bundle as `VITE_AMAP_JS_API_KEY`; browser map keys are necessarily
   public after build and must never be substituted with `AMAP_WEBSERVICE_KEY`.
+- `AMAP_JSAPI_SECURITY_CODE`: the server-only AMap JSAPI v2 security code. The
+  preview web container injects it into the fixed `/_AMapService` Nginx proxy at
+  startup. It must never be passed as a `VITE_*` value or placed in frontend
+  artifacts. The proxy only forwards to `restapi.amap.com` and disables access
+  logging for that route.
 
 AI preview configuration uses two GitHub configuration mechanisms because the
 provider policy is not a credential while the transport values are:

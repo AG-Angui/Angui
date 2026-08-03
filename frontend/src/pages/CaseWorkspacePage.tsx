@@ -1383,7 +1383,7 @@ function CaseDetailView({
                 <LocationConfirmationPicker
                   onConfirm={(location) => {
                     setClueLocation(location.address);
-                    setClueLocationPrecision("exact");
+                    setClueLocationPrecision(location.precision);
                   }}
                   onClear={() => {
                     setClueLocation("");

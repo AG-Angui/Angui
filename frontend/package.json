@@ -13,6 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@amap/amap-jsapi-loader": "^1.0.1",
     "@heroui/react": "^3.2.2",
     "@tailwindcss/vite": "^4.3.2",
     "lucide-react": "^1.24.0",

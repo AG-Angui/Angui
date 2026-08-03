@@ -102,6 +102,7 @@ jobs:
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
           PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
           AMAP_WEBSERVICE_KEY: ${{ secrets.AMAP_WEBSERVICE_KEY }}
+          AMAP_JSAPI_SECURITY_CODE: ${{ secrets.AMAP_JSAPI_SECURITY_CODE }}
           ANGUI_AI_PROVIDERS_JSON: ${{ vars.ANGUI_AI_PROVIDERS_JSON }}
           ANGUI_PREVIEW_AI_ENDPOINT: ${{ secrets.ANGUI_PREVIEW_AI_ENDPOINT }}
           ANGUI_PREVIEW_AI_KEY: ${{ secrets.ANGUI_PREVIEW_AI_KEY }}

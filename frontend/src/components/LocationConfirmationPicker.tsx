@@ -1,14 +1,17 @@
+import { load as loadAmapLibrary } from "@amap/amap-jsapi-loader";
 import { Button } from "@heroui/react";
 import { LocateFixed, MapPin, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+export type LocationPrecision = "exact" | "approximate";
 
 export type ConfirmedLocation = {
   address: string;
   latitude: number;
   longitude: number;
+  accuracyMeters?: number;
+  precision: LocationPrecision;
 };
-
-type CandidateLocation = ConfirmedLocation;
 
 type AmapEvent = {
   lnglat?: {
@@ -17,16 +20,16 @@ type AmapEvent = {
   };
 };
 
-type AmapMarker = {
-  on(name: string, listener: (event: AmapEvent) => void): void;
-  setMap(map: AmapMap): void;
-  setPosition(position: [number, number]): void;
-};
-
 type AmapMap = {
   destroy(): void;
   on(name: string, listener: (event: AmapEvent) => void): void;
   panTo(position: [number, number]): void;
+};
+
+type AmapMarker = {
+  on(name: string, listener: (event: AmapEvent) => void): void;
+  setMap(map: AmapMap): void;
+  setPosition(position: [number, number]): void;
 };
 
 type AmapApi = {
@@ -46,16 +49,20 @@ type AmapApi = {
       position: [number, number],
       callback: (
         status: string,
-        result: { regeocode?: { formattedAddress?: string } },
+        result: {
+          info?: string;
+          regeocode?: { formattedAddress?: string };
+        },
       ) => void,
     ): void;
   };
-  convertFrom?(
+  convertFrom(
     position: [number, number],
     source: "gps",
     callback: (
       status: string,
       result: {
+        info?: string;
         locations?: Array<{
           getLat(): number;
           getLng(): number;
@@ -63,20 +70,54 @@ type AmapApi = {
       },
     ) => void,
   ): void;
-  plugin(plugins: string[], callback: () => void): void;
 };
 
 declare global {
   interface Window {
-    AMap?: AmapApi;
+    _AMapSecurityConfig?: {
+      serviceHost?: string;
+      securityJsCode?: string;
+    };
   }
 }
 
-const amapScriptId = "angui-amap-js-api";
+type CandidateLocation = ConfirmedLocation & { address: string };
+
 let amapPromise: Promise<AmapApi> | null = null;
 
-function coordinateAddress(longitude: number, latitude: number) {
-  return "坐标 " + longitude.toFixed(6) + ", " + latitude.toFixed(6);
+function loadAmap(): Promise<AmapApi> {
+  if (amapPromise) return amapPromise;
+
+  const key = import.meta.env.VITE_AMAP_JS_API_KEY?.trim();
+  if (!key) {
+    return Promise.reject(
+      new Error("地图服务尚未配置。你仍可手动填写地点。"),
+    );
+  }
+
+  const serviceHost =
+    import.meta.env.VITE_AMAP_JS_API_SERVICE_HOST?.trim() || "/_AMapService";
+  const securityJsCode = import.meta.env.DEV
+    ? import.meta.env.VITE_AMAP_JS_API_SECURITY_CODE?.trim()
+    : undefined;
+
+  window._AMapSecurityConfig = {
+    serviceHost,
+    ...(securityJsCode ? { securityJsCode } : {}),
+  };
+
+  amapPromise = loadAmapLibrary({
+    key,
+    version: "2.0",
+    plugins: ["AMap.Geocoder"],
+  })
+    .then((api) => api as AmapApi)
+    .catch((error) => {
+      amapPromise = null;
+      throw error;
+    });
+
+  return amapPromise;
 }
 
 function browserLocationError(error: GeolocationPositionError) {
@@ -92,45 +133,10 @@ function browserLocationError(error: GeolocationPositionError) {
   }
 }
 
-function loadAmap() {
-  if (window.AMap) return Promise.resolve(window.AMap);
-  if (amapPromise) return amapPromise;
-
-  const key = import.meta.env.VITE_AMAP_JS_API_KEY?.trim();
-  if (!key) {
-    return Promise.reject(
-      new Error("地图服务尚未配置。你仍可手动填写地点。"),
-    );
-  }
-
-  amapPromise = new Promise<AmapApi>((resolve, reject) => {
-    const existing = document.getElementById(amapScriptId);
-    if (existing) {
-      existing.addEventListener("load", () => {
-        if (window.AMap) resolve(window.AMap);
-        else reject(new Error("地图服务加载失败。你仍可手动填写地点。"));
-      });
-      existing.addEventListener("error", () =>
-        reject(new Error("地图服务加载失败。你仍可手动填写地点。")),
-      );
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = amapScriptId;
-    script.async = true;
-    script.src =
-      "https://webapi.amap.com/maps?v=2.0&key=" + encodeURIComponent(key);
-    script.onload = () => {
-      if (window.AMap) resolve(window.AMap);
-      else reject(new Error("地图服务加载失败。你仍可手动填写地点。"));
-    };
-    script.onerror = () =>
-      reject(new Error("地图服务加载失败。你仍可手动填写地点。"));
-    document.head.append(script);
-  });
-
-  return amapPromise;
+function precisionFor(accuracyMeters?: number): LocationPrecision {
+  return accuracyMeters !== undefined && accuracyMeters <= 50
+    ? "exact"
+    : "approximate";
 }
 
 export function LocationConfirmationPicker({
@@ -145,53 +151,76 @@ export function LocationConfirmationPicker({
   const marker = useRef<AmapMarker | null>(null);
   const amap = useRef<AmapApi | null>(null);
   const candidateRef = useRef<CandidateLocation | null>(null);
-  const geocodeRequest = useRef(0);
+  const operationRef = useRef(0);
   const [candidate, setCandidate] = useState<CandidateLocation | null>(null);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
   const [message, setMessage] = useState("");
 
   const resolveAddress = useCallback((longitude: number, latitude: number) => {
     const api = amap.current;
-    const request = geocodeRequest.current + 1;
-    geocodeRequest.current = request;
+    const operation = operationRef.current;
     if (!api) return;
 
-    api.plugin(["AMap.Geocoder"], () => {
-      const geocoder = new api.Geocoder({ radius: 1_000, extensions: "base" });
-      geocoder.getAddress([longitude, latitude], (status, result) => {
-        if (request !== geocodeRequest.current) return;
-        const address =
-          status === "complete" ? result.regeocode?.formattedAddress?.trim() : "";
-        if (!address) {
-          setMessage("无法解析该点的文字地址。你可确认坐标，或关闭后手动填写地点。");
-          return;
+    setIsGeocoding(true);
+    const geocoder = new api.Geocoder({ radius: 1_000, extensions: "base" });
+    geocoder.getAddress([longitude, latitude], (status, result) => {
+      if (operation !== operationRef.current) return;
+      const address =
+        status === "complete" && result.info === "OK"
+          ? result.regeocode?.formattedAddress?.trim()
+          : undefined;
+      if (!address) {
+        setIsGeocoding(false);
+        setMessage("无法解析该点的文字地址。请改用手动填写地点。");
+        setCandidate((current) =>
+          current &&
+          current.longitude === longitude &&
+          current.latitude === latitude
+            ? { ...current, address: "" }
+            : current,
+        );
+        candidateRef.current = candidateRef.current
+          ? { ...candidateRef.current, address: "" }
+          : null;
+        return;
+      }
+
+      setIsGeocoding(false);
+      setMessage("");
+      setCandidate((current) => {
+        if (
+          !current ||
+          current.longitude !== longitude ||
+          current.latitude !== latitude
+        ) {
+          return current;
         }
-        setCandidate((current) => {
-          if (
-            !current ||
-            current.longitude !== longitude ||
-            current.latitude !== latitude
-          ) {
-            return current;
-          }
-          const next = { ...current, address };
-          candidateRef.current = next;
-          return next;
-        });
+        const next = { ...current, address };
+        candidateRef.current = next;
+        return next;
       });
     });
   }, []);
 
   const chooseCoordinates = useCallback(
     (longitude: number, latitude: number) => {
-      const next = {
+      const current = candidateRef.current;
+      if (!current) return;
+
+      ++operationRef.current;
+      const next: CandidateLocation = {
         longitude,
         latitude,
-        address: coordinateAddress(longitude, latitude),
+        address: "",
+        accuracyMeters: current.accuracyMeters,
+        precision: current.precision,
       };
       candidateRef.current = next;
       setCandidate(next);
+      setMessage("");
       marker.current?.setPosition([longitude, latitude]);
       map.current?.panTo([longitude, latitude]);
       resolveAddress(longitude, latitude);
@@ -208,11 +237,21 @@ export function LocationConfirmationPicker({
     ) {
       return;
     }
-    let cancelled = false;
 
+    const operation = operationRef.current;
+    let cancelled = false;
+    setIsMapReady(false);
     void loadAmap()
       .then((api) => {
-        if (cancelled || !mapElement.current || !candidateRef.current) return;
+        if (
+          cancelled ||
+          operation !== operationRef.current ||
+          !mapElement.current ||
+          !candidateRef.current
+        ) {
+          return;
+        }
+
         amap.current = api;
         const initial = candidateRef.current;
         const nextMap = new api.Map(mapElement.current, {
@@ -238,10 +277,12 @@ export function LocationConfirmationPicker({
         });
         map.current = nextMap;
         marker.current = nextMarker;
+        setIsMapReady(true);
         resolveAddress(initial.longitude, initial.latitude);
       })
       .catch((cause: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && operation === operationRef.current) {
+          setIsMapReady(false);
           setMessage(
             cause instanceof Error
               ? cause.message
@@ -252,57 +293,75 @@ export function LocationConfirmationPicker({
 
     return () => {
       cancelled = true;
+      operationRef.current += 1;
       map.current?.destroy();
       map.current = null;
       marker.current = null;
       amap.current = null;
+      setIsMapReady(false);
+      setIsGeocoding(false);
     };
   }, [chooseCoordinates, isPickerOpen, resolveAddress]);
 
   function requestLocation() {
+    const operation = ++operationRef.current;
     setMessage("");
+    setIsLocating(true);
+    setIsMapReady(false);
     if (!navigator.geolocation) {
+      setIsLocating(false);
       setMessage("此设备不支持系统定位。你仍可手动填写地点。");
       return;
     }
 
-    setIsLocating(true);
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
-        setIsLocating(false);
+        if (operation !== operationRef.current) return;
         void loadAmap()
           .then((api) => {
+            if (operation !== operationRef.current) return;
             amap.current = api;
-            const openPicker = (longitude: number, latitude: number) => {
-              chooseCoordinates(longitude, latitude);
-              setIsPickerOpen(true);
-            };
-            if (!api.convertFrom) {
-              openPicker(coords.longitude, coords.latitude);
-              return;
-            }
             api.convertFrom(
               [coords.longitude, coords.latitude],
               "gps",
               (status, result) => {
+                if (operation !== operationRef.current) return;
                 const point =
-                  status === "complete" ? result.locations?.[0] : undefined;
-                openPicker(
-                  point?.getLng() ?? coords.longitude,
-                  point?.getLat() ?? coords.latitude,
-                );
+                  status === "complete" && result.info === "OK"
+                    ? result.locations?.[0]
+                    : undefined;
+                if (!point) {
+                  setIsLocating(false);
+                  setMessage("无法完成坐标转换。你仍可手动填写地点。");
+                  return;
+                }
+
+                const next: CandidateLocation = {
+                  longitude: point.getLng(),
+                  latitude: point.getLat(),
+                  address: "",
+                  accuracyMeters: coords.accuracy,
+                  precision: precisionFor(coords.accuracy),
+                };
+                candidateRef.current = next;
+                setCandidate(next);
+                setIsPickerOpen(true);
+                setIsLocating(false);
               },
             );
           })
-          .catch((cause: unknown) =>
+          .catch((cause: unknown) => {
+            if (operation !== operationRef.current) return;
+            setIsLocating(false);
             setMessage(
               cause instanceof Error
                 ? cause.message
                 : "地图服务暂不可用。你仍可手动填写地点。",
-            ),
-          );
+            );
+          });
       },
       (error) => {
+        if (operation !== operationRef.current) return;
         setIsLocating(false);
         setMessage(browserLocationError(error));
       },
@@ -311,13 +370,23 @@ export function LocationConfirmationPicker({
   }
 
   function clear() {
-    geocodeRequest.current += 1;
+    operationRef.current += 1;
     candidateRef.current = null;
+    map.current?.destroy();
+    map.current = null;
+    marker.current = null;
+    amap.current = null;
     setCandidate(null);
     setIsPickerOpen(false);
+    setIsLocating(false);
+    setIsMapReady(false);
+    setIsGeocoding(false);
     setMessage("");
     onClear();
   }
+
+  const canConfirm =
+    Boolean(candidate?.address) && isMapReady && !isGeocoding && !isLocating;
 
   return (
     <div className="grid gap-2">
@@ -354,7 +423,7 @@ export function LocationConfirmationPicker({
           <div className="grid gap-2 border-t border-slate-200 px-3 py-3 text-sm">
             <p className="m-0 flex items-start gap-2 text-slate-700">
               <MapPin className="mt-0.5 shrink-0 text-brand-700" size={16} />
-              <span>{candidate.address}</span>
+              <span>{candidate.address || "正在解析地点"}</span>
             </p>
             <p className="m-0 font-mono text-xs text-slate-500">
               {candidate.longitude.toFixed(6)}, {candidate.latitude.toFixed(6)}
@@ -367,8 +436,10 @@ export function LocationConfirmationPicker({
                 type="button"
                 size="sm"
                 variant="primary"
+                isDisabled={!canConfirm}
                 onPress={() => {
-                  if (candidateRef.current) onConfirm(candidateRef.current);
+                  const current = candidateRef.current;
+                  if (current && canConfirm) onConfirm(current);
                 }}
               >
                 确认此位置

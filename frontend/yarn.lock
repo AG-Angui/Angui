@@ -35,6 +35,11 @@
     react-transition-group "^4.4.5"
     use-sync-external-store "^1.6.0"
 
+"@amap/amap-jsapi-loader@^1.0.1":
+  version "1.0.1"
+  resolved "https://registry.npmmirror.com/@amap/amap-jsapi-loader/-/amap-jsapi-loader-1.0.1.tgz#9ec4b4d5d2467eac451f6c852e35db69e9f9f0c0"
+  integrity sha512-nPyLKt7Ow/ThHLkSvn2etQlUzqxmTVgK7bIgwdBRTg2HK5668oN7xVxkaiRe3YZEzGzfV2XgH5Jmu2T73ljejw==
+
 "@asamuzakjp/css-color@^5.1.11":
   version "5.1.11"
   resolved "https://registry.npmmirror.com/@asamuzakjp/css-color/-/css-color-5.1.11.tgz"

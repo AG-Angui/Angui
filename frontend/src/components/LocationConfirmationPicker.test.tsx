@@ -1,99 +1,202 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { load } from "@amap/amap-jsapi-loader";
 import { LocationConfirmationPicker } from "./LocationConfirmationPicker";
 
+vi.mock("@amap/amap-jsapi-loader", () => ({
+  load: vi.fn(),
+}));
+
+const amapLoad = vi.mocked(load);
+
+function createAmapMock() {
+  let mapClick:
+    | ((event: { lnglat: { getLng(): number; getLat(): number } }) => void)
+    | undefined;
+  const markerListeners = new Map<
+    string,
+    (event: { lnglat: { getLng(): number; getLat(): number } }) => void
+  >();
+  const geocoder = {
+    getAddress: vi.fn(
+      (
+        [longitude, latitude]: [number, number],
+        callback: (
+          status: string,
+          result: { info?: string; regeocode?: { formattedAddress?: string } },
+        ) => void,
+      ) =>
+        callback("complete", {
+          info: "OK",
+          regeocode: {
+            formattedAddress: `地点 ${longitude},${latitude}`,
+          },
+        }),
+    ),
+  };
+  const api = {
+    Map: class {
+      destroy() {}
+      on(
+        name: string,
+        listener: (event: {
+          lnglat: { getLng(): number; getLat(): number };
+        }) => void,
+      ) {
+        if (name === "click") mapClick = listener;
+      }
+      panTo() {}
+    },
+    Marker: class {
+      on(
+        name: string,
+        listener: (event: {
+          lnglat: { getLng(): number; getLat(): number };
+        }) => void,
+      ) {
+        markerListeners.set(name, listener);
+      }
+      setMap() {}
+      setPosition() {}
+    },
+    Geocoder: class {
+      getAddress = geocoder.getAddress;
+    },
+    convertFrom: vi.fn(
+      (
+        [longitude, latitude]: [number, number],
+        _source: "gps",
+        callback: (
+          status: string,
+          result: {
+            info?: string;
+            locations?: Array<{ getLng(): number; getLat(): number }>;
+          },
+        ) => void,
+      ) =>
+        callback("complete", {
+          info: "OK",
+          locations: [
+            {
+              getLng: () => longitude + 0.01,
+              getLat: () => latitude + 0.01,
+            },
+          ],
+        }),
+    ),
+  };
+  return { api, geocoder, markerListeners, getMapClick: () => mapClick };
+}
+
 describe("LocationConfirmationPicker", () => {
-  afterEach(() => {
-    delete window.AMap;
+  let amap: ReturnType<typeof createAmapMock>;
+
+  beforeEach(() => {
+    amap ??= createAmapMock();
+    amapLoad.mockReset();
+    amapLoad.mockResolvedValue(amap.api as never);
+    vi.stubEnv("VITE_AMAP_JS_API_KEY", "test-key");
+    vi.stubEnv("VITE_AMAP_JS_API_SERVICE_HOST", "/_AMapService");
   });
 
-  it("requests location only after activation and confirms the final map point", async () => {
-    let mapClick:
-      | ((event: { lnglat: { getLng(): number; getLat(): number } }) => void)
-      | undefined;
-    const markerListeners = new Map<
-      string,
-      (event: { lnglat: { getLng(): number; getLat(): number } }) => void
-    >();
-    const geocoder = {
-      getAddress: vi.fn(
-        (
-          [longitude, latitude]: [number, number],
-          callback: (
-            status: string,
-            result: { regeocode?: { formattedAddress?: string } },
-          ) => void,
-        ) =>
-          callback("complete", {
-            regeocode: {
-              formattedAddress: "地点 " + longitude + "," + latitude,
-            },
-          }),
-      ),
-    };
-    window.AMap = {
-      Map: class {
-        destroy() {}
-        on(
-          name: string,
-          listener: (event: {
-            lnglat: { getLng(): number; getLat(): number };
-          }) => void,
-        ) {
-          if (name === "click") mapClick = listener;
-        }
-        panTo() {}
-      },
-      Marker: class {
-        on(
-          name: string,
-          listener: (event: {
-            lnglat: { getLng(): number; getLat(): number };
-          }) => void,
-        ) {
-          markerListeners.set(name, listener);
-        }
-        setMap() {}
-        setPosition() {}
-      },
-      Geocoder: class {
-        getAddress = geocoder.getAddress;
-      },
-      plugin(_plugins, callback) {
-        callback();
-      },
-    };
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("allows retry after the loader rejects", async () => {
+    amapLoad.mockRejectedValueOnce(new Error("地图服务加载失败"));
+    const getCurrentPosition = vi.fn();
+    Object.defineProperty(navigator, "geolocation", {
+      configurable: true,
+      value: { getCurrentPosition },
+    });
+
+    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
+    await act(async () => {
+      getCurrentPosition.mock.calls[0][0]({
+        coords: { longitude: 116.39, latitude: 39.91, accuracy: 80 },
+      });
+    });
+    expect(
+      await screen.findByText("地图服务加载失败"),
+    ).toBeInTheDocument();
+    expect(amapLoad).toHaveBeenCalledOnce();
+    expect(amapLoad).toHaveBeenCalledWith({
+      key: "test-key",
+      version: "2.0",
+      plugins: ["AMap.Geocoder"],
+    });
+    expect(window._AMapSecurityConfig).toEqual({
+      serviceHost: "/_AMapService",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
+    await act(async () => {
+      getCurrentPosition.mock.calls[1][0]({
+        coords: { longitude: 116.39, latitude: 39.91, accuracy: 80 },
+      });
+    });
+    await screen.findByLabelText("位置确认地图");
+    expect(amapLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not fall back to unconverted coordinates when conversion is rejected", async () => {
+    const originalConvertFrom = amap.api.convertFrom.getMockImplementation();
+    amap.api.convertFrom.mockImplementation((_position, _source, callback) =>
+      callback("complete", { info: "INVALID_USER_KEY" }),
+    );
+    const getCurrentPosition = vi.fn();
+    Object.defineProperty(navigator, "geolocation", {
+      configurable: true,
+      value: { getCurrentPosition },
+    });
+
+    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
+    await act(async () => {
+      getCurrentPosition.mock.calls[0][0]({
+        coords: { longitude: 116.39, latitude: 39.91, accuracy: 80 },
+      });
+    });
+    expect(
+      await screen.findByText("无法完成坐标转换。你仍可手动填写地点。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("位置确认地图")).not.toBeInTheDocument();
+    if (originalConvertFrom) {
+      amap.api.convertFrom.mockImplementation(originalConvertFrom);
+    }
+  });
+
+  it("requests location only after activation and confirms the converted, geocoded point", async () => {
     const getCurrentPosition = vi.fn();
     Object.defineProperty(navigator, "geolocation", {
       configurable: true,
       value: { getCurrentPosition },
     });
     const onConfirm = vi.fn();
-    const onClear = vi.fn();
 
-    render(<LocationConfirmationPicker onConfirm={onConfirm} onClear={onClear} />);
-
+    render(<LocationConfirmationPicker onConfirm={onConfirm} onClear={vi.fn()} />);
     expect(getCurrentPosition).not.toHaveBeenCalled();
+
     fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
     expect(getCurrentPosition).toHaveBeenCalledOnce();
 
     await act(async () => {
       getCurrentPosition.mock.calls[0][0]({
-        coords: { longitude: 116.39, latitude: 39.91 },
+        coords: { longitude: 116.39, latitude: 39.91, accuracy: 20 },
       });
     });
     await screen.findByLabelText("位置确认地图");
+    expect(screen.getByText(/地点 116\.4,39\.9/)).toBeInTheDocument();
 
     await act(async () => {
-      mapClick?.({
+      amap.getMapClick()?.({
         lnglat: { getLng: () => 116.4, getLat: () => 39.92 },
       });
     });
-    expect(markerListeners.get("dragend")).toBeDefined();
-    expect(screen.getByText("地点 116.4,39.92")).toBeInTheDocument();
-
     await act(async () => {
-      markerListeners.get("dragend")?.({
+      amap.markerListeners.get("dragend")?.({
         lnglat: { getLng: () => 116.41, getLat: () => 39.93 },
       });
     });
@@ -104,18 +207,36 @@ describe("LocationConfirmationPicker", () => {
       address: "地点 116.41,39.93",
       longitude: 116.41,
       latitude: 39.93,
+      accuracyMeters: 20,
+      precision: "exact",
     });
-    fireEvent.click(screen.getByRole("button", { name: "清除定位结果" }));
-    expect(onClear).toHaveBeenCalledOnce();
-    expect(screen.queryByLabelText("位置确认地图")).not.toBeInTheDocument();
+  });
+
+  it("does not confirm when reverse geocoding fails and preserves manual entry", async () => {
+    amap.geocoder.getAddress.mockImplementation((_position, callback) =>
+      callback("complete", { info: "INVALID_USER_KEY" }),
+    );
+    const getCurrentPosition = vi.fn();
+    Object.defineProperty(navigator, "geolocation", {
+      configurable: true,
+      value: { getCurrentPosition },
+    });
+
+    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
+    await act(async () => {
+      getCurrentPosition.mock.calls[0][0]({
+        coords: { longitude: 116.39, latitude: 39.91, accuracy: 80 },
+      });
+    });
+    await screen.findByText("无法解析该点的文字地址。请改用手动填写地点。");
+    expect(screen.getByRole("button", { name: "确认此位置" })).toBeDisabled();
   });
 
   it("keeps manual entry available after a denied permission request", () => {
     const getCurrentPosition = vi.fn(
-      (
-        _success: PositionCallback,
-        failure: PositionErrorCallback,
-      ) => failure({ code: 1 } as GeolocationPositionError),
+      (_success: PositionCallback, failure: PositionErrorCallback) =>
+        failure({ code: 1 } as GeolocationPositionError),
     );
     Object.defineProperty(navigator, "geolocation", {
       configurable: true,
@@ -123,7 +244,6 @@ describe("LocationConfirmationPicker", () => {
     });
 
     render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
-
     fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
 
     expect(
