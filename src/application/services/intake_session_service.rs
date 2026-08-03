@@ -361,14 +361,50 @@ pub async fn get_intake_profile_draft(
 #[serde(deny_unknown_fields)]
 struct ProfileExtractionOutput {
     profile: IntakeProfileDraftFields,
-    field_sources: std::collections::BTreeMap<String, ProfileFieldSource>,
+    field_sources: std::collections::BTreeMap<String, Option<ProfileFieldSource>>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProfileFieldSource {
     source_field: String,
     source_excerpt: String,
+}
+
+/// Compatibility shape observed from Responses-compatible providers that ignore
+/// the requested `text.format` schema. It is normalized and then subjected to
+/// the same source-excerpt checks as the canonical response.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileCandidatesOutput {
+    profile_candidates: ProfileCandidates,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileCandidates {
+    name: Option<ProfileCandidate>,
+    gender: Option<ProfileCandidate>,
+    age: Option<ProfileCandidate>,
+    height: Option<ProfileCandidate>,
+    appearance: Option<ProfileCandidate>,
+    behavior_habit: Option<ProfileCandidate>,
+    belongings: Option<ProfileCandidate>,
+    #[serde(rename = "follow_up_clues")]
+    _follow_up_clues: Option<ProfileCandidate>,
+    frequent_locations: Option<ProfileCandidate>,
+    health_status: Option<ProfileCandidate>,
+    last_seen: Option<ProfileCandidate>,
+    suspicious_motive: Option<ProfileCandidate>,
+    transport_ability: Option<ProfileCandidate>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileCandidate {
+    value: String,
+    source_answer_field: String,
+    supporting_excerpt: String,
 }
 
 /// Produces a versioned candidate from the family's immutable answer snapshot.
@@ -395,29 +431,55 @@ pub async fn generate_intake_profile_draft(
     let input = serde_json::to_string(&json!({"family_answers": answers}))
         .map_err(|_| ApiError::Internal)?;
     let request = AiRequest {
-        capability: AiCapability::StructuredExtraction, data_level: DataLevel::Sensitive,
-        purpose: AiPurpose::IntakeDraft, data_region: "CN".to_owned(),
-        system_instruction: Some("Return JSON only using the supplied schema. Extract concise profile candidates only from supplied family answers. For each non-empty candidate give its source answer field and an exact supporting excerpt. Keep unknown fields null. Do not diagnose, confirm facts, infer current or future location, add facts, issue instructions, or change answers.".to_owned()),
-        output_schema: Some(profile_extraction_schema()), output_schema_name: Some("intake_profile_candidate".to_owned()), input,
-        requested_output_tokens: 900, template_version: "intake-profile-extraction-v1".to_owned(),
-        input_scope_reference: "intake-session-family-answers-only".to_owned(), redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+        capability: AiCapability::StructuredExtraction,
+        data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft,
+        data_region: "CN".to_owned(),
+        system_instruction: Some(profile_extraction_system_instruction()),
+        output_schema: Some(profile_extraction_schema()),
+        output_schema_name: Some("intake_profile_candidate".to_owned()),
+        input,
+        requested_output_tokens: 900,
+        template_version: "intake-profile-extraction-v1".to_owned(),
+        input_scope_reference: "intake-session-family-answers-only".to_owned(),
+        redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
     };
     let execution = gateway.execute(&request).await;
     let execution_audits = crate::ai_gateway::execution_attempt_audits(&request, &execution);
     let (profile, metadata, provider_model, degradation_status, _audit_status) = match execution {
         AiExecutionResult::Completed { route, output, .. } => {
-            match gateway.decode_json::<ProfileExtractionOutput>(&output) {
-                Ok(out) => match validate_profile_extraction(out, &answers) {
-                    Ok((profile, metadata)) => (
-                        profile,
-                        metadata,
-                        Some(route.model),
-                        "manual_review_required".to_owned(),
-                        AiTaskStatus::Completed,
-                    ),
-                    Err(_) => profile_fallback(&answers, &session),
-                },
-                Err(_) => profile_fallback(&answers, &session),
+            match decode_profile_extraction_output(&output, &answers) {
+                Ok((out, used_provider_compatibility_shape)) => {
+                    if used_provider_compatibility_shape {
+                        log::debug!(
+                            target: "angui::ai_gateway::diagnostic",
+                            "AI profile extraction used the provider compatibility schema"
+                        );
+                    }
+                    match validate_profile_extraction(out, &answers) {
+                        Ok((profile, metadata)) => (
+                            profile,
+                            metadata,
+                            Some(route.model),
+                            "manual_review_required".to_owned(),
+                            AiTaskStatus::Completed,
+                        ),
+                        Err(reason) => {
+                            log::debug!(
+                                target: "angui::ai_gateway::diagnostic",
+                                "AI profile extraction rejected: {reason}"
+                            );
+                            profile_fallback(&answers, &session)
+                        }
+                    }
+                }
+                Err(reason) => {
+                    log::debug!(
+                        target: "angui::ai_gateway::diagnostic",
+                        "AI profile extraction rejected: {reason}"
+                    );
+                    profile_fallback(&answers, &session)
+                }
             }
         }
         AiExecutionResult::Degraded { .. } => profile_fallback(&answers, &session),
@@ -1139,6 +1201,167 @@ fn profile_fallback(
     )
 }
 
+fn profile_extraction_system_instruction() -> String {
+    format!(
+        "Return exactly one JSON object matching this schema: {}. Do not return a `profile_candidates` object, Markdown, commentary, or any keys not present in the schema. Extract concise profile candidates only from supplied family answers. `field_sources` must include every profile field: use a source object with its source answer field and exact supporting excerpt when the profile value is non-null, otherwise use null. Do not diagnose, confirm facts, infer current or future location, add facts, issue instructions, or change answers.",
+        profile_extraction_schema()
+    )
+}
+
+fn decode_profile_extraction_output(
+    output: &str,
+    answers: &IntakeInitialAnswers,
+) -> Result<(ProfileExtractionOutput, bool), String> {
+    if let Ok(canonical) = serde_json::from_str::<ProfileExtractionOutput>(output) {
+        return Ok((canonical, false));
+    }
+
+    let compatibility = serde_json::from_str::<ProfileCandidatesOutput>(output)
+        .map_err(|_| "output did not match the profile schema".to_owned())?;
+    Ok((normalize_profile_candidates(compatibility, answers)?, true))
+}
+
+fn normalize_profile_candidates(
+    output: ProfileCandidatesOutput,
+    answers: &IntakeInitialAnswers,
+) -> Result<ProfileExtractionOutput, String> {
+    let candidates = output.profile_candidates;
+    validate_profile_candidate_sources(&candidates, answers)?;
+    let (physical_description, physical_source) = combine_profile_candidates(vec![
+        ("姓名或称呼", candidates.name),
+        ("性别", candidates.gender),
+        ("年龄", candidates.age),
+        ("身高", candidates.height),
+        ("外观特征", candidates.appearance),
+    ])?;
+    let (clothing_description, clothing_source) =
+        profile_field_from_candidate(candidates.belongings);
+    let (health_notes, health_source) = profile_field_from_candidate(candidates.health_status);
+    let (transportation_ability, transportation_source) =
+        profile_field_from_candidate(candidates.transport_ability);
+    let (frequent_locations, frequent_locations_source) =
+        profile_field_from_candidate(candidates.frequent_locations);
+    let (last_seen_information, last_seen_source) =
+        profile_field_from_candidate(candidates.last_seen);
+    let (behavior_habits, behavior_source) =
+        profile_field_from_candidate(candidates.behavior_habit);
+    let (suspicious_motive, suspicious_motive_source) =
+        profile_field_from_candidate(candidates.suspicious_motive);
+
+    let field_sources = std::collections::BTreeMap::from([
+        ("physical_description".to_owned(), physical_source),
+        ("clothing_description".to_owned(), clothing_source),
+        ("health_notes".to_owned(), health_source),
+        ("mobility_notes".to_owned(), None),
+        ("transportation_ability".to_owned(), transportation_source),
+        ("frequent_locations".to_owned(), frequent_locations_source),
+        ("last_seen_information".to_owned(), last_seen_source),
+        ("behavior_habits".to_owned(), behavior_source),
+        ("suspicious_motive".to_owned(), suspicious_motive_source),
+    ]);
+
+    Ok(ProfileExtractionOutput {
+        profile: IntakeProfileDraftFields {
+            physical_description,
+            clothing_description,
+            health_notes,
+            mobility_notes: None,
+            transportation_ability,
+            frequent_locations,
+            last_seen_information,
+            behavior_habits,
+            suspicious_motive,
+        },
+        field_sources,
+    })
+}
+
+fn combine_profile_candidates(
+    candidates: Vec<(&str, Option<ProfileCandidate>)>,
+) -> Result<(Option<String>, Option<ProfileFieldSource>), String> {
+    let candidates = candidates
+        .into_iter()
+        .filter_map(|(label, candidate)| candidate.map(|candidate| (label, candidate)))
+        .filter(|(_, candidate)| !candidate.value.trim().is_empty())
+        .collect::<Vec<_>>();
+    let Some(first) = candidates.first() else {
+        return Ok((None, None));
+    };
+    if candidates
+        .iter()
+        .any(|(_, candidate)| candidate.source_answer_field != first.1.source_answer_field)
+    {
+        return Err(
+            "physical_description candidates must cite the same family answer field".to_owned(),
+        );
+    }
+
+    let value = candidates
+        .iter()
+        .map(|(label, candidate)| format!("{label}：{}", candidate.value.trim()))
+        .collect::<Vec<_>>()
+        .join("；");
+    Ok((
+        Some(value),
+        Some(ProfileFieldSource {
+            source_field: first.1.source_answer_field.clone(),
+            source_excerpt: first.1.supporting_excerpt.clone(),
+        }),
+    ))
+}
+
+fn validate_profile_candidate_sources(
+    candidates: &ProfileCandidates,
+    answers: &IntakeInitialAnswers,
+) -> Result<(), String> {
+    for candidate in [
+        &candidates.name,
+        &candidates.gender,
+        &candidates.age,
+        &candidates.height,
+        &candidates.appearance,
+        &candidates.behavior_habit,
+        &candidates.belongings,
+        &candidates.frequent_locations,
+        &candidates.health_status,
+        &candidates.last_seen,
+        &candidates.suspicious_motive,
+        &candidates.transport_ability,
+    ] {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        if candidate.value.trim().is_empty() {
+            continue;
+        }
+        validate_profile_source(
+            &candidate.source_answer_field,
+            &candidate.supporting_excerpt,
+            answers,
+        )?;
+    }
+    Ok(())
+}
+
+fn profile_field_from_candidate(
+    candidate: Option<ProfileCandidate>,
+) -> (Option<String>, Option<ProfileFieldSource>) {
+    let Some(candidate) = candidate else {
+        return (None, None);
+    };
+    let value = candidate.value.trim();
+    if value.is_empty() {
+        return (None, None);
+    }
+    (
+        Some(value.to_owned()),
+        Some(ProfileFieldSource {
+            source_field: candidate.source_answer_field,
+            source_excerpt: candidate.supporting_excerpt,
+        }),
+    )
+}
+
 fn validate_profile_extraction(
     output: ProfileExtractionOutput,
     answers: &IntakeInitialAnswers,
@@ -1147,18 +1370,8 @@ fn validate_profile_extraction(
         IntakeProfileDraftFields,
         Vec<IntakeProfileDraftFieldMetadata>,
     ),
-    (),
+    String,
 > {
-    let allowed = [
-        "basic_information",
-        "belongings",
-        "health_status",
-        "transport_ability",
-        "frequent_locations",
-        "last_seen",
-        "behavior_habits",
-        "suspicious_motive",
-    ];
     let values = [
         ("physical_description", &output.profile.physical_description),
         ("clothing_description", &output.profile.clothing_description),
@@ -1179,16 +1392,13 @@ fn validate_profile_extraction(
     let mut metadata = Vec::new();
     for (field, value) in values {
         if value.as_ref().is_some_and(|value| !value.trim().is_empty()) {
-            let source = output.field_sources.get(field).ok_or(())?;
-            if !allowed.contains(&source.source_field.as_str())
-                || source.source_excerpt.trim().is_empty()
-            {
-                return Err(());
-            }
-            let answer = answer_for(answers, &source.source_field).ok_or(())?;
-            if !answer.contains(source.source_excerpt.trim()) {
-                return Err(());
-            }
+            let source = output
+                .field_sources
+                .get(field)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("{field} is missing its source citation"))?;
+            validate_profile_source(&source.source_field, &source.source_excerpt, answers)
+                .map_err(|reason| format!("{field} {reason}"))?;
             metadata.push(IntakeProfileDraftFieldMetadata {
                 field: field.to_owned(),
                 source_field: source.source_field.clone(),
@@ -1204,8 +1414,85 @@ fn validate_profile_extraction(
     Ok((output.profile, metadata))
 }
 
+fn validate_profile_source(
+    source_field: &str,
+    source_excerpt: &str,
+    answers: &IntakeInitialAnswers,
+) -> Result<(), String> {
+    if !is_profile_source_field(source_field) || source_excerpt.trim().is_empty() {
+        return Err("has an invalid source citation".to_owned());
+    }
+    let answer = answer_for(answers, source_field)
+        .ok_or_else(|| "cites a source field without a family answer".to_owned())?;
+    if !answer.contains(source_excerpt.trim()) {
+        return Err("source excerpt does not occur in its cited family answer".to_owned());
+    }
+    Ok(())
+}
+
+fn is_profile_source_field(field: &str) -> bool {
+    matches!(
+        field,
+        "basic_information"
+            | "belongings"
+            | "health_status"
+            | "transport_ability"
+            | "frequent_locations"
+            | "last_seen"
+            | "behavior_habits"
+            | "suspicious_motive"
+    )
+}
+
 fn profile_extraction_schema() -> serde_json::Value {
-    json!({"type":"object","additionalProperties":false,"required":["profile","field_sources"],"properties":{"profile":{"type":"object","additionalProperties":false,"required":["physical_description","clothing_description","health_notes","mobility_notes","transportation_ability","frequent_locations","last_seen_information","behavior_habits","suspicious_motive"],"properties":{"physical_description":{"type":["string","null"]},"clothing_description":{"type":["string","null"]},"health_notes":{"type":["string","null"]},"mobility_notes":{"type":["string","null"]},"transportation_ability":{"type":["string","null"]},"frequent_locations":{"type":["string","null"]},"last_seen_information":{"type":["string","null"]},"behavior_habits":{"type":["string","null"]},"suspicious_motive":{"type":["string","null"]}}},"field_sources":{"type":"object","additionalProperties":{"type":"object","additionalProperties":false,"required":["source_field","source_excerpt"],"properties":{"source_field":{"type":"string"},"source_excerpt":{"type":"string"}}}}}})
+    let fields = [
+        "physical_description",
+        "clothing_description",
+        "health_notes",
+        "mobility_notes",
+        "transportation_ability",
+        "frequent_locations",
+        "last_seen_information",
+        "behavior_habits",
+        "suspicious_motive",
+    ];
+    let profile_properties = fields
+        .iter()
+        .map(|field| ((*field).to_owned(), json!({ "type": ["string", "null"] })))
+        .collect::<serde_json::Map<_, _>>();
+    let field_source = json!({
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+            "source_field": { "type": "string" },
+            "source_excerpt": { "type": "string" }
+        },
+        "required": ["source_field", "source_excerpt"]
+    });
+    let field_source_properties = fields
+        .iter()
+        .map(|field| ((*field).to_owned(), field_source.clone()))
+        .collect::<serde_json::Map<_, _>>();
+
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile", "field_sources"],
+        "properties": {
+            "profile": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": fields,
+                "properties": profile_properties
+            },
+            "field_sources": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": fields,
+                "properties": field_source_properties
+            }
+        }
+    })
 }
 
 pub async fn confirm_intake_session(
@@ -1914,4 +2201,101 @@ fn follow_up_schema() -> serde_json::Value {
 
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        IntakeInitialAnswers, decode_profile_extraction_output, profile_extraction_schema,
+        profile_extraction_system_instruction, validate_profile_extraction,
+    };
+
+    fn answers() -> IntakeInitialAnswers {
+        IntakeInitialAnswers {
+            basic_information: Some(
+                "姓名或称呼：dfw\n性别：男\n年龄：70 岁\n身高：170 厘米\n外观特征：戴帽子"
+                    .to_owned(),
+            ),
+            health_status: Some("依赖吸氧机".to_owned()),
+            behavior_habits: Some("和人谈论下象棋".to_owned()),
+            last_seen: Some("家门口".to_owned()),
+            ..IntakeInitialAnswers::default()
+        }
+    }
+
+    #[test]
+    fn normalizes_observed_profile_candidates_provider_shape() {
+        let answers = answers();
+        let raw = r#"{
+            "profile_candidates": {
+                "name": {"value":"dfw","source_answer_field":"basic_information","supporting_excerpt":"姓名或称呼：dfw"},
+                "gender": {"value":"男","source_answer_field":"basic_information","supporting_excerpt":"性别：男"},
+                "age": {"value":"70 岁","source_answer_field":"basic_information","supporting_excerpt":"年龄：70 岁"},
+                "height": {"value":"170 厘米","source_answer_field":"basic_information","supporting_excerpt":"身高：170 厘米"},
+                "appearance": {"value":"戴帽子","source_answer_field":"basic_information","supporting_excerpt":"外观特征：戴帽子"},
+                "behavior_habit": {"value":"和人谈论下象棋","source_answer_field":"behavior_habits","supporting_excerpt":"和人谈论下象棋"},
+                "belongings": null,
+                "follow_up_clues": null,
+                "frequent_locations": null,
+                "health_status": {"value":"依赖吸氧机","source_answer_field":"health_status","supporting_excerpt":"依赖吸氧机"},
+                "last_seen": {"value":"家门口","source_answer_field":"last_seen","supporting_excerpt":"家门口"},
+                "suspicious_motive": null,
+                "transport_ability": null
+            }
+        }"#;
+
+        let (output, used_compatibility_shape) =
+            decode_profile_extraction_output(raw, &answers).expect("provider shape normalizes");
+        let (profile, metadata) = validate_profile_extraction(output, &answers)
+            .expect("normalized values retain provenance");
+
+        assert!(used_compatibility_shape);
+        assert_eq!(
+            profile.physical_description.as_deref(),
+            Some("姓名或称呼：dfw；性别：男；年龄：70 岁；身高：170 厘米；外观特征：戴帽子")
+        );
+        assert_eq!(profile.health_notes.as_deref(), Some("依赖吸氧机"));
+        assert_eq!(profile.behavior_habits.as_deref(), Some("和人谈论下象棋"));
+        assert_eq!(metadata.len(), 4);
+        assert!(metadata.iter().all(|field| field.source == "ai_extracted"));
+    }
+
+    #[test]
+    fn rejects_provider_candidates_with_an_unverifiable_source_excerpt() {
+        let answers = answers();
+        let raw = r#"{
+            "profile_candidates": {
+                "name": {"value":"dfw","source_answer_field":"basic_information","supporting_excerpt":"not in the family answer"}
+            }
+        }"#;
+
+        let error = match decode_profile_extraction_output(raw, &answers) {
+            Ok(_) => panic!("an unverified source excerpt must not be accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "source excerpt does not occur in its cited family answer"
+        );
+    }
+
+    #[test]
+    fn profile_extraction_prompt_repeats_the_canonical_contract() {
+        let instruction = profile_extraction_system_instruction();
+        assert!(instruction.contains("\"profile\""));
+        assert!(instruction.contains("\"field_sources\""));
+        assert!(instruction.contains("Do not return a `profile_candidates` object"));
+    }
+
+    #[test]
+    fn profile_extraction_schema_uses_fixed_strict_source_fields() {
+        let schema = profile_extraction_schema();
+        let field_sources = &schema["properties"]["field_sources"];
+        assert_eq!(field_sources["additionalProperties"], false);
+        assert_eq!(field_sources["required"].as_array().map(Vec::len), Some(9));
+        assert_eq!(
+            field_sources["properties"]["physical_description"]["type"],
+            serde_json::json!(["object", "null"])
+        );
+    }
 }
