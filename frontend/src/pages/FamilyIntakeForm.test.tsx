@@ -14,6 +14,8 @@ const mocked = vi.hoisted(() => ({
   getIntakeAiInitialReview: vi.fn(),
   getIntakeAiFollowUp: vi.fn(),
   getIntakeDraft: vi.fn(),
+  listIntakeAnswerRevisions: vi.fn(),
+  listIntakeDraftVersions: vi.fn(),
   acknowledgeIntakeAiInitialReview: vi.fn(),
   startIntakeAiInitialReview: vi.fn(),
   submitIntakeAnswer: vi.fn(),
@@ -33,6 +35,10 @@ vi.mock("../api/intake", () => ({
   getIntakeAiFollowUp: (...args: unknown[]) =>
     mocked.getIntakeAiFollowUp(...args),
   getIntakeDraft: (...args: unknown[]) => mocked.getIntakeDraft(...args),
+  listIntakeAnswerRevisions: (...args: unknown[]) =>
+    mocked.listIntakeAnswerRevisions(...args),
+  listIntakeDraftVersions: (...args: unknown[]) =>
+    mocked.listIntakeDraftVersions(...args),
   acknowledgeIntakeAiInitialReview: (...args: unknown[]) =>
     mocked.acknowledgeIntakeAiInitialReview(...args),
   startIntakeAiInitialReview: (...args: unknown[]) =>
@@ -189,13 +195,15 @@ function answerResponse(session: IntakeSession): SubmitIntakeAnswerResponse {
 
 describe("FamilyIntakeForm", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mocked.getIntakeAiFollowUp.mockResolvedValue({
       question: null,
       degradation_status: "rule_based_fallback",
       generated_at: "2026-07-25T08:00:00Z",
     });
+    mocked.listIntakeAnswerRevisions.mockResolvedValue([]);
+    mocked.listIntakeDraftVersions.mockResolvedValue({ items: [] });
     window.sessionStorage.clear();
-    vi.clearAllMocks();
   });
 
   it("restores the current-tab draft and does not create a second intake session", async () => {
@@ -605,6 +613,11 @@ describe("FamilyIntakeForm", () => {
     render(<FamilyIntakeForm onCancel={vi.fn()} onConfirmed={onConfirmed} />);
 
     await screen.findByText("确认后写入案件的资料");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "最后出现地点" }),
+      ).toHaveValue("模拟社区北门"),
+    );
     fireEvent.change(screen.getByRole("textbox", { name: "姓名或称呼" }), {
       target: { value: "模拟老人" },
     });
