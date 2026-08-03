@@ -304,6 +304,7 @@ dependencies = [
  "hex",
  "http 0.2.12",
  "image",
+ "log",
  "migration",
  "reqwest",
  "sea-orm",

@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { apiRequest, apiSseRequest } from "./client";
 
 export interface IntakeQuestion {
   field: string;
@@ -183,7 +183,7 @@ export function generateIntakeDraft(
   token: string,
   sessionId: string,
 ): Promise<IntakeDraft> {
-  return apiRequest(
+  return apiSseRequest(
     `/intake-sessions/${sessionId}/profile-draft/generate`,
     { method: "POST" },
     token,
@@ -292,7 +292,7 @@ export function startIntakeAiInitialReview(
   sessionId: string,
   profile: ConfirmedIntakeProfile,
 ): Promise<IntakeAiInitialReviewResponse> {
-  return apiRequest<IntakeAiInitialReviewResponse>(
+  return apiSseRequest<IntakeAiInitialReviewResponse>(
     `/intake-sessions/${sessionId}/ai-initial-review`,
     { method: "POST", body: JSON.stringify({ profile }) },
     token,

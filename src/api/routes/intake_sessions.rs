@@ -1,4 +1,9 @@
-use actix_web::{HttpResponse, web};
+use std::time::Duration;
+
+use actix_web::{Error, HttpResponse, http::header, web};
+use futures_util::stream;
+use serde_json::json;
+use tokio::sync::mpsc;
 
 use crate::{
     app_state::AppState,
@@ -90,15 +95,58 @@ async fn generate_intake_profile_draft(
     state: web::Data<AppState>,
     session_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Created().json(
-        intake_session_service::generate_intake_profile_draft(
+    let session_id = session_id.into_inner();
+    let (sender, receiver) = mpsc::channel(2);
+    let _ = sender.try_send(sse_event(
+        "started",
+        json!({ "session_id": session_id.clone() }),
+    ));
+
+    tokio::spawn(async move {
+        let event = match intake_session_service::generate_intake_profile_draft(
             &state.db,
             &auth,
             &session_id,
             &state.ai_gateway,
         )
-        .await?,
-    ))
+        .await
+        {
+            Ok(draft) => sse_event("completed", json!(draft)),
+            Err(error) => sse_event("error", json!({ "message": error.to_string() })),
+        };
+        let _ = sender.send(event).await;
+    });
+
+    Ok(intake_sse_response(receiver))
+}
+
+fn intake_sse_response(receiver: mpsc::Receiver<web::Bytes>) -> HttpResponse {
+    let events = stream::unfold(
+        (receiver, tokio::time::interval(Duration::from_secs(10))),
+        |(mut receiver, mut heartbeat)| async move {
+            tokio::select! {
+                event = receiver.recv() => event.map(|event| {
+                    (Ok::<_, Error>(event), (receiver, heartbeat))
+                }),
+                _ = heartbeat.tick() => Some((
+                    Ok(web::Bytes::from_static(b": keep-alive\n\n")),
+                    (receiver, heartbeat),
+                )),
+            }
+        },
+    );
+
+    HttpResponse::Created()
+        .insert_header((header::CONTENT_TYPE, "text/event-stream"))
+        .insert_header((header::CACHE_CONTROL, "no-cache"))
+        .insert_header(("X-Accel-Buffering", "no"))
+        .streaming(events)
+}
+
+fn sse_event(event: &str, payload: serde_json::Value) -> web::Bytes {
+    let payload = serde_json::to_string(&payload)
+        .unwrap_or_else(|_| "{\"message\":\"internal service error\"}".to_owned());
+    web::Bytes::from(format!("event: {event}\ndata: {payload}\n\n"))
 }
 
 async fn list_intake_profile_draft_versions(
@@ -189,16 +237,31 @@ async fn start_ai_initial_review(
     session_id: web::Path<String>,
     request: web::Json<StartIntakeAiInitialReviewRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Created().json(
-        intake_session_service::start_ai_initial_review(
+    let session_id = session_id.into_inner();
+    let request = request.into_inner();
+    let (sender, receiver) = mpsc::channel(2);
+    let _ = sender.try_send(sse_event(
+        "started",
+        json!({ "session_id": session_id.clone() }),
+    ));
+
+    tokio::spawn(async move {
+        let event = match intake_session_service::start_ai_initial_review(
             &state.db,
             &auth,
             &session_id,
-            request.into_inner(),
+            request,
             &state.ai_gateway,
         )
-        .await?,
-    ))
+        .await
+        {
+            Ok(review) => sse_event("completed", json!(review)),
+            Err(error) => sse_event("error", json!({ "message": error.to_string() })),
+        };
+        let _ = sender.send(event).await;
+    });
+
+    Ok(intake_sse_response(receiver))
 }
 
 async fn acknowledge_ai_initial_review(

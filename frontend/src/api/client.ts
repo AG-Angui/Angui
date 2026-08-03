@@ -102,3 +102,116 @@ export async function apiRequest<T>(
   }
   return (await response.json()) as T;
 }
+
+/**
+ * Reads a server-sent event response that carries its final JSON value in a
+ * `completed` event. Heartbeats intentionally have no data and are ignored.
+ */
+export async function apiSseRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  token?: string | null,
+): Promise<T> {
+  const headers = new Headers(options.headers);
+  headers.set("Accept", "text/event-stream");
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch {
+    throw new ApiClientError(
+      0,
+      "network_error",
+      userMessageFor(0, "network_error"),
+    );
+  }
+
+  if (!response.ok) {
+    let payload: ApiErrorPayload = {};
+    try {
+      payload = (await response.json()) as ApiErrorPayload;
+    } catch {
+      // A proxy may return an HTML error page; retain the HTTP fallback.
+    }
+    const code = payload.error?.code ?? "request_failed";
+    if (response.status === 401 && token) notifySessionExpired();
+    throw new ApiClientError(
+      response.status,
+      code,
+      userMessageFor(response.status, code, Boolean(token)),
+    );
+  }
+
+  if (!response.body) {
+    throw new ApiClientError(
+      0,
+      "stream_missing",
+      userMessageFor(0, "stream_missing"),
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      buffered += decoder.decode(value, { stream: !done });
+      const frames = buffered.split(/\r?\n\r?\n/);
+      buffered = frames.pop() ?? "";
+      for (const frame of frames) {
+        let event = "message";
+        const data: string[] = [];
+        for (const line of frame.split(/\r?\n/)) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+        }
+        if (data.length === 0) continue;
+
+        let payload: unknown;
+        try {
+          payload = JSON.parse(data.join("\n"));
+        } catch {
+          throw new ApiClientError(
+            0,
+            "invalid_stream",
+            userMessageFor(0, "invalid_stream"),
+          );
+        }
+        if (event === "completed") return payload as T;
+        if (event === "error") {
+          const message =
+            payload &&
+            typeof payload === "object" &&
+            "message" in payload &&
+            typeof payload.message === "string"
+              ? payload.message
+              : userMessageFor(0, "stream_failed");
+          throw new ApiClientError(500, "stream_failed", message);
+        }
+      }
+      if (done) break;
+    }
+  } catch (cause) {
+    if (cause instanceof ApiClientError) throw cause;
+    throw new ApiClientError(
+      0,
+      "stream_interrupted",
+      userMessageFor(0, "stream_interrupted"),
+    );
+  } finally {
+    reader.releaseLock();
+  }
+
+  throw new ApiClientError(
+    0,
+    "stream_incomplete",
+    userMessageFor(0, "stream_incomplete"),
+  );
+}
