@@ -11,7 +11,7 @@ use angui::{
     services::intake_session_service,
 };
 
-use crate::support::{COMMANDER, FAMILY, TestContext, assert_error};
+use crate::support::{COMMANDER, FAMILY, TestContext, assert_error, read_sse_completed_json};
 
 async fn ready_session(context: &TestContext) -> String {
     let family = context.authenticated(FAMILY).await;
@@ -172,7 +172,14 @@ async fn post_confirm_creates_one_active_case_from_human_confirmed_overrides() {
     )
     .await;
     assert_eq!(initial_review.status(), StatusCode::CREATED);
-    let initial_body: Value = test::read_body_json(initial_review).await;
+    assert_eq!(
+        initial_review
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    let initial_body = read_sse_completed_json(initial_review).await;
     assert_eq!(initial_body["status"], "awaiting_family_review");
     assert_eq!(initial_body["degradation_status"], "rule_based_fallback");
 
@@ -289,6 +296,7 @@ async fn post_confirm_accepts_the_two_runtime_required_profile_fields() {
     )
     .await;
     assert_eq!(initial_review.status(), StatusCode::CREATED);
+    let _ = read_sse_completed_json(initial_review).await;
     let acknowledgement = test::call_service(
         &app,
         test::TestRequest::post()
@@ -363,6 +371,7 @@ async fn post_confirm_requires_creator_human_confirmation_and_valid_profile_with
     )
     .await;
     assert_eq!(initial_review.status(), StatusCode::CREATED);
+    let _ = read_sse_completed_json(initial_review).await;
     let acknowledgement = test::call_service(
         &app,
         test::TestRequest::post()
