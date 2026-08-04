@@ -30,6 +30,7 @@ describe("apiRequest", () => {
         status,
         code,
         message,
+        detail: "internal state detail",
       });
     },
   );
