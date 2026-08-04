@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { load } from "@amap/amap-jsapi-loader";
 import { LocationConfirmationPicker } from "./LocationConfirmationPicker";
@@ -275,6 +275,69 @@ describe("LocationConfirmationPicker", () => {
 
     await screen.findByLabelText("位置确认地图");
     expect(screen.getByText("地点 116.4,39.92")).toBeInTheDocument();
+  });
+
+  it("clears stale results when the search keyword changes or is emptied", async () => {
+    const originalSearch = amap.placeSearch.search.getMockImplementation();
+    let pendingSearch:
+      | ((
+          status: string,
+          result: {
+            poiList?: {
+              pois?: Array<{
+                id?: string;
+                name?: string;
+                address?: string;
+                location?: { getLng(): number; getLat(): number };
+              }>;
+            };
+          },
+        ) => void)
+      | undefined;
+    amap.placeSearch.search.mockImplementation((_keyword, callback) => {
+      pendingSearch = callback;
+    });
+
+    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索地点" }), {
+      target: { value: "旧关键词" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "搜索地点" }));
+    await waitFor(() => expect(pendingSearch).toBeDefined());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索地点" }), {
+      target: { value: "新关键词" },
+    });
+    await act(async () => {
+      pendingSearch?.("complete", {
+        poiList: {
+          pois: [
+            {
+              id: "stale-place",
+              name: "旧搜索结果",
+              location: {
+                getLng: () => 116.4,
+                getLat: () => 39.92,
+              },
+            },
+          ],
+        },
+      });
+    });
+    expect(screen.queryByText("旧搜索结果")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索地点" }), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "搜索地点" }));
+    expect(
+      screen.getByText("请输入地点、地标或场所后再搜索。"),
+    ).toBeInTheDocument();
+
+    if (originalSearch) {
+      amap.placeSearch.search.mockImplementation(originalSearch);
+    }
   });
 
   it("does not confirm when reverse geocoding fails and preserves manual entry", async () => {

@@ -425,6 +425,9 @@ export function LocationConfirmationPicker({
   function searchPlaces() {
     const query = searchQuery.trim();
     if (!query) {
+      searchOperationRef.current += 1;
+      setSearchResults([]);
+      setIsSearching(false);
       setMessage("请输入地点、地标或场所后再搜索。");
       return;
     }
@@ -528,7 +531,12 @@ export function LocationConfirmationPicker({
           maxLength={200}
           placeholder="输入地址、地标或场所"
           className="min-h-9 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-brand-600"
-          onChange={(event) => setSearchQuery(event.target.value)}
+          onChange={(event) => {
+            searchOperationRef.current += 1;
+            setSearchQuery(event.target.value);
+            setSearchResults([]);
+            setIsSearching(false);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
