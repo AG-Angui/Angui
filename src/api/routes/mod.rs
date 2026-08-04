@@ -4,6 +4,7 @@ mod cases;
 mod clues;
 mod health;
 mod intake_sessions;
+mod learning;
 mod tasks;
 mod user_profiles;
 
@@ -49,6 +50,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .configure(user_profiles::configure)
             .configure(cases::configure)
             .configure(intake_sessions::configure)
+            .configure(learning::configure)
             .configure(clues::configure)
             .configure(tasks::configure),
     );

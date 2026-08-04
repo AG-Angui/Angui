@@ -37,6 +37,7 @@ mod m0034_add_summary_versions;
 mod m0035_add_clue_promotion;
 mod m0036_add_intake_ai_initial_review;
 mod m0037_add_ai_review_materials;
+mod m0038_create_learning_center;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -83,6 +84,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0035_add_clue_promotion::Migration),
             Box::new(m0036_add_intake_ai_initial_review::Migration),
             Box::new(m0037_add_ai_review_materials::Migration),
+            Box::new(m0038_create_learning_center::Migration),
         ]
     }
 }
@@ -203,7 +205,7 @@ fn normalize_mysql_identifier(identifier: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm_migration::sea_orm::{ConnectionTrait, Database, Statement};
+    use sea_orm_migration::sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 
     use super::{Migrator, MigratorTrait, mysql_drop_index_is_redundant};
 
@@ -381,6 +383,63 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[tokio::test]
+    async fn sqlite_learning_center_migration_repairs_a_partial_prior_run() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+
+        Migrator::up(&database, Some(37))
+            .await
+            .expect("migrations before the learning center should succeed");
+        database
+            .execute_unprepared(
+                include_str!("../sql/sqlite/up/0038_create_learning_center.sql")
+                    .split("-- statement-break")
+                    .next()
+                    .expect("learning resources DDL should be present"),
+            )
+            .await
+            .expect("partial learning resources table should be created");
+        database
+            .execute_unprepared(
+                "INSERT INTO learning_resources (id, title, summary, content, resource_type, tags_json, source_name, version, visibility, status, effective_at, created_at, updated_at) VALUES ('preserved-resource', 'title', 'summary', 'content', 'manual', '[]', 'source', 1, 'learner', 'published', '2026-08-04T00:00:00.000Z', '2026-08-04T00:00:00.000Z', '2026-08-04T00:00:00.000Z');",
+            )
+            .await
+            .expect("existing learning resource should be retained");
+
+        Migrator::up(&database, None)
+            .await
+            .expect("learning center migration should repair missing tables and indexes");
+
+        for table in [
+            "learning_resources",
+            "learning_questions",
+            "learning_question_answers",
+        ] {
+            let found = database
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = '{table}'"
+                    ),
+                ))
+                .await
+                .expect("table lookup should succeed");
+            assert!(found.is_some(), "{table} should exist after the repair");
+        }
+
+        let preserved = database
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT 1 AS found FROM learning_resources WHERE id = 'preserved-resource'"
+                    .to_owned(),
+            ))
+            .await
+            .expect("existing resource lookup should succeed");
+        assert!(preserved.is_some(), "partial-run data must be retained");
     }
 
     #[tokio::test]

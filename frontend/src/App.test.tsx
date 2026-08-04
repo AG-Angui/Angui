@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -10,6 +10,8 @@ const mocked = vi.hoisted(() => ({
   listCases: vi.fn().mockResolvedValue([]),
   getCase: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
+  listLearningResources: vi.fn().mockResolvedValue([]),
+  listLearningQuestions: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./auth/useAuth", () => ({ useAuth: () => mocked.auth }));
@@ -27,6 +29,14 @@ vi.mock("./api/cases", () => ({
 }));
 vi.mock("./components/ServiceStatus", () => ({
   ServiceStatus: () => <span>服务状态</span>,
+}));
+vi.mock("./api/learning", () => ({
+  listLearningResources: (...args: unknown[]) =>
+    mocked.listLearningResources(...args),
+  listLearningQuestions: (...args: unknown[]) =>
+    mocked.listLearningQuestions(...args),
+  askKnowledge: vi.fn(),
+  submitLearningAnswer: vi.fn(),
 }));
 
 function setAuth(
@@ -138,4 +148,17 @@ describe("application role routing", () => {
       ).toBeInTheDocument();
     },
   );
+
+  it("exposes the learning center to learner, family, and volunteer audiences only", async () => {
+    setAuth("learner");
+    renderApp("/learning");
+    expect(await screen.findByRole("heading", { name: "学习中心" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "学习中心" })).toBeInTheDocument();
+
+    cleanup();
+    setAuth("member", ["commander"]);
+    renderApp("/learning");
+    expect(await screen.findByText("行动总览")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "学习中心" })).not.toBeInTheDocument();
+  });
 });

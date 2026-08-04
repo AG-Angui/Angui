@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { CaseWorkspacePage } from "./pages/CaseWorkspacePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
+import { LearningCenterPage } from "./pages/LearningCenterPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { VolunteerWorkspacePage } from "./pages/VolunteerWorkspacePage";
 
@@ -30,6 +31,16 @@ function CaseRoleRoute({
   );
 }
 
+function LearningRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  const canAccessLearning =
+    user?.account_type === "learner" ||
+    (user?.account_type === "member" &&
+      (user.global_capabilities.length === 0 ||
+        user.global_capabilities.includes("volunteer")));
+  return canAccessLearning ? children : <Navigate to="/" replace />;
+}
+
 function App() {
   const { user, isLoading } = useAuth();
 
@@ -52,6 +63,14 @@ function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
+        <Route
+          path="learning"
+          element={
+            <LearningRoute>
+              <LearningCenterPage />
+            </LearningRoute>
+          }
+        />
         <Route path="profile" element={<ProfilePage />} />
         <Route
           path="family"

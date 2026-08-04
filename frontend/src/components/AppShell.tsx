@@ -1,5 +1,6 @@
 import { Button, Chip, Spinner } from "@heroui/react";
 import {
+  BookOpen,
   HeartHandshake,
   LayoutDashboard,
   LogOut,
@@ -20,10 +21,12 @@ interface NavigationItem {
   end?: boolean;
   capability?: "commander" | "volunteer";
   familyOnly?: boolean;
+  learningAudience?: boolean;
 }
 
 const navigation: NavigationItem[] = [
   { to: "/", label: "总览", icon: LayoutDashboard, end: true },
+  { to: "/learning", label: "学习中心", icon: BookOpen, learningAudience: true },
   { to: "/family", label: "家属端", icon: HeartHandshake, familyOnly: true },
   {
     to: "/command",
@@ -63,7 +66,13 @@ export function AppShell() {
       user &&
       (item.to === "/" ||
         item.to === "/profile" ||
-        (user.account_type === "member" &&
+        (item.learningAudience &&
+          (user.account_type === "learner" ||
+            (user.account_type === "member" &&
+              (user.global_capabilities.length === 0 ||
+                user.global_capabilities.includes("volunteer"))))) ||
+        (!item.learningAudience &&
+          user.account_type === "member" &&
           (!item.capability ||
             user.global_capabilities.includes(item.capability)) &&
           (!item.familyOnly || user.global_capabilities.length === 0))),
