@@ -4,6 +4,7 @@ mod cases;
 mod clues;
 mod health;
 mod intake_sessions;
+mod learning;
 mod tasks;
 mod user_profiles;
 
@@ -45,6 +46,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .wrap(ApiSessionAuthentication)
             .service(health::get_health)
             .configure(auth::configure)
+            .configure(learning::configure)
             .configure(admin::configure)
             .configure(user_profiles::configure)
             .configure(cases::configure)

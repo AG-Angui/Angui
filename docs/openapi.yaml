@@ -1774,6 +1774,72 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/learning/public/prevention-card:
+    get:
+      tags: [Learning]
+      operationId: getPublicPreventionCard
+      summary: Get the approved public prevention card for offline use
+      description: Returns the current effective prevention resource only when it is public, published, training-scoped, and has a complete immutable governance chain. A withdrawn card is not returned.
+      x-data-classification: public
+      responses:
+        "200": { description: Approved public prevention card }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/learning/resources:
+    get:
+      tags: [Learning]
+      operationId: listLearningResources
+      summary: List reviewed learning resources visible to the current account
+      description: Returns only effective training resources whose visibility matches the authenticated account and whose immutable governance chain records independent de-identification, review, and publication. Withdrawn, future, public-information-only, internal-case, and raw archive material are never returned.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: public-or-training
+      responses:
+        "200": { description: Reviewed learning resources }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/learning/questions:
+    get:
+      tags: [Learning]
+      operationId: listLearningQuestions
+      summary: List visible theory questions without answers
+      description: Correct options, explanations, and unpublished questions are excluded. Filter by optional tag or difficulty.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: training
+      responses:
+        "200": { description: Question prompts and options only }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/learning/questions/{question_id}/answers:
+    post:
+      tags: [Learning]
+      operationId: submitLearningQuestionAnswer
+      summary: Submit one option and receive a source-backed explanation
+      description: Server-side validation checks visibility, published version, and that the submitted option belongs to the requested question. The result does not expose answers for other questions.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: training
+      responses:
+        "200": { description: Correctness and source-backed explanation }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/knowledge/ask:
+    post:
+      tags: [Learning]
+      operationId: askKnowledge
+      summary: Answer using only visible reviewed learning resources
+      description: Uses a deterministic source-matching fallback over only governance-approved training resources. When no reliable source is visible, including prompt-injection-like text, it returns an explicit insufficient-sources response and an instruction to seek human verification.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: training
+      responses:
+        "200": { description: Source-backed or insufficient-sources answer }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 components:
   securitySchemes:
     bearerAuth:

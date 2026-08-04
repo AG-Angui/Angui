@@ -1,0 +1,11 @@
+CREATE TABLE learning_resources (id VARCHAR(36) PRIMARY KEY, title TEXT NOT NULL, summary TEXT NOT NULL, content TEXT NOT NULL, resource_type VARCHAR(32) NOT NULL CHECK (resource_type IN ('team_intro', 'manual', 'prevention', 'case_study')), tags_json TEXT NOT NULL, source_name TEXT NOT NULL, source_url TEXT, version INTEGER NOT NULL CHECK (version >= 1), visibility VARCHAR(32) NOT NULL CHECK (visibility IN ('public', 'authenticated', 'volunteer', 'learner')), status VARCHAR(32) NOT NULL CHECK (status IN ('published', 'withdrawn')), effective_at VARCHAR(40) NOT NULL, withdrawn_at VARCHAR(40), created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL);
+-- statement-break
+CREATE INDEX idx_learning_resources_visible ON learning_resources(status, visibility, effective_at);
+-- statement-break
+CREATE TABLE learning_questions (id VARCHAR(36) PRIMARY KEY, source_resource_id VARCHAR(36) NOT NULL REFERENCES learning_resources(id) ON DELETE RESTRICT, prompt TEXT NOT NULL, question_type VARCHAR(32) NOT NULL CHECK (question_type IN ('single_choice', 'true_false', 'scenario')), difficulty VARCHAR(32) NOT NULL CHECK (difficulty IN ('basic', 'intermediate', 'advanced')), tags_json TEXT NOT NULL, options_json TEXT NOT NULL, correct_option_id VARCHAR(128) NOT NULL, explanation TEXT NOT NULL, version INTEGER NOT NULL CHECK (version >= 1), visibility VARCHAR(32) NOT NULL CHECK (visibility IN ('authenticated', 'volunteer', 'learner')), status VARCHAR(32) NOT NULL CHECK (status IN ('published', 'withdrawn')), effective_at VARCHAR(40) NOT NULL, withdrawn_at VARCHAR(40), created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL);
+-- statement-break
+CREATE INDEX idx_learning_questions_visible ON learning_questions(status, visibility, difficulty, effective_at);
+-- statement-break
+CREATE TABLE learning_question_answers (id VARCHAR(36) PRIMARY KEY, question_id VARCHAR(36) NOT NULL REFERENCES learning_questions(id) ON DELETE RESTRICT, user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE RESTRICT, selected_option_id VARCHAR(128) NOT NULL, is_correct BOOLEAN NOT NULL, question_version INTEGER NOT NULL CHECK (question_version >= 1), created_at VARCHAR(40) NOT NULL);
+-- statement-break
+CREATE INDEX idx_learning_question_answers_user_created ON learning_question_answers(user_id, created_at);

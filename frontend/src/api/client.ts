@@ -11,12 +11,14 @@ interface ApiErrorPayload {
 export class ApiClientError extends Error {
   status: number;
   code: string;
+  detail?: string;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, detail?: string) {
     super(message);
     this.name = "ApiClientError";
     this.status = status;
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -94,6 +96,7 @@ export async function apiRequest<T>(
       response.status,
       code,
       userMessageFor(response.status, code, Boolean(token)),
+      payload.error?.message,
     );
   }
 

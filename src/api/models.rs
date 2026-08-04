@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     entities::{
@@ -16,6 +17,154 @@ pub struct AuthenticatedUser {
     pub account_type: AccountType,
     pub global_capabilities: Vec<GlobalCapability>,
     pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearningResourceQuery {
+    pub resource_type: Option<String>,
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningResourceResponse {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub content: String,
+    pub resource_type: String,
+    pub tags: Vec<String>,
+    pub source_name: String,
+    pub source_url: Option<String>,
+    pub version: i32,
+    pub effective_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearningQuestionQuery {
+    pub tag: Option<String>,
+    pub difficulty: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningQuestionResponse {
+    pub id: String,
+    pub prompt: String,
+    pub question_type: String,
+    pub difficulty: String,
+    pub tags: Vec<String>,
+    pub options: Value,
+    pub source_resource_id: String,
+    pub version: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitLearningAnswerRequest {
+    pub selected_option_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubmitLearningAnswerResponse {
+    pub question_id: String,
+    pub is_correct: bool,
+    pub explanation: String,
+    pub source: LearningAnswerSource,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningAnswerSource {
+    pub resource_id: String,
+    pub title: String,
+    pub version: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeAskRequest {
+    pub question: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeAnswerResponse {
+    pub answer: String,
+    pub certainty: String,
+    pub sources: Vec<LearningAnswerSource>,
+    pub human_review_notice: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateLearningResourceRequest {
+    pub title: String,
+    pub summary: String,
+    pub content: String,
+    pub resource_type: String,
+    pub tags: Vec<String>,
+    pub source_name: String,
+    pub source_url: Option<String>,
+    pub visibility: String,
+    pub effective_at: String,
+    pub permitted_use: String,
+    pub submission_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateLearningQuestionRequest {
+    pub source_resource_id: String,
+    pub prompt: String,
+    pub question_type: String,
+    pub difficulty: String,
+    pub tags: Vec<String>,
+    pub options: Value,
+    pub correct_option_id: String,
+    pub explanation: String,
+    pub visibility: String,
+    pub effective_at: String,
+    pub permitted_use: String,
+    pub submission_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearningContentActionRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningContentLifecycleResponse {
+    pub submitted_by_user_id: String,
+    pub deidentified_by_user_id: Option<String>,
+    pub reviewed_by_user_id: Option<String>,
+    pub published_by_user_id: Option<String>,
+    pub withdrawn_by_user_id: Option<String>,
+    pub state: String,
+    pub permitted_use: String,
+    pub events: Vec<LearningContentReviewEventResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningContentReviewEventResponse {
+    pub event_type: String,
+    pub actor_user_id: String,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagedLearningResourceResponse {
+    #[serde(flatten)]
+    pub resource: LearningResourceResponse,
+    pub lifecycle: LearningContentLifecycleResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagedLearningQuestionResponse {
+    #[serde(flatten)]
+    pub question: LearningQuestionResponse,
+    pub lifecycle: LearningContentLifecycleResponse,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,0 +1,3 @@
+CREATE TABLE learning_content_review_events (id VARCHAR(36) PRIMARY KEY, content_type VARCHAR(16) NOT NULL CHECK (content_type IN ('resource', 'question')), content_id VARCHAR(36) NOT NULL, content_version INTEGER NOT NULL CHECK (content_version >= 1), event_type VARCHAR(32) NOT NULL CHECK (event_type IN ('submitted', 'deidentified', 'reviewed', 'published', 'withdrawn', 'rejected')), actor_user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE RESTRICT, reason TEXT NOT NULL, permitted_use VARCHAR(32) NOT NULL CHECK (permitted_use IN ('training', 'public_information')), created_at VARCHAR(40) NOT NULL);
+-- statement-break
+CREATE INDEX idx_learning_content_review_events_content ON learning_content_review_events(content_type, content_id, content_version, created_at);
