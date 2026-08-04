@@ -1,6 +1,7 @@
 import { Button, Chip, Spinner } from "@heroui/react";
 import {
   BookOpen,
+  ShieldCheck,
   HeartHandshake,
   LayoutDashboard,
   LogOut,
@@ -22,11 +23,13 @@ interface NavigationItem {
   capability?: "commander" | "volunteer";
   familyOnly?: boolean;
   learningAudience?: boolean;
+  adminOnly?: boolean;
 }
 
 const navigation: NavigationItem[] = [
   { to: "/", label: "总览", icon: LayoutDashboard, end: true },
   { to: "/learning", label: "学习中心", icon: BookOpen, learningAudience: true },
+  { to: "/admin/learning", label: "内容治理", icon: ShieldCheck, adminOnly: true },
   { to: "/family", label: "家属端", icon: HeartHandshake, familyOnly: true },
   {
     to: "/command",
@@ -71,7 +74,9 @@ export function AppShell() {
             (user.account_type === "member" &&
               (user.global_capabilities.length === 0 ||
                 user.global_capabilities.includes("volunteer"))))) ||
+        (item.adminOnly && user.global_capabilities.includes("admin")) ||
         (!item.learningAudience &&
+          !item.adminOnly &&
           user.account_type === "member" &&
           (!item.capability ||
             user.global_capabilities.includes(item.capability)) &&

@@ -12,6 +12,8 @@ const mocked = vi.hoisted(() => ({
   getCaseResourceConfiguration: vi.fn(),
   listLearningResources: vi.fn().mockResolvedValue([]),
   listLearningQuestions: vi.fn().mockResolvedValue([]),
+  listManagedLearningResources: vi.fn().mockResolvedValue([]),
+  listManagedLearningQuestions: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./auth/useAuth", () => ({ useAuth: () => mocked.auth }));
@@ -35,6 +37,10 @@ vi.mock("./api/learning", () => ({
     mocked.listLearningResources(...args),
   listLearningQuestions: (...args: unknown[]) =>
     mocked.listLearningQuestions(...args),
+  listManagedLearningResources: (...args: unknown[]) =>
+    mocked.listManagedLearningResources(...args),
+  listManagedLearningQuestions: (...args: unknown[]) =>
+    mocked.listManagedLearningQuestions(...args),
   askKnowledge: vi.fn(),
   submitLearningAnswer: vi.fn(),
 }));
@@ -160,5 +166,18 @@ describe("application role routing", () => {
     renderApp("/learning");
     expect(await screen.findByText("行动总览")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "学习中心" })).not.toBeInTheDocument();
+  });
+
+  it("exposes content governance only to administrators", async () => {
+    setAuth("member", ["admin"]);
+    renderApp("/admin/learning");
+    expect(await screen.findByRole("heading", { name: "学习内容治理" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "内容治理" })).toBeInTheDocument();
+
+    cleanup();
+    setAuth("member", ["commander"]);
+    renderApp("/admin/learning");
+    expect(await screen.findByText("行动总览")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "内容治理" })).not.toBeInTheDocument();
   });
 });

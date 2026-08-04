@@ -7,6 +7,7 @@ import { CaseWorkspacePage } from "./pages/CaseWorkspacePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { LearningCenterPage } from "./pages/LearningCenterPage";
+import { LearningGovernancePage } from "./pages/LearningGovernancePage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { VolunteerWorkspacePage } from "./pages/VolunteerWorkspacePage";
 
@@ -41,6 +42,11 @@ function LearningRoute({ children }: { children: ReactNode }) {
   return canAccessLearning ? children : <Navigate to="/" replace />;
 }
 
+function AdminRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  return user?.global_capabilities.includes("admin") ? children : <Navigate to="/" replace />;
+}
+
 function App() {
   const { user, isLoading } = useAuth();
 
@@ -72,6 +78,14 @@ function App() {
           }
         />
         <Route path="profile" element={<ProfilePage />} />
+        <Route
+          path="admin/learning"
+          element={
+            <AdminRoute>
+              <LearningGovernancePage />
+            </AdminRoute>
+          }
+        />
         <Route
           path="family"
           element={
