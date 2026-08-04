@@ -1,6 +1,6 @@
 import { load as loadAmapLibrary } from "@amap/amap-jsapi-loader";
 import { Button } from "@heroui/react";
-import { LocateFixed, MapPin, X } from "lucide-react";
+import { LocateFixed, MapPin, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type LocationPrecision = "exact" | "approximate";
@@ -56,6 +56,27 @@ type AmapApi = {
       ) => void,
     ): void;
   };
+  PlaceSearch: new (options?: { pageSize?: number }) => {
+    search(
+      keyword: string,
+      callback: (
+        status: string,
+        result: {
+          poiList?: {
+            pois?: Array<{
+              id?: string;
+              name?: string;
+              address?: string;
+              location?: {
+                getLat(): number;
+                getLng(): number;
+              };
+            }>;
+          };
+        },
+      ) => void,
+    ): void;
+  };
   convertFrom(
     position: [number, number],
     source: "gps",
@@ -82,6 +103,13 @@ declare global {
 }
 
 type CandidateLocation = ConfirmedLocation & { address: string };
+type PlaceSearchResult = {
+  id: string;
+  title: string;
+  detail: string;
+  longitude: number;
+  latitude: number;
+};
 
 let amapPromise: Promise<AmapApi> | null = null;
 
@@ -109,7 +137,7 @@ function loadAmap(): Promise<AmapApi> {
   amapPromise = loadAmapLibrary({
     key,
     version: "2.0",
-    plugins: ["AMap.Geocoder"],
+    plugins: ["AMap.Geocoder", "AMap.PlaceSearch"],
   })
     .then((api) => api as AmapApi)
     .catch((error) => {
@@ -152,11 +180,15 @@ export function LocationConfirmationPicker({
   const amap = useRef<AmapApi | null>(null);
   const candidateRef = useRef<CandidateLocation | null>(null);
   const operationRef = useRef(0);
+  const searchOperationRef = useRef(0);
   const [candidate, setCandidate] = useState<CandidateLocation | null>(null);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<PlaceSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [message, setMessage] = useState("");
 
   const resolveAddress = useCallback((longitude: number, latitude: number) => {
@@ -224,6 +256,27 @@ export function LocationConfirmationPicker({
       marker.current?.setPosition([longitude, latitude]);
       map.current?.panTo([longitude, latitude]);
       resolveAddress(longitude, latitude);
+    },
+    [resolveAddress],
+  );
+
+  const openPickerAtCoordinates = useCallback(
+    (longitude: number, latitude: number) => {
+      ++operationRef.current;
+      const next: CandidateLocation = {
+        longitude,
+        latitude,
+        address: "",
+        precision: "approximate",
+      };
+      candidateRef.current = next;
+      setCandidate(next);
+      setIsPickerOpen(true);
+      setMessage("");
+      setSearchResults([]);
+      marker.current?.setPosition([longitude, latitude]);
+      map.current?.panTo([longitude, latitude]);
+      if (map.current) resolveAddress(longitude, latitude);
     },
     [resolveAddress],
   );
@@ -327,7 +380,7 @@ export function LocationConfirmationPicker({
               (status, result) => {
                 if (operation !== operationRef.current) return;
                 const point =
-                  status === "complete" && result.info === "OK"
+                  status === "complete" && result.info === "ok"
                     ? result.locations?.[0]
                     : undefined;
                 if (!point) {
@@ -369,8 +422,65 @@ export function LocationConfirmationPicker({
     );
   }
 
+  function searchPlaces() {
+    const query = searchQuery.trim();
+    if (!query) {
+      setMessage("请输入地点、地标或场所后再搜索。");
+      return;
+    }
+
+    const operation = ++searchOperationRef.current;
+    setMessage("");
+    setSearchResults([]);
+    setIsSearching(true);
+    void loadAmap()
+      .then((api) => {
+        if (operation !== searchOperationRef.current) return;
+        amap.current = api;
+        const placeSearch = new api.PlaceSearch({ pageSize: 5 });
+        placeSearch.search(query, (status, result) => {
+          if (operation !== searchOperationRef.current) return;
+          setIsSearching(false);
+          const places =
+            status === "complete"
+              ? (result.poiList?.pois ?? []).flatMap((place, index) => {
+                  const longitude = place.location?.getLng();
+                  const latitude = place.location?.getLat();
+                  if (longitude === undefined || latitude === undefined) {
+                    return [];
+                  }
+                  return [
+                    {
+                      id: place.id ?? `${longitude},${latitude},${index}`,
+                      title: place.name?.trim() || query,
+                      detail: place.address?.trim() || "",
+                      longitude,
+                      latitude,
+                    },
+                  ];
+                })
+              : [];
+          if (places.length === 0) {
+            setMessage("未找到可定位的地点，请调整关键词后重试。");
+            return;
+          }
+          setSearchResults(places);
+        });
+      })
+      .catch((cause: unknown) => {
+        if (operation !== searchOperationRef.current) return;
+        setIsSearching(false);
+        setMessage(
+          cause instanceof Error
+            ? cause.message
+            : "地图服务暂不可用。你仍可手动填写地点。",
+        );
+      });
+  }
+
   function clear() {
     operationRef.current += 1;
+    searchOperationRef.current += 1;
     candidateRef.current = null;
     map.current?.destroy();
     map.current = null;
@@ -381,6 +491,9 @@ export function LocationConfirmationPicker({
     setIsLocating(false);
     setIsMapReady(false);
     setIsGeocoding(false);
+    setSearchQuery("");
+    setSearchResults([]);
+    setIsSearching(false);
     setMessage("");
     onClear();
   }
@@ -408,6 +521,54 @@ export function LocationConfirmationPicker({
           </Button>
         )}
       </div>
+      <div className="flex gap-2">
+        <input
+          aria-label="搜索地点"
+          value={searchQuery}
+          maxLength={200}
+          placeholder="输入地址、地标或场所"
+          className="min-h-9 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-brand-600"
+          onChange={(event) => setSearchQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              searchPlaces();
+            }
+          }}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          isDisabled={isSearching}
+          onPress={searchPlaces}
+        >
+          <Search size={16} />
+          {isSearching ? "正在搜索" : "搜索地点"}
+        </Button>
+      </div>
+      {searchResults.length > 0 && (
+        <ul className="m-0 grid list-none divide-y divide-slate-200 overflow-hidden rounded-md border border-slate-200 bg-white p-0">
+          {searchResults.map((place) => (
+            <li key={place.id}>
+              <button
+                type="button"
+                className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-brand-50 focus:bg-brand-50 focus:outline-none"
+                onClick={() =>
+                  openPickerAtCoordinates(place.longitude, place.latitude)
+                }
+              >
+                <span className="block font-medium">{place.title}</span>
+                {place.detail && (
+                  <span className="mt-0.5 block text-xs text-slate-500">
+                    {place.detail}
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       {message && (
         <p className="m-0 text-xs text-amber-800" role="status">
           {message}

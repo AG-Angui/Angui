@@ -34,6 +34,41 @@ function createAmapMock() {
         }),
     ),
   };
+  const placeSearch = {
+    search: vi.fn(
+      (
+        _keyword: string,
+        callback: (
+          status: string,
+          result: {
+            poiList?: {
+              pois?: Array<{
+                id?: string;
+                name?: string;
+                address?: string;
+                location?: { getLng(): number; getLat(): number };
+              }>;
+            };
+          },
+        ) => void,
+      ) =>
+        callback("complete", {
+          poiList: {
+            pois: [
+              {
+                id: "test-place",
+                name: "测试地点",
+                address: "测试地址",
+                location: {
+                  getLng: () => 116.4,
+                  getLat: () => 39.92,
+                },
+              },
+            ],
+          },
+        }),
+    ),
+  };
   const api = {
     Map: class {
       destroy() {}
@@ -62,6 +97,9 @@ function createAmapMock() {
     Geocoder: class {
       getAddress = geocoder.getAddress;
     },
+    PlaceSearch: class {
+      search = placeSearch.search;
+    },
     convertFrom: vi.fn(
       (
         [longitude, latitude]: [number, number],
@@ -75,7 +113,7 @@ function createAmapMock() {
         ) => void,
       ) =>
         callback("complete", {
-          info: "OK",
+          info: "ok",
           locations: [
             {
               getLng: () => longitude + 0.01,
@@ -85,7 +123,13 @@ function createAmapMock() {
         }),
     ),
   };
-  return { api, geocoder, markerListeners, getMapClick: () => mapClick };
+  return {
+    api,
+    geocoder,
+    placeSearch,
+    markerListeners,
+    getMapClick: () => mapClick,
+  };
 }
 
 describe("LocationConfirmationPicker", () => {
@@ -97,6 +141,7 @@ describe("LocationConfirmationPicker", () => {
     amapLoad.mockResolvedValue(amap.api as never);
     vi.stubEnv("VITE_AMAP_JS_API_KEY", "test-key");
     vi.stubEnv("VITE_AMAP_JS_API_SERVICE_HOST", "/_AMapService");
+    vi.stubEnv("VITE_AMAP_JS_API_SECURITY_CODE", "");
   });
 
   afterEach(() => {
@@ -125,7 +170,7 @@ describe("LocationConfirmationPicker", () => {
     expect(amapLoad).toHaveBeenCalledWith({
       key: "test-key",
       version: "2.0",
-      plugins: ["AMap.Geocoder"],
+      plugins: ["AMap.Geocoder", "AMap.PlaceSearch"],
     });
     expect(window._AMapSecurityConfig).toEqual({
       serviceHost: "/_AMapService",
@@ -210,6 +255,26 @@ describe("LocationConfirmationPicker", () => {
       accuracyMeters: 20,
       precision: "exact",
     });
+  });
+
+  it("searches a typed location before opening the map confirmation", async () => {
+    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索地点" }), {
+      target: { value: "测试地点" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "搜索地点" }));
+
+    expect(await screen.findByText("测试地点")).toBeInTheDocument();
+    expect(amap.placeSearch.search).toHaveBeenLastCalledWith(
+      "测试地点",
+      expect.any(Function),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /测试地点/ }));
+
+    await screen.findByLabelText("位置确认地图");
+    expect(screen.getByText("地点 116.4,39.92")).toBeInTheDocument();
   });
 
   it("does not confirm when reverse geocoding fails and preserves manual entry", async () => {

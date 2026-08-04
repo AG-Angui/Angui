@@ -1340,16 +1340,28 @@ function CaseDetailView({
                 });
               }}
             >
-              <Field label="线索内容" required>
-                <TextArea
-                  value={clueContent}
-                  maxLength={4000}
-                  onChange={(event) => setClueContent(event.target.value)}
-                  rows={3}
-                  fullWidth
-                  required
+              <div className="min-w-0 space-y-3">
+                <Field label="线索内容" required>
+                  <TextArea
+                    value={clueContent}
+                    maxLength={4000}
+                    onChange={(event) => setClueContent(event.target.value)}
+                    rows={3}
+                    fullWidth
+                    required
+                  />
+                </Field>
+                <LocationConfirmationPicker
+                  onConfirm={(location) => {
+                    setClueLocation(location.address);
+                    setClueLocationPrecision(location.precision);
+                  }}
+                  onClear={() => {
+                    setClueLocation("");
+                    setClueLocationPrecision("");
+                  }}
                 />
-              </Field>
+              </div>
               <div className="space-y-3">
                 <Field label="来源类型">
                   <select
@@ -1380,16 +1392,6 @@ function CaseDetailView({
                     fullWidth
                   />
                 </Field>
-                <LocationConfirmationPicker
-                  onConfirm={(location) => {
-                    setClueLocation(location.address);
-                    setClueLocationPrecision(location.precision);
-                  }}
-                  onClear={() => {
-                    setClueLocation("");
-                    setClueLocationPrecision("");
-                  }}
-                />
                 <Field label="地点精度">
                   <select
                     className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
