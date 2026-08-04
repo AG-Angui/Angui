@@ -65,6 +65,10 @@ deploy() {
   require PREVIEW_BACKEND_DIR
   require PREVIEW_FRONTEND_DIR
 
+  if [[ "${AMAP_JSAPI_SECURITY_CODE:-}" == *$'\r'* || "${AMAP_JSAPI_SECURITY_CODE:-}" == *$'\n'* ]]; then
+    die "AMAP_JSAPI_SECURITY_CODE must be a single-line secret"
+  fi
+
   # The policy itself contains no endpoint or credential, but a configured
   # transport without a policy would otherwise silently become the disabled
   # "[]" configuration below. Flatten formatted JSON before handing it to
@@ -125,6 +129,7 @@ PREVIEW_ORIGIN=${PREVIEW_ORIGIN}
 PREVIEW_DEMO_PASSWORD=${PREVIEW_DEMO_PASSWORD}
 PREVIEW_PROXY_NETWORK=${PREVIEW_PROXY_NETWORK:-angui-proxy}
 AMAP_WEBSERVICE_KEY=${AMAP_WEBSERVICE_KEY:-}
+AMAP_JSAPI_SECURITY_CODE=${AMAP_JSAPI_SECURITY_CODE:-}
 EOF
 
   # A preview is a fresh, disposable environment. Removing its named SQLite

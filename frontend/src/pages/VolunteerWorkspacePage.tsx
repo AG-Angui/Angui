@@ -43,6 +43,7 @@ import {
   ErrorState,
   LoadingState,
 } from "../components/ContentState";
+import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
 
 const statusLabels: Record<TaskStatus, string> = {
   pending_claim: "待申请",
@@ -65,7 +66,11 @@ type WorkspaceCase = {
   summary: CaseSummary;
   tasks: CaseTask[];
 };
-type ClueDraft = { content: string; location: string };
+type ClueDraft = {
+  content: string;
+  location: string;
+  precision: "exact" | "approximate" | null;
+};
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
@@ -593,6 +598,7 @@ export function VolunteerWorkspacePage() {
             const clueDraft = clueDrafts[workspace.detail.id] ?? {
               content: "",
               location: "",
+              precision: null,
             };
             const assignedTasks = workspace.tasks.filter((task) =>
               myTaskIds.has(task.id),
@@ -687,7 +693,7 @@ export function VolunteerWorkspacePage() {
                               occurred_at: localNow(),
                               location_text: clueDraft.location.trim() || null,
                               location_precision: clueDraft.location.trim()
-                                ? "approximate"
+                                ? clueDraft.precision ?? "approximate"
                                 : null,
                             });
                             setClueDrafts((value) => ({
@@ -695,6 +701,7 @@ export function VolunteerWorkspacePage() {
                               [workspace.detail.id]: {
                                 content: "",
                                 location: "",
+                                precision: null,
                               },
                             }));
                             await load();
@@ -735,10 +742,33 @@ export function VolunteerWorkspacePage() {
                             [workspace.detail.id]: {
                               ...clueDraft,
                               location: event.target.value,
+                              precision: "approximate",
                             },
                           }))
                         }
                         fullWidth
+                      />
+                      <LocationConfirmationPicker
+                        onConfirm={(location) =>
+                          setClueDrafts((value) => ({
+                            ...value,
+                            [workspace.detail.id]: {
+                              ...clueDraft,
+                              location: location.address,
+                              precision: location.precision,
+                            },
+                          }))
+                        }
+                        onClear={() =>
+                          setClueDrafts((value) => ({
+                            ...value,
+                            [workspace.detail.id]: {
+                              ...clueDraft,
+                              location: "",
+                              precision: null,
+                            },
+                          }))
+                        }
                       />
                       <Button
                         type="submit"

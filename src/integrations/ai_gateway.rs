@@ -856,6 +856,14 @@ impl AiGateway {
                 AiGatewayError::MissingRuntimeConfiguration(route.credential_env.clone())
             })?;
             let native = self.build_native_request(route, request, &endpoint, &credential)?;
+            log::debug!(
+                target: "angui::ai_gateway::diagnostic",
+                "AI provider request: provider_id={}, model={}, protocol={:?}, body={}",
+                route.provider_id,
+                route.model,
+                route.protocol,
+                native.body(),
+            );
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_millis(route.timeout_ms))
                 .build()
@@ -886,7 +894,19 @@ impl AiGateway {
                     }
                 })?;
             if !response.status().is_success() {
-                return Err(if response.status().is_server_error() {
+                let status = response.status();
+                let raw_response = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<provider response body could not be read>".to_owned());
+                log::debug!(
+                    target: "angui::ai_gateway::diagnostic",
+                    "AI provider error response: provider_id={}, model={}, status={}, raw={raw_response}",
+                    route.provider_id,
+                    route.model,
+                    status,
+                );
+                return Err(if status.is_server_error() {
                     AiGatewayError::TransientProviderFailure
                 } else {
                     AiGatewayError::PermanentProviderFailure
@@ -902,12 +922,21 @@ impl AiGateway {
                 collect_openai_responses_stream(
                     response,
                     request.requested_output_tokens.saturating_mul(16),
+                    route,
                 )
                 .await?
             } else {
-                let payload = response
-                    .json::<Value>()
+                let raw_response = response
+                    .text()
                     .await
+                    .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
+                log::debug!(
+                    target: "angui::ai_gateway::diagnostic",
+                    "AI provider response: provider_id={}, model={}, raw={raw_response}",
+                    route.provider_id,
+                    route.model,
+                );
+                let payload = serde_json::from_str::<Value>(&raw_response)
                     .map_err(|_| AiGatewayError::InvalidProviderResponse)?;
                 extract_provider_output(route.protocol, &payload)?
             };
@@ -979,6 +1008,7 @@ fn extract_provider_output(
 async fn collect_openai_responses_stream(
     response: reqwest::Response,
     max_output_bytes: usize,
+    route: &ProviderRoute,
 ) -> Result<String, AiGatewayError> {
     const MAX_SSE_FRAME_BYTES: usize = 64 * 1024;
     const COMPACT_BUFFER_AFTER_BYTES: usize = 64 * 1024;
@@ -992,6 +1022,13 @@ async fn collect_openai_responses_stream(
 
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk.map_err(classify_transport_error)?;
+        log::debug!(
+            target: "angui::ai_gateway::diagnostic",
+            "AI provider SSE chunk: provider_id={}, model={}, raw={}",
+            route.provider_id,
+            route.model,
+            String::from_utf8_lossy(&chunk),
+        );
         buffered.extend_from_slice(&chunk);
         scan_start = scan_start.saturating_sub(3).max(frame_start);
         while let Some((frame_end, delimiter_length)) =

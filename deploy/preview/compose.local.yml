@@ -65,7 +65,17 @@ services:
         condition: service_healthy
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx.conf:/etc/nginx/default.conf.template:ro
+    environment:
+      AMAP_JSAPI_SECURITY_CODE: ${AMAP_JSAPI_SECURITY_CODE:-}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        envsubst '$$AMAP_JSAPI_SECURITY_CODE'
+        < /etc/nginx/default.conf.template
+        > /etc/nginx/conf.d/default.conf
+        && exec nginx -g 'daemon off;'
     labels:
       - traefik.enable=true
       - traefik.docker.network=${PREVIEW_PROXY_NETWORK:-angui-proxy}

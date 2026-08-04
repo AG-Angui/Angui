@@ -202,3 +202,28 @@ where
     let body: Value = test::read_body_json(response).await;
     assert_eq!(body["error"]["code"], code);
 }
+
+pub async fn read_sse_completed_json<B>(response: ServiceResponse<B>) -> Value
+where
+    B: MessageBody + 'static,
+{
+    let body = test::read_body(response).await;
+    let stream = std::str::from_utf8(&body).expect("SSE response should be valid UTF-8");
+    for frame in stream.split("\n\n") {
+        let event = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("event:").map(str::trim));
+        if event != Some("completed") {
+            continue;
+        }
+        let payload = frame
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .join("\n");
+        return serde_json::from_str(&payload)
+            .expect("completed SSE event should contain a JSON value");
+    }
+    panic!("SSE response should contain a completed event: {stream}");
+}

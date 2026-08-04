@@ -35,6 +35,11 @@
     react-transition-group "^4.4.5"
     use-sync-external-store "^1.6.0"
 
+"@amap/amap-jsapi-loader@^1.0.1":
+  version "1.0.1"
+  resolved "https://registry.npmmirror.com/@amap/amap-jsapi-loader/-/amap-jsapi-loader-1.0.1.tgz#9ec4b4d5d2467eac451f6c852e35db69e9f9f0c0"
+  integrity sha512-nPyLKt7Ow/ThHLkSvn2etQlUzqxmTVgK7bIgwdBRTg2HK5668oN7xVxkaiRe3YZEzGzfV2XgH5Jmu2T73ljejw==
+
 "@asamuzakjp/css-color@^5.1.11":
   version "5.1.11"
   resolved "https://registry.npmmirror.com/@asamuzakjp/css-color/-/css-color-5.1.11.tgz"
@@ -1576,10 +1581,10 @@ undici-types@~7.18.0:
   resolved "https://registry.npmmirror.com/undici-types/-/undici-types-7.18.2.tgz"
   integrity sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==
 
-undici@^7.25.0:
-  version "7.28.0"
-  resolved "https://registry.npmmirror.com/undici/-/undici-7.28.0.tgz"
-  integrity sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==
+undici@^7.25.0, undici@^7.29.0:
+  version "7.29.0"
+  resolved "https://registry.npmmirror.com/undici/-/undici-7.29.0.tgz#ae0f6f62e06e057a9cbb7b2b5fde2bb74f791b8f"
+  integrity sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==
 
 use-sync-external-store@^1.5.0, use-sync-external-store@^1.6.0:
   version "1.6.0"

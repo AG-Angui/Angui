@@ -186,6 +186,7 @@ export function FamilyIntakeForm({
     | "begin"
     | "answer"
     | "replace"
+    | "generate"
     | "initial_review"
     | "acknowledge_initial_review"
     | "confirm"
@@ -520,6 +521,22 @@ export function FamilyIntakeForm({
     }
   }
 
+  async function generateDraftVersion() {
+    if (!token || !session) return;
+    setBusyAction("generate");
+    setError("");
+    try {
+      const next = await generateIntakeDraft(token, session.id);
+      setDraft(next);
+      setProfile(profileFromDraft(next, basicInformation));
+      setProfileVersions((current) => [next, ...current]);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function acknowledgeInitialReview() {
     if (!token || !session || !initialReview) return;
     if (confirmedInitialReviewIssues.length !== initialReview.issues.length) {
@@ -676,17 +693,12 @@ export function FamilyIntakeForm({
                 size="sm"
                 variant="ghost"
                 isDisabled={isBusy}
-                onPress={() =>
-                  void (async () => {
-                    if (!token || !session) return;
-                    const next = await generateIntakeDraft(token, session.id);
-                    setDraft(next);
-                    setProfile(profileFromDraft(next, basicInformation));
-                    setProfileVersions((current) => [next, ...current]);
-                  })()
-                }
+                onPress={() => void generateDraftVersion()}
               >
-                生成新版本
+                {busyAction === "generate" && (
+                  <Spinner size="sm" aria-label="正在生成新版本" />
+                )}
+                {busyAction === "generate" ? "正在生成新版本" : "生成新版本"}
               </Button>
             </div>
             {profileVersions.length === 0 ? (

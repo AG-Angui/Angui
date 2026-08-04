@@ -5,13 +5,15 @@ use actix_web::{App, HttpServer, http, middleware::Logger, web};
 use angui::{
     api::{rate_limit::LoginRateLimiter, routes},
     application::{app_state::AppState, services::task_service},
-    config::{Settings, validate_ai_provider_configurations_from_env},
+    config::{Settings, load_local_env_file, validate_ai_provider_configurations_from_env},
     integrations::{ai_gateway::AiGateway, amap_service::AmapService},
 };
 use sea_orm::Database;
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
+    load_local_env_file()
+        .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
     if env::args().nth(1).as_deref() == Some("validate-ai-config") {

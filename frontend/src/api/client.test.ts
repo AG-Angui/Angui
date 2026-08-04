@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SESSION_EXPIRED_EVENT, apiRequest } from "./client";
+import { SESSION_EXPIRED_EVENT, apiRequest, apiSseRequest } from "./client";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -84,5 +84,74 @@ describe("apiRequest", () => {
       code: "network_error",
       message: "网络连接失败，请检查服务连接后重试。",
     });
+  });
+});
+
+describe("apiSseRequest", () => {
+  it("ignores keep-alives and resolves the completed JSON event", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          [
+            "event: started\ndata: {\"session_id\":\"intake-1\"}\n\n",
+            ": keep-alive\n\n",
+            "event: completed\ndata: {\"id\":\"draft-1\"}\n\n",
+          ].join(""),
+          {
+            status: 201,
+            headers: { "Content-Type": "text/event-stream" },
+          },
+        ),
+      ),
+    );
+
+    await expect(
+      apiSseRequest<{ id: string }>("/intake-sessions/intake-1/profile-draft/generate", {
+        method: "POST",
+      }, "test-session"),
+    ).resolves.toEqual({ id: "draft-1" });
+  });
+
+  it("sends JSON content type for a streamed request with a JSON body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("event: completed\ndata: {\"status\":\"ok\"}\n\n", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      apiSseRequest(
+        "/intake-sessions/intake-1/ai-initial-review",
+        { method: "POST", body: JSON.stringify({ profile: {} }) },
+        "test-session",
+      ),
+    ).resolves.toEqual({ status: "ok" });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = new Headers(request.headers);
+    expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("Authorization")).toBe("Bearer test-session");
+  });
+
+  it("rejects an incomplete stream instead of treating partial data as a result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("event: started\ndata: {\"session_id\":\"intake-1\"}\n\n", {
+          status: 201,
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    await expect(
+      apiSseRequest("/intake-sessions/intake-1/profile-draft/generate", {
+        method: "POST",
+      }, "test-session"),
+    ).rejects.toMatchObject({ code: "stream_incomplete" });
   });
 });

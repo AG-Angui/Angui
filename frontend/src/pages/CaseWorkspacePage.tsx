@@ -81,6 +81,7 @@ import {
   ErrorState,
   LoadingState,
 } from "../components/ContentState";
+import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
 import { FamilyIntakeForm } from "./FamilyIntakeForm";
 
 type WorkspaceMode = "family" | "commander" | "volunteer";
@@ -1339,16 +1340,28 @@ function CaseDetailView({
                 });
               }}
             >
-              <Field label="线索内容" required>
-                <TextArea
-                  value={clueContent}
-                  maxLength={4000}
-                  onChange={(event) => setClueContent(event.target.value)}
-                  rows={3}
-                  fullWidth
-                  required
+              <div className="min-w-0 space-y-3">
+                <Field label="线索内容" required>
+                  <TextArea
+                    value={clueContent}
+                    maxLength={4000}
+                    onChange={(event) => setClueContent(event.target.value)}
+                    rows={3}
+                    fullWidth
+                    required
+                  />
+                </Field>
+                <LocationConfirmationPicker
+                  onConfirm={(location) => {
+                    setClueLocation(location.address);
+                    setClueLocationPrecision(location.precision);
+                  }}
+                  onClear={() => {
+                    setClueLocation("");
+                    setClueLocationPrecision("");
+                  }}
                 />
-              </Field>
+              </div>
               <div className="space-y-3">
                 <Field label="来源类型">
                   <select
@@ -1573,6 +1586,24 @@ function CaseDetailView({
                     required
                   />
                 </Field>
+                <LocationConfirmationPicker
+                  onConfirm={(location) =>
+                    setPlace({
+                      ...place,
+                      address: location.address,
+                      longitude: location.longitude,
+                      latitude: location.latitude,
+                    })
+                  }
+                  onClear={() =>
+                    setPlace({
+                      ...place,
+                      address: "",
+                      longitude: null,
+                      latitude: null,
+                    })
+                  }
+                />
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Field label="经度（可选）">
                     <Input

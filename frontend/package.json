@@ -12,7 +12,12 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "resolutions": {
+    "postcss": "^8.5.23",
+    "undici": "^7.29.0"
+  },
   "dependencies": {
+    "@amap/amap-jsapi-loader": "^1.0.1",
     "@heroui/react": "^3.2.2",
     "@tailwindcss/vite": "^4.3.2",
     "lucide-react": "^1.24.0",
