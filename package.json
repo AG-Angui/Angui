@@ -6,7 +6,7 @@
     "dev:frontend": "npm --prefix frontend run dev",
     "build:frontend": "npm --prefix frontend run build",
     "lint:frontend": "npm --prefix frontend run lint",
-    "dev:backend": "cargo run",
+    "dev:backend": "cargo run --bin angui",
     "format:backend": "cargo fmt --all",
     "check:backend": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
     "test:backend": "cargo test --workspace --all-features --locked",
