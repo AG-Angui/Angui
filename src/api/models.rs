@@ -96,6 +96,79 @@ pub struct KnowledgeAnswerResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CreateLearningResourceRequest {
+    pub title: String,
+    pub summary: String,
+    pub content: String,
+    pub resource_type: String,
+    pub tags: Vec<String>,
+    pub source_name: String,
+    pub source_url: Option<String>,
+    pub visibility: String,
+    pub effective_at: String,
+    pub permitted_use: String,
+    pub submission_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateLearningQuestionRequest {
+    pub source_resource_id: String,
+    pub prompt: String,
+    pub question_type: String,
+    pub difficulty: String,
+    pub tags: Vec<String>,
+    pub options: Value,
+    pub correct_option_id: String,
+    pub explanation: String,
+    pub visibility: String,
+    pub effective_at: String,
+    pub permitted_use: String,
+    pub submission_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearningContentActionRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningContentLifecycleResponse {
+    pub submitted_by_user_id: String,
+    pub deidentified_by_user_id: Option<String>,
+    pub reviewed_by_user_id: Option<String>,
+    pub published_by_user_id: Option<String>,
+    pub withdrawn_by_user_id: Option<String>,
+    pub state: String,
+    pub permitted_use: String,
+    pub events: Vec<LearningContentReviewEventResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningContentReviewEventResponse {
+    pub event_type: String,
+    pub actor_user_id: String,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagedLearningResourceResponse {
+    #[serde(flatten)]
+    pub resource: LearningResourceResponse,
+    pub lifecycle: LearningContentLifecycleResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagedLearningQuestionResponse {
+    #[serde(flatten)]
+    pub question: LearningQuestionResponse,
+    pub lifecycle: LearningContentLifecycleResponse,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,

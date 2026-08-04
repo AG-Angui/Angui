@@ -1779,7 +1779,7 @@ paths:
       tags: [Learning]
       operationId: listLearningResources
       summary: List reviewed learning resources visible to the current account
-      description: Returns only published, effective resources whose visibility matches the authenticated account. Withdrawn, future, internal-case, and raw archive material are never returned.
+      description: Returns only effective training resources whose visibility matches the authenticated account and whose immutable governance chain records independent de-identification, review, and publication. Withdrawn, future, public-information-only, internal-case, and raw archive material are never returned.
       security: [{ bearerAuth: [] }]
       x-account-types: [member, learner]
       x-data-classification: public-or-training
@@ -1820,7 +1820,7 @@ paths:
       tags: [Learning]
       operationId: askKnowledge
       summary: Answer using only visible reviewed learning resources
-      description: Uses a deterministic source-matching fallback. When no reliable source is visible it returns an explicit insufficient-sources response and an instruction to seek human verification.
+      description: Uses a deterministic source-matching fallback over only governance-approved training resources. When no reliable source is visible, including prompt-injection-like text, it returns an explicit insufficient-sources response and an instruction to seek human verification.
       security: [{ bearerAuth: [] }]
       x-account-types: [member, learner]
       x-data-classification: training

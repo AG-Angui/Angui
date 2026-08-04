@@ -19,6 +19,7 @@ pub mod intake_profile_drafts;
 pub mod intake_question_definitions;
 pub mod intake_session_answers;
 pub mod intake_sessions;
+pub mod learning_content_review_events;
 pub mod learning_question_answers;
 pub mod learning_questions;
 pub mod learning_resources;

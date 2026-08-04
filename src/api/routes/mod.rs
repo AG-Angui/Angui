@@ -46,11 +46,11 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .wrap(ApiSessionAuthentication)
             .service(health::get_health)
             .configure(auth::configure)
+            .configure(learning::configure)
             .configure(admin::configure)
             .configure(user_profiles::configure)
             .configure(cases::configure)
             .configure(intake_sessions::configure)
-            .configure(learning::configure)
             .configure(clues::configure)
             .configure(tasks::configure),
     );
