@@ -113,6 +113,30 @@ describe("apiSseRequest", () => {
     ).resolves.toEqual({ id: "draft-1" });
   });
 
+  it("sends JSON content type for a streamed request with a JSON body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("event: completed\ndata: {\"status\":\"ok\"}\n\n", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      apiSseRequest(
+        "/intake-sessions/intake-1/ai-initial-review",
+        { method: "POST", body: JSON.stringify({ profile: {} }) },
+        "test-session",
+      ),
+    ).resolves.toEqual({ status: "ok" });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = new Headers(request.headers);
+    expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("Authorization")).toBe("Bearer test-session");
+  });
+
   it("rejects an incomplete stream instead of treating partial data as a result", async () => {
     vi.stubGlobal(
       "fetch",

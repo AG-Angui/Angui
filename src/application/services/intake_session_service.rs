@@ -565,7 +565,7 @@ pub async fn start_ai_initial_review(
         data_level: DataLevel::Sensitive,
         purpose: AiPurpose::IntakeDraft,
         data_region: "CN".to_owned(),
-        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family text. `field` must be one of the supplied family answer field names or `profile`. `source_fields` must name only supplied fields. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
+        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family answers and which configured answer fields are still unanswered. `field` and `source_fields` must be `profile` or one of: basic_information, health_status, behavior_habits, last_seen, frequent_locations, belongings, transport_ability, follow_up_clues, suspicious_motive. An unanswered configured field may be cited only to explain that information is missing. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
         output_schema: Some(initial_review_schema()),
         output_schema_name: Some("intake_initial_review".to_owned()),
         input,
@@ -579,23 +579,35 @@ pub async fn start_ai_initial_review(
     let (issues, review_status, _audit_status) = match execution {
         AiExecutionResult::Completed { output, .. } => {
             match gateway.decode_json::<InitialReviewModelOutput>(&output) {
-                Ok(output) => match validate_initial_review_output(output, &answers) {
+                Ok(output) => match validate_initial_review_output(output) {
                     Ok(issues) => (
                         issues,
                         "available_pending".to_owned(),
                         AiTaskStatus::Completed,
                     ),
-                    Err(_) => (
+                    Err(error) => {
+                        log::debug!(
+                            target: "angui::ai_gateway::diagnostic",
+                            "AI initial review rejected: {error}"
+                        );
+                        (
+                            rule_based_initial_review_issues(&assessments),
+                            "rule_based_fallback_pending".to_owned(),
+                            AiTaskStatus::Failed,
+                        )
+                    }
+                },
+                Err(_) => {
+                    log::debug!(
+                        target: "angui::ai_gateway::diagnostic",
+                        "AI initial review rejected: output did not match the review schema"
+                    );
+                    (
                         rule_based_initial_review_issues(&assessments),
                         "rule_based_fallback_pending".to_owned(),
                         AiTaskStatus::Failed,
-                    ),
-                },
-                Err(_) => (
-                    rule_based_initial_review_issues(&assessments),
-                    "rule_based_fallback_pending".to_owned(),
-                    AiTaskStatus::Failed,
-                ),
+                    )
+                }
             }
         }
         AiExecutionResult::Degraded { .. } => (
@@ -1685,7 +1697,6 @@ fn acknowledged_review_status(status: &str) -> String {
 
 fn validate_initial_review_output(
     output: InitialReviewModelOutput,
-    answers: &IntakeInitialAnswers,
 ) -> Result<Vec<IntakeAiInitialReviewIssue>, ApiError> {
     if output.issues.len() > 12 {
         return Err(ApiError::Validation(
@@ -1705,7 +1716,6 @@ fn validate_initial_review_output(
         "profile",
     ]
     .into_iter()
-    .filter(|field| *field == "profile" || answer_for(answers, field).is_some())
     .collect::<std::collections::HashSet<_>>();
     let mut seen = std::collections::HashSet::new();
     output
@@ -2206,8 +2216,10 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        IntakeInitialAnswers, decode_profile_extraction_output, profile_extraction_schema,
-        profile_extraction_system_instruction, validate_profile_extraction,
+        InitialReviewModelIssue, InitialReviewModelOutput, IntakeInitialAnswers,
+        decode_profile_extraction_output, profile_extraction_schema,
+        profile_extraction_system_instruction, validate_initial_review_output,
+        validate_profile_extraction,
     };
 
     fn answers() -> IntakeInitialAnswers {
@@ -2297,5 +2309,47 @@ mod tests {
             field_sources["properties"]["physical_description"]["type"],
             serde_json::json!(["object", "null"])
         );
+    }
+
+    #[test]
+    fn initial_review_accepts_configured_fields_that_are_still_unanswered() {
+        let output = InitialReviewModelOutput {
+            issues: vec![
+                InitialReviewModelIssue {
+                    field: "profile".to_owned(),
+                    severity: "warning".to_owned(),
+                    evidence_summary: "Clothing and belongings are still missing.".to_owned(),
+                    clarification_question: "Can you add clothing or belongings?".to_owned(),
+                    source_fields: vec!["basic_information".to_owned(), "belongings".to_owned()],
+                },
+                InitialReviewModelIssue {
+                    field: "transport_ability".to_owned(),
+                    severity: "warning".to_owned(),
+                    evidence_summary: "Travel ability is still missing.".to_owned(),
+                    clarification_question: "Can you add travel ability?".to_owned(),
+                    source_fields: vec!["transport_ability".to_owned()],
+                },
+            ],
+        };
+
+        let issues = validate_initial_review_output(output)
+            .expect("configured unanswered fields are valid completeness sources");
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[1].field, "transport_ability");
+    }
+
+    #[test]
+    fn initial_review_rejects_unknown_source_fields() {
+        let output = InitialReviewModelOutput {
+            issues: vec![InitialReviewModelIssue {
+                field: "profile".to_owned(),
+                severity: "warning".to_owned(),
+                evidence_summary: "Unknown field.".to_owned(),
+                clarification_question: "Please confirm.".to_owned(),
+                source_fields: vec!["unrecognized_field".to_owned()],
+            }],
+        };
+
+        assert!(validate_initial_review_output(output).is_err());
     }
 }
