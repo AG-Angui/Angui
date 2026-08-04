@@ -133,7 +133,10 @@ fn bearer_token(request: &HttpRequest) -> Result<String, ApiError> {
 }
 
 fn public_api_path(path: &str) -> bool {
-    matches!(path, "/api/health" | "/api/auth/login")
+    matches!(
+        path,
+        "/api/health" | "/api/auth/login" | "/api/learning/public/prevention-card"
+    )
 }
 
 fn bearer_token_from_service_request(request: &ServiceRequest) -> Result<String, ApiError> {

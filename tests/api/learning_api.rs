@@ -37,6 +37,15 @@ async fn learning_endpoints_keep_empty_catalog_safe_and_require_authentication()
     let resources: Value = test::read_body_json(resources).await;
     assert_eq!(resources, json!([]));
 
+    let missing_public_card = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/public/prevention-card")
+            .to_request(),
+    )
+    .await;
+    assert_error(missing_public_card, StatusCode::NOT_FOUND, "not_found").await;
+
     let questions = test::call_service(
         &app,
         test::TestRequest::get()
@@ -123,7 +132,7 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
                 "tags": ["防走失", "准备"],
                 "source_name": "测试审核来源",
                 "source_url": "https://example.invalid/approved-source",
-                "visibility": "learner",
+                "visibility": "public",
                 "effective_at": "2020-01-01T00:00:00.000Z",
                 "permitted_use": "training",
                 "submission_reason": "已提交供独立脱敏与审核。"
@@ -204,6 +213,17 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     .await;
     let published_resources: Value = test::read_body_json(published_resources).await;
     assert_eq!(published_resources.as_array().map(Vec::len), Some(1));
+
+    let public_card = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/public/prevention-card")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(public_card.status(), StatusCode::OK);
+    let public_card: Value = test::read_body_json(public_card).await;
+    assert_eq!(public_card["id"], resource_id);
 
     let question = test::call_service(
         &app,
@@ -355,6 +375,15 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     )
     .await;
     assert_eq!(withdrawn.status(), StatusCode::OK);
+
+    let withdrawn_public_card = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/public/prevention-card")
+            .to_request(),
+    )
+    .await;
+    assert_error(withdrawn_public_card, StatusCode::NOT_FOUND, "not_found").await;
 
     let questions_after_withdrawal = test::call_service(
         &app,

@@ -20,6 +20,7 @@
 
 ## 读取与导出边界
 
+- `GET /api/learning/public/prevention-card` 无需登录，但只返回当前已发布、已完成治理、公开可见且用途为培训的防走失知识卡。生产环境仅缓存这一张卡和前端应用壳，绝不缓存登录态学习资源、题目、问答或案件数据；在线发现卡片撤回后会删除本地缓存。
 - `GET /api/learning/resources`、`GET /api/learning/questions` 和 `POST /api/knowledge/ask` 仅读取当前账号可见、已生效、已脱敏、已独立审核、已发布的培训内容。
 - 问答只返回匹配资源原文、来源、版本和人工核验提示；无可靠来源时返回 `insufficient_sources`，不生成行动建议。
 - `POST /api/learning/questions/{id}/answers` 在服务端校验选项；题目列表和题目导出均不返回 `correct_option_id`。

@@ -11,6 +11,7 @@ const mocked = vi.hoisted(() => ({
   getCase: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listLearningResources: vi.fn().mockResolvedValue([]),
+  getPublicPreventionCard: vi.fn().mockResolvedValue(null),
   listLearningQuestions: vi.fn().mockResolvedValue([]),
   listManagedLearningResources: vi.fn().mockResolvedValue([]),
   listManagedLearningQuestions: vi.fn().mockResolvedValue([]),
@@ -35,6 +36,8 @@ vi.mock("./components/ServiceStatus", () => ({
 vi.mock("./api/learning", () => ({
   listLearningResources: (...args: unknown[]) =>
     mocked.listLearningResources(...args),
+  getPublicPreventionCard: (...args: unknown[]) =>
+    mocked.getPublicPreventionCard(...args),
   listLearningQuestions: (...args: unknown[]) =>
     mocked.listLearningQuestions(...args),
   listManagedLearningResources: (...args: unknown[]) =>

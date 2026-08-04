@@ -54,6 +54,7 @@ export interface CreateLearningQuestionInput {
 }
 
 export const listLearningResources = (token: string) => apiRequest<LearningResource[]>("/learning/resources", {}, token);
+export const getPublicPreventionCard = () => apiRequest<LearningResource>("/learning/public/prevention-card");
 export const listLearningQuestions = (token: string) => apiRequest<LearningQuestion[]>("/learning/questions", {}, token);
 export const submitLearningAnswer = (token: string, questionId: string, selectedOptionId: string) => apiRequest<LearningAnswer>(`/learning/questions/${questionId}/answers`, { method: "POST", body: JSON.stringify({ selected_option_id: selectedOptionId }) }, token);
 export const askKnowledge = (token: string, question: string) => apiRequest<KnowledgeAnswer>("/knowledge/ask", { method: "POST", body: JSON.stringify({ question }) }, token);

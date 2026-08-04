@@ -15,6 +15,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
     config
         .service(
             web::scope("/learning")
+                .route(
+                    "/public/prevention-card",
+                    web::get().to(public_prevention_card),
+                )
                 .route("/resources", web::get().to(list_resources))
                 .route("/questions", web::get().to(list_questions))
                 .route(
@@ -70,6 +74,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 ),
         )
         .service(web::scope("/knowledge").route("/ask", web::post().to(ask_knowledge)));
+}
+
+async fn public_prevention_card(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::public_prevention_card(&state.db).await?))
 }
 
 async fn list_resources(

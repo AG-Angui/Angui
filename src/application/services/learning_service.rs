@@ -28,6 +28,39 @@ use crate::{
 
 const MAX_QUESTION_LENGTH: usize = 1_000;
 
+/// Returns the approved public prevention card that can be retained for offline use.
+/// This endpoint deliberately excludes all account-scoped learning resources.
+pub async fn public_prevention_card(
+    db: &DatabaseConnection,
+) -> Result<LearningResourceResponse, ApiError> {
+    let now = now();
+    let resources = learning_resources::Entity::find()
+        .filter(learning_resources::Column::Status.eq("published"))
+        .filter(learning_resources::Column::ResourceType.eq("prevention"))
+        .filter(learning_resources::Column::Visibility.eq("public"))
+        .filter(learning_resources::Column::EffectiveAt.lte(now))
+        .order_by_desc(learning_resources::Column::UpdatedAt)
+        .all(db)
+        .await?;
+    let states = lifecycle_states(
+        db,
+        "resource",
+        resources.iter().map(|resource| resource.id.as_str()),
+    )
+    .await?;
+
+    resources
+        .into_iter()
+        .find(|resource| {
+            states
+                .get(&resource.id)
+                .is_some_and(ContentLifecycle::is_training_published)
+        })
+        .map(resource_response)
+        .transpose()?
+        .ok_or_else(|| ApiError::NotFound("公开防走失知识卡尚未发布".to_owned()))
+}
+
 pub async fn list_resources(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,

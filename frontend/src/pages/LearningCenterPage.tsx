@@ -1,7 +1,7 @@
 import { Button, Chip, Input, Spinner } from "@heroui/react";
-import { BookOpen, Send } from "lucide-react";
+import { BookOpen, Send, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { askKnowledge, listLearningQuestions, listLearningResources, submitLearningAnswer } from "../api/learning";
+import { askKnowledge, getPublicPreventionCard, listLearningQuestions, listLearningResources, submitLearningAnswer } from "../api/learning";
 import type { KnowledgeAnswer, LearningQuestion, LearningResource } from "../api/learning";
 import { ApiClientError } from "../api/client";
 import { useAuth } from "../auth/useAuth";
@@ -15,6 +15,7 @@ export function LearningCenterPage() {
   const { token } = useAuth();
   const [resources, setResources] = useState<LearningResource[]>([]);
   const [questions, setQuestions] = useState<LearningQuestion[]>([]);
+  const [preventionCard, setPreventionCard] = useState<LearningResource | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -31,6 +32,12 @@ export function LearningCenterPage() {
       const [nextResources, nextQuestions] = await Promise.all([listLearningResources(token), listLearningQuestions(token)]);
       setResources(nextResources);
       setQuestions(nextQuestions);
+      try {
+        setPreventionCard(await getPublicPreventionCard());
+      } catch (cause) {
+        if (!(cause instanceof ApiClientError) || cause.status !== 404) throw cause;
+        setPreventionCard(null);
+      }
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -56,6 +63,10 @@ export function LearningCenterPage() {
       <span className="grid size-11 place-items-center rounded-md bg-brand-100 text-brand-700"><BookOpen aria-hidden="true" /></span>
       <div><h1 className="m-0 text-2xl font-bold text-slate-950">学习中心</h1><p className="mb-0 mt-1 text-sm text-slate-600">仅展示已发布、可追溯的教材；内容不能替代负责人审核或现场指令。</p></div>
     </header>
+    <section className="mb-7 border-y border-emerald-200 bg-emerald-50" aria-labelledby="offline-prevention-title">
+      <header className="flex items-center justify-between gap-3 border-b border-emerald-200 px-5 py-4"><div className="flex items-center gap-2"><WifiOff size={18} aria-hidden="true" /><h2 id="offline-prevention-title" className="m-0 text-base font-bold text-slate-950">离线防走失知识卡</h2></div><Chip size="sm" variant="soft"><Chip.Label>{preventionCard ? "可离线使用" : "等待发布"}</Chip.Label></Chip></header>
+      {preventionCard ? <article className="px-5 py-4"><h3 className="m-0 text-sm font-semibold text-slate-950">{preventionCard.title}</h3><p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{preventionCard.content}</p><p className="mb-0 mt-3 text-xs text-slate-600">来源：{preventionCard.source_name} · v{preventionCard.version}</p></article> : <p className="m-0 px-5 py-6 text-sm leading-6 text-slate-600">负责人尚未发布可离线使用的防走失知识卡。该卡发布并加载成功后，生产环境会保留最后一个已审核版本供离线查看。</p>}
+    </section>
     <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="learning-resources-title">
       <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><h2 id="learning-resources-title" className="m-0 text-base font-bold text-slate-950">手册与知识卡</h2><Chip size="sm" variant="soft"><Chip.Label>{resources.length} 项</Chip.Label></Chip></header>
       {resources.length === 0 ? <p className="m-0 px-5 py-8 text-sm text-slate-600">暂无已发布学习资源。资源需经过审核后才会出现在这里。</p> : <div className="divide-y divide-slate-100">{resources.map((resource) => <article key={resource.id} className="px-5 py-4"><div className="flex flex-wrap items-center gap-2"><h3 className="m-0 text-sm font-semibold text-slate-950">{resource.title}</h3><Chip size="sm" variant="soft"><Chip.Label>v{resource.version}</Chip.Label></Chip></div><p className="mb-0 mt-1 text-sm text-slate-600">{resource.summary}</p><p className="mb-0 mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{resource.content}</p><p className="mb-0 mt-2 text-xs text-slate-500">来源：{resource.source_name}{resource.source_url && <> · <a className="text-brand-700 underline underline-offset-2" href={resource.source_url} target="_blank" rel="noreferrer">查看原始来源</a></>}</p></article>)}</div>}
