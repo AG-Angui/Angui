@@ -134,7 +134,7 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
                 "source_url": "https://example.invalid/approved-source",
                 "visibility": "public",
                 "effective_at": "2020-01-01T00:00:00.000Z",
-                "permitted_use": "training",
+                "permitted_use": "public_information",
                 "submission_reason": "已提交供独立脱敏与审核。"
             }))
             .to_request(),
@@ -224,6 +224,23 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     assert_eq!(public_card.status(), StatusCode::OK);
     let public_card: Value = test::read_body_json(public_card).await;
     assert_eq!(public_card["id"], resource_id);
+
+    let exported_resource = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/learning/resources/{resource_id}/export"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(exported_resource.status(), StatusCode::OK);
+    let exported_resource: Value = test::read_body_json(exported_resource).await;
+    assert_eq!(exported_resource["id"], resource_id);
 
     let question = test::call_service(
         &app,

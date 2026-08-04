@@ -1057,7 +1057,11 @@ impl ContentLifecycle {
     }
 
     fn is_training_published(&self) -> bool {
-        self.state() == "published" && self.permitted_use == "training"
+        self.state() == "published"
+            && matches!(
+                self.permitted_use.as_str(),
+                "training" | "public_information"
+            )
     }
 
     fn response(self) -> Result<LearningContentLifecycleResponse, ApiError> {
