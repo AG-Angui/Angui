@@ -4,12 +4,9 @@ import { BrowserRouter } from "react-router";
 import "./index.css";
 import App from "./App.tsx";
 import { AuthProvider } from "./auth/AuthContext.tsx";
+import { registerPreventionCache } from "./offline/prevention-cache.ts";
 
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/sw.js");
-  });
-}
+window.addEventListener("load", registerPreventionCache);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

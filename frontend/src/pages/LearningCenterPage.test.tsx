@@ -7,10 +7,11 @@ const mocked = vi.hoisted(() => ({
   getPublicPreventionCard: vi.fn(),
   listLearningQuestions: vi.fn(),
   listLearningResources: vi.fn(),
+  token: "learner-session" as string | null,
 }));
 
 vi.mock("../auth/useAuth", () => ({
-  useAuth: () => ({ token: "learner-session" }),
+  useAuth: () => ({ token: mocked.token }),
 }));
 
 vi.mock("../api/learning", () => ({
@@ -26,6 +27,7 @@ vi.mock("../api/learning", () => ({
 
 describe("LearningCenterPage", () => {
   beforeEach(() => {
+    mocked.token = "learner-session";
     mocked.listLearningResources.mockResolvedValue([]);
     mocked.listLearningQuestions.mockResolvedValue([]);
   });
@@ -47,7 +49,8 @@ describe("LearningCenterPage", () => {
     render(<LearningCenterPage />);
 
     expect(await screen.findByText("已审核防走失知识卡")).toBeInTheDocument();
-    expect(screen.getByText("可离线使用")).toBeInTheDocument();
+    expect(screen.getByText("仅可在线查看")).toBeInTheDocument();
+    expect(screen.getByText("离线缓存尚未就绪，请保持联网查看。")).toBeInTheDocument();
     expect(screen.getByText("来源：指定负责人 · v2")).toBeInTheDocument();
   });
 
@@ -61,6 +64,16 @@ describe("LearningCenterPage", () => {
     expect(await screen.findByText("等待发布")).toBeInTheDocument();
     expect(
       screen.getByText("负责人尚未发布可离线使用的防走失知识卡。该卡发布并加载成功后，生产环境会保留最后一个已审核版本供离线查看。"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a recoverable message when the session is unavailable", async () => {
+    mocked.token = null;
+
+    render(<LearningCenterPage />);
+
+    expect(
+      await screen.findByText("登录状态不可用，请重新登录后访问学习中心。"),
     ).toBeInTheDocument();
   });
 });

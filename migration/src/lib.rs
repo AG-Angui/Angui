@@ -39,6 +39,7 @@ mod m0036_add_intake_ai_initial_review;
 mod m0037_add_ai_review_materials;
 mod m0038_create_learning_center;
 mod m0039_create_learning_content_review_events;
+mod m0040_enforce_learning_lifecycle_event_uniqueness;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -87,6 +88,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0037_add_ai_review_materials::Migration),
             Box::new(m0038_create_learning_center::Migration),
             Box::new(m0039_create_learning_content_review_events::Migration),
+            Box::new(m0040_enforce_learning_lifecycle_event_uniqueness::Migration),
         ]
     }
 }

@@ -1,0 +1,1 @@
+DROP INDEX uq_learning_content_review_event ON learning_content_review_events;

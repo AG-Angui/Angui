@@ -158,13 +158,18 @@ describe("application role routing", () => {
     },
   );
 
-  it("exposes the learning center to learner, family, and volunteer audiences only", async () => {
-    setAuth("learner");
+  it.each([
+    ["learner", "learner", []],
+    ["family", "member", []],
+    ["volunteer", "member", ["volunteer"]],
+  ] as const)("exposes the learning center to %s audiences", async (_audience, accountType, capabilities) => {
+    setAuth(accountType, capabilities);
     renderApp("/learning");
     expect(await screen.findByRole("heading", { name: "学习中心" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "学习中心" })).toBeInTheDocument();
+  });
 
-    cleanup();
+  it("does not expose the learning center to commander-only audiences", async () => {
     setAuth("member", ["commander"]);
     renderApp("/learning");
     expect(await screen.findByText("行动总览")).toBeInTheDocument();
