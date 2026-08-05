@@ -96,13 +96,20 @@ async fn generate_intake_profile_draft(
     session_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     let session_id = session_id.into_inner();
-    let (sender, receiver) = mpsc::channel(2);
+    let (sender, receiver) = mpsc::channel(8);
     let _ = sender.try_send(sse_event(
         "started",
         json!({ "session_id": session_id.clone() }),
     ));
+    let _ = sender.try_send(sse_event("progress", json!({ "stage": "queued" })));
 
     tokio::spawn(async move {
+        let _ = sender
+            .send(sse_event("progress", json!({ "stage": "preparing" })))
+            .await;
+        let _ = sender
+            .send(sse_event("progress", json!({ "stage": "generating" })))
+            .await;
         let event = match intake_session_service::generate_intake_profile_draft(
             &state.db,
             &auth,
@@ -111,7 +118,17 @@ async fn generate_intake_profile_draft(
         )
         .await
         {
-            Ok(draft) => sse_event("completed", json!(draft)),
+            Ok(draft) => {
+                let stage = if draft.degradation_status.contains("fallback") {
+                    "fallback"
+                } else {
+                    "validating"
+                };
+                let _ = sender
+                    .send(sse_event("progress", json!({ "stage": stage })))
+                    .await;
+                sse_event("completed", json!(draft))
+            }
             Err(error) => sse_event("error", json!({ "message": error.to_string() })),
         };
         let _ = sender.send(event).await;
@@ -239,13 +256,20 @@ async fn start_ai_initial_review(
 ) -> Result<HttpResponse, ApiError> {
     let session_id = session_id.into_inner();
     let request = request.into_inner();
-    let (sender, receiver) = mpsc::channel(2);
+    let (sender, receiver) = mpsc::channel(8);
     let _ = sender.try_send(sse_event(
         "started",
         json!({ "session_id": session_id.clone() }),
     ));
+    let _ = sender.try_send(sse_event("progress", json!({ "stage": "queued" })));
 
     tokio::spawn(async move {
+        let _ = sender
+            .send(sse_event("progress", json!({ "stage": "preparing" })))
+            .await;
+        let _ = sender
+            .send(sse_event("progress", json!({ "stage": "generating" })))
+            .await;
         let event = match intake_session_service::start_ai_initial_review(
             &state.db,
             &auth,
@@ -255,7 +279,17 @@ async fn start_ai_initial_review(
         )
         .await
         {
-            Ok(review) => sse_event("completed", json!(review)),
+            Ok(review) => {
+                let stage = if review.degradation_status == "rule_based_fallback" {
+                    "fallback"
+                } else {
+                    "validating"
+                };
+                let _ = sender
+                    .send(sse_event("progress", json!({ "stage": stage })))
+                    .await;
+                sse_event("completed", json!(review))
+            }
             Err(error) => sse_event("error", json!({ "message": error.to_string() })),
         };
         let _ = sender.send(event).await;

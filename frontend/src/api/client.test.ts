@@ -118,6 +118,48 @@ describe("apiSseRequest", () => {
     ).resolves.toEqual({ id: "draft-1" });
   });
 
+  it("forwards safe progress events before resolving the completed value", async () => {
+    const onEvent = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          [
+            'event: progress\ndata: {"stage":"preparing"}\n\n',
+            'event: progress\ndata: {"stage":"generating"}\n\n',
+            'event: completed\ndata: {"id":"draft-1"}\n\n',
+          ].join(""),
+          {
+            status: 201,
+            headers: { "Content-Type": "text/event-stream" },
+          },
+        ),
+      ),
+    );
+
+    await expect(
+      apiSseRequest<{ id: string }>(
+        "/intake-sessions/intake-1/profile-draft/generate",
+        { method: "POST" },
+        "test-session",
+        onEvent,
+      ),
+    ).resolves.toEqual({ id: "draft-1" });
+
+    expect(onEvent).toHaveBeenNthCalledWith(1, {
+      event: "progress",
+      payload: { stage: "preparing" },
+    });
+    expect(onEvent).toHaveBeenNthCalledWith(2, {
+      event: "progress",
+      payload: { stage: "generating" },
+    });
+    expect(onEvent).toHaveBeenNthCalledWith(3, {
+      event: "completed",
+      payload: { id: "draft-1" },
+    });
+  });
+
   it("sends JSON content type for a streamed request with a JSON body", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response('event: completed\ndata: {"status":"ok"}\n\n', {

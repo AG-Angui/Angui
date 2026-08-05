@@ -8,7 +8,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, type SseEvent } from "../api/client";
 import {
   acknowledgeIntakeAiInitialReview,
   confirmIntakeSession,
@@ -28,6 +28,7 @@ import {
 } from "../api/intake";
 import type {
   ConfirmedIntakeProfile,
+  IntakeAiFollowUpResponse,
   IntakeAiInitialReviewResponse,
   IntakeAssessment,
   IntakeAnswerRevision,
@@ -38,6 +39,10 @@ import type {
   SubmitIntakeAnswerResponse,
 } from "../api/intake";
 import { useAuth } from "../auth/useAuth";
+import {
+  AiReviewProgress,
+  type AiReviewStage,
+} from "../components/AiReviewProgress";
 
 const questionLabels: Record<string, string> = {
   basic_information: "基本信息",
@@ -169,6 +174,9 @@ export function FamilyIntakeForm({
   const [confirmReviewOpen, setConfirmReviewOpen] = useState(false);
   const [initialReview, setInitialReview] =
     useState<IntakeAiInitialReviewResponse | null>(null);
+  const [aiReviewStage, setAiReviewStage] = useState<AiReviewStage | null>(
+    null,
+  );
   const [confirmedInitialReviewIssues, setConfirmedInitialReviewIssues] =
     useState<string[]>([]);
   const [answerRevisions, setAnswerRevisions] = useState<
@@ -182,6 +190,7 @@ export function FamilyIntakeForm({
   } | null>(null);
   const [isReviewingBasicInformation, setIsReviewingBasicInformation] =
     useState(false);
+  const [isFetchingAiFollowUp, setIsFetchingAiFollowUp] = useState(false);
   const [busyAction, setBusyAction] = useState<
     | "begin"
     | "answer"
@@ -195,6 +204,20 @@ export function FamilyIntakeForm({
   const [error, setError] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
   const confirmDialogRef = useRef<HTMLDivElement>(null);
+
+  const updateAiReviewStage = useCallback(({ event, payload }: SseEvent) => {
+    if (event !== "progress" || !payload || typeof payload !== "object") return;
+    const stage = "stage" in payload ? payload.stage : null;
+    if (
+      stage === "queued" ||
+      stage === "preparing" ||
+      stage === "generating" ||
+      stage === "validating" ||
+      stage === "fallback"
+    ) {
+      setAiReviewStage(stage);
+    }
+  }, []);
 
   const isBusy = busyAction !== null;
   const displayedAssessments = draft?.assessments ?? assessments;
@@ -322,6 +345,7 @@ export function FamilyIntakeForm({
       setSession(nextSession);
       setDraft(null);
       setInitialReview(null);
+      setAiReviewStage(null);
       setConfirmedInitialReviewIssues([]);
       setAssessments([]);
       setAnswer("");
@@ -352,7 +376,13 @@ export function FamilyIntakeForm({
         replace,
       });
       const next = sessionFromAnswerResponse(response);
-      const guidance = await getIntakeAiFollowUp(token, next.id);
+      setIsFetchingAiFollowUp(true);
+      let guidance: IntakeAiFollowUpResponse;
+      try {
+        guidance = await getIntakeAiFollowUp(token, next.id);
+      } finally {
+        setIsFetchingAiFollowUp(false);
+      }
       const guidedSession = guidance.question
         ? {
             ...next,
@@ -503,11 +533,13 @@ export function FamilyIntakeForm({
     }
     setBusyAction("initial_review");
     setError("");
+    setAiReviewStage("queued");
     try {
       const review = await startIntakeAiInitialReview(
         token,
         session.id,
         normalizedProfile(profile),
+        updateAiReviewStage,
       );
       setInitialReview(review);
       setConfirmedInitialReviewIssues([]);
@@ -517,6 +549,7 @@ export function FamilyIntakeForm({
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
+      setAiReviewStage(null);
       setBusyAction(null);
     }
   }
@@ -525,14 +558,20 @@ export function FamilyIntakeForm({
     if (!token || !session) return;
     setBusyAction("generate");
     setError("");
+    setAiReviewStage("queued");
     try {
-      const next = await generateIntakeDraft(token, session.id);
+      const next = await generateIntakeDraft(
+        token,
+        session.id,
+        updateAiReviewStage,
+      );
       setDraft(next);
       setProfile(profileFromDraft(next, basicInformation));
       setProfileVersions((current) => [next, ...current]);
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
+      setAiReviewStage(null);
       setBusyAction(null);
     }
   }
@@ -701,6 +740,12 @@ export function FamilyIntakeForm({
                 {busyAction === "generate" ? "正在生成新版本" : "生成新版本"}
               </Button>
             </div>
+            {busyAction === "generate" && (
+              <AiReviewProgress
+                stage={aiReviewStage ?? "queued"}
+                title="AI 画像草稿生成中"
+              />
+            )}
             {profileVersions.length === 0 ? (
               <p className="mb-0 mt-2 text-xs text-slate-600">
                 尚未生成 AI 画像候选；当前内容仍来自家属原始回答。
@@ -1081,11 +1126,13 @@ export function FamilyIntakeForm({
                 setProfile(nextProfile);
                 setInitialReview(null);
                 setConfirmedInitialReviewIssues([]);
+                setAiReviewStage(null);
               }}
             />
             <InitialReviewPanel
               review={initialReview}
               isReviewing={busyAction === "initial_review"}
+              stage={aiReviewStage}
               confirmedIssueIds={confirmedInitialReviewIssues}
               onToggleIssue={toggleInitialReviewIssue}
             />
@@ -1263,6 +1310,12 @@ export function FamilyIntakeForm({
         </div>
       </header>
 
+      {isFetchingAiFollowUp && (
+        <AiReviewProgress
+          stage="generating"
+          title="正在准备下一项问询"
+        />
+      )}
       {error && <Alert>{error}</Alert>}
       <AssessmentList items={displayedAssessments} />
 
@@ -1392,11 +1445,13 @@ export function FamilyIntakeForm({
 function InitialReviewPanel({
   review,
   isReviewing,
+  stage,
   confirmedIssueIds,
   onToggleIssue,
 }: {
   review: IntakeAiInitialReviewResponse | null;
   isReviewing: boolean;
+  stage: AiReviewStage | null;
   confirmedIssueIds: string[];
   onToggleIssue: (issueId: string) => void;
 }) {
@@ -1407,11 +1462,10 @@ function InitialReviewPanel({
         role={isReviewing ? "status" : undefined}
       >
         {isReviewing ? (
-          <span className="flex items-center gap-2">
-            <Spinner size="sm" aria-label="正在进行 AI 初步审核" />
-            正在进行 AI
-            初步审核，请稍候；审核完成前不会创建案件或向指挥端提交资料。
-          </span>
+          <AiReviewProgress
+            stage={stage ?? "queued"}
+            title="AI 初步审核进行中"
+          />
         ) : (
           "首次确认后，系统会进行 AI 初步审核。它只标注需要您核对的疑点，不能确认事实、修改资料或判断位置。"
         )}

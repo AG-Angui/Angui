@@ -8,6 +8,13 @@ interface ApiErrorPayload {
   };
 }
 
+export interface SseEvent {
+  event: string;
+  payload: unknown;
+}
+
+export type SseEventListener = (event: SseEvent) => void;
+
 export class ApiClientError extends Error {
   status: number;
   code: string;
@@ -114,6 +121,7 @@ export async function apiSseRequest<T>(
   path: string,
   options: RequestInit = {},
   token?: string | null,
+  onEvent?: SseEventListener,
 ): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Accept", "text/event-stream");
@@ -194,6 +202,7 @@ export async function apiSseRequest<T>(
             userMessageFor(0, "invalid_stream"),
           );
         }
+        onEvent?.({ event, payload });
         if (event === "completed") return payload as T;
         if (event === "error") {
           const message =

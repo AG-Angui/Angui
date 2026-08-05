@@ -76,6 +76,7 @@ import type {
 } from "../api/cases";
 import { ApiClientError } from "../api/client";
 import { useAuth } from "../auth/useAuth";
+import { AiReviewProgress } from "../components/AiReviewProgress";
 import {
   EmptyState,
   ErrorState,
@@ -2884,6 +2885,16 @@ function CaseCollaborationPanel({
 
       {isCommander && (
         <div className="min-w-0">
+          {(busy === "clue-draft" || busy === "summary-edit") && (
+            <AiReviewProgress
+              stage="generating"
+              title={
+                busy === "clue-draft"
+                  ? "AI 线索草稿生成中"
+                  : "AI 案情摘要生成中"
+              }
+            />
+          )}
           <h3 className="m-0 text-base font-bold text-slate-950">
             文本整理为待审核线索
           </h3>
