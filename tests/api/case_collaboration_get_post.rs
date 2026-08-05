@@ -5,7 +5,10 @@ use actix_web::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
-use crate::support::{ADMIN, COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
+use crate::support::{
+    ADMIN, COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error,
+    read_sse_completed_json,
+};
 use angui::entities::{clue_drafts, summary_drafts};
 
 #[actix_web::test]
@@ -144,7 +147,7 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     )
     .await;
     assert_eq!(clue_drafts.status(), StatusCode::CREATED);
-    let clue_drafts: Value = test::read_body_json(clue_drafts).await;
+    let clue_drafts = read_sse_completed_json(clue_drafts).await;
     assert_eq!(clue_drafts[0]["status"], "draft");
     assert_eq!(clue_drafts[0]["raw_record_reference"], "fictional-call-1");
     assert_eq!(clue_drafts[0]["degradation_status"], "rule_based_fallback");
@@ -215,6 +218,18 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     assert_eq!(pois["source"], "fixed_demo_fallback");
     assert_eq!(pois["degradation_status"], "degraded");
     assert!(pois["items"][0]["longitude"].is_null());
+    let transit = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/pois?category=transit"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(transit.status(), StatusCode::OK);
+    let transit: Value = test::read_body_json(transit).await;
+    assert_eq!(transit["items"][0]["category"], "transit");
+    assert_eq!(transit["degradation_status"], "degraded");
     assert_error(
         test::call_service(
             &app,
@@ -239,7 +254,7 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     )
     .await;
     assert_eq!(draft.status(), StatusCode::CREATED);
-    let draft: Value = test::read_body_json(draft).await;
+    let draft = read_sse_completed_json(draft).await;
     assert_eq!(draft["status"], "pending_review");
     assert_eq!(draft["publication_eligible"], true);
     assert!(draft["provider_model"].is_null());
@@ -289,7 +304,7 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     )
     .await;
     assert_eq!(second_draft.status(), StatusCode::CREATED);
-    let second_draft: Value = test::read_body_json(second_draft).await;
+    let second_draft = read_sse_completed_json(second_draft).await;
     let second_draft_id = second_draft["id"].as_str().expect("second draft id");
     let superseding_publish = test::call_service(
         &app,

@@ -14,6 +14,7 @@ use crate::{
         ReviewIntakeProfileDraftRequest, StartIntakeAiInitialReviewRequest,
         SubmitIntakeAnswerRequest,
     },
+    services::ai_execution_service,
     services::intake_session_service,
 };
 
@@ -96,20 +97,38 @@ async fn generate_intake_profile_draft(
     session_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     let session_id = session_id.into_inner();
+    let (execution, started) = ai_execution_service::start_intake_execution(
+        &state.db,
+        &auth,
+        &session_id,
+        "intake_profile_draft",
+    )
+    .await?;
+    let execution_id = execution.execution_id.clone();
     let (sender, receiver) = mpsc::channel(8);
     let _ = sender.try_send(sse_event(
         "started",
-        json!({ "session_id": session_id.clone() }),
+        json!({
+            "session_id": session_id.clone(),
+            "execution_id": execution_id.clone(),
+            "event_id": started.event_id,
+            "workflow": execution.workflow,
+            "stage": "queued",
+        }),
     ));
-    let _ = sender.try_send(sse_event("progress", json!({ "stage": "queued" })));
-
     tokio::spawn(async move {
-        let _ = sender
-            .send(sse_event("progress", json!({ "stage": "preparing" })))
-            .await;
-        let _ = sender
-            .send(sse_event("progress", json!({ "stage": "generating" })))
-            .await;
+        if let Ok(event) =
+            ai_execution_service::advance_execution(&state.db, &auth, &execution_id, "preparing")
+                .await
+        {
+            let _ = sender.send(sse_event("progress", json!(event))).await;
+        }
+        if let Ok(event) =
+            ai_execution_service::advance_execution(&state.db, &auth, &execution_id, "generating")
+                .await
+        {
+            let _ = sender.send(sse_event("progress", json!(event))).await;
+        }
         let event = match intake_session_service::generate_intake_profile_draft(
             &state.db,
             &auth,
@@ -124,12 +143,38 @@ async fn generate_intake_profile_draft(
                 } else {
                     "validating"
                 };
-                let _ = sender
-                    .send(sse_event("progress", json!({ "stage": stage })))
-                    .await;
+                if let Ok(event) =
+                    ai_execution_service::advance_execution(&state.db, &auth, &execution_id, stage)
+                        .await
+                {
+                    let _ = sender.send(sse_event("progress", json!(event))).await;
+                }
+                let _ = ai_execution_service::complete_execution(
+                    &state.db,
+                    &auth,
+                    &execution_id,
+                    "draft_ready",
+                    stage == "fallback",
+                )
+                .await;
                 sse_event("completed", json!(draft))
             }
-            Err(error) => sse_event("error", json!({ "message": error.to_string() })),
+            Err(_) => {
+                if let Err(error) = ai_execution_service::fail_execution(
+                    &state.db,
+                    &auth,
+                    &execution_id,
+                    "processing_failed",
+                )
+                .await
+                {
+                    log::error!("failed to persist failed AI execution {execution_id}: {error}");
+                }
+                sse_event(
+                    "error",
+                    json!({ "message": "AI 审核未能完成，请重试或改用人工流程。" }),
+                )
+            }
         };
         let _ = sender.send(event).await;
     });
@@ -256,20 +301,38 @@ async fn start_ai_initial_review(
 ) -> Result<HttpResponse, ApiError> {
     let session_id = session_id.into_inner();
     let request = request.into_inner();
+    let (execution, started) = ai_execution_service::start_intake_execution(
+        &state.db,
+        &auth,
+        &session_id,
+        "intake_initial_review",
+    )
+    .await?;
+    let execution_id = execution.execution_id.clone();
     let (sender, receiver) = mpsc::channel(8);
     let _ = sender.try_send(sse_event(
         "started",
-        json!({ "session_id": session_id.clone() }),
+        json!({
+            "session_id": session_id.clone(),
+            "execution_id": execution_id.clone(),
+            "event_id": started.event_id,
+            "workflow": execution.workflow,
+            "stage": "queued",
+        }),
     ));
-    let _ = sender.try_send(sse_event("progress", json!({ "stage": "queued" })));
-
     tokio::spawn(async move {
-        let _ = sender
-            .send(sse_event("progress", json!({ "stage": "preparing" })))
-            .await;
-        let _ = sender
-            .send(sse_event("progress", json!({ "stage": "generating" })))
-            .await;
+        if let Ok(event) =
+            ai_execution_service::advance_execution(&state.db, &auth, &execution_id, "preparing")
+                .await
+        {
+            let _ = sender.send(sse_event("progress", json!(event))).await;
+        }
+        if let Ok(event) =
+            ai_execution_service::advance_execution(&state.db, &auth, &execution_id, "generating")
+                .await
+        {
+            let _ = sender.send(sse_event("progress", json!(event))).await;
+        }
         let event = match intake_session_service::start_ai_initial_review(
             &state.db,
             &auth,
@@ -285,12 +348,38 @@ async fn start_ai_initial_review(
                 } else {
                     "validating"
                 };
-                let _ = sender
-                    .send(sse_event("progress", json!({ "stage": stage })))
-                    .await;
+                if let Ok(event) =
+                    ai_execution_service::advance_execution(&state.db, &auth, &execution_id, stage)
+                        .await
+                {
+                    let _ = sender.send(sse_event("progress", json!(event))).await;
+                }
+                let _ = ai_execution_service::complete_execution(
+                    &state.db,
+                    &auth,
+                    &execution_id,
+                    "review_ready",
+                    stage == "fallback",
+                )
+                .await;
                 sse_event("completed", json!(review))
             }
-            Err(error) => sse_event("error", json!({ "message": error.to_string() })),
+            Err(_) => {
+                if let Err(error) = ai_execution_service::fail_execution(
+                    &state.db,
+                    &auth,
+                    &execution_id,
+                    "processing_failed",
+                )
+                .await
+                {
+                    log::error!("failed to persist failed AI execution {execution_id}: {error}");
+                }
+                sse_event(
+                    "error",
+                    json!({ "message": "AI 审核未能完成，请重试或改用人工流程。" }),
+                )
+            }
         };
         let _ = sender.send(event).await;
     });

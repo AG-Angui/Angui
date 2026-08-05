@@ -70,6 +70,51 @@ paths:
                 service: angui-api
                 version: 0.1.0
 
+  /api/ai/executions/{execution_id}:
+    parameters:
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Intake sessions]
+      operationId: getAiExecution
+      summary: Read a caller-owned controlled AI execution status
+      description: Returns safe lifecycle metadata only, never prompts, provider streams, candidate text, or sensitive inputs.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Safe execution state, content: { application/json: { schema: { $ref: "#/components/schemas/AiExecution" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/ai/executions/{execution_id}/events:
+    parameters:
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: after
+        in: query
+        required: false
+        schema: { type: integer, minimum: 0 }
+    get:
+      tags: [Intake sessions]
+      operationId: listAiExecutionEvents
+      summary: Read ordered safe execution events after an event id
+      description: Reconnect with `after` to obtain only newer, de-duplicable lifecycle events, then fetch the existing draft resource after completion.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Ordered safe SSE events, content: { text/event-stream: { schema: { type: string } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/auth/login:
     post:
       tags: [Authentication]
@@ -2368,6 +2413,22 @@ components:
           type: string
           description: 当前 Cargo package 版本。
           example: 0.1.0
+
+    AiExecution:
+      type: object
+      additionalProperties: false
+      required: [execution_id, workflow, stage, status, failure_kind, result_status, fallback_used, last_event_id, created_at, updated_at]
+      properties:
+        execution_id: { type: string }
+        workflow: { type: string }
+        stage: { type: string, enum: [queued, preparing, generating, validating, fallback, ready_for_review, failed] }
+        status: { type: string, enum: [running, completed, failed] }
+        failure_kind: { type: [string, "null"] }
+        result_status: { type: [string, "null"] }
+        fallback_used: { type: boolean }
+        last_event_id: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     LoginRequest:
       type: object

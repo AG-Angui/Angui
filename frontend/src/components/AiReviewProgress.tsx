@@ -3,7 +3,9 @@ export type AiReviewStage =
   | "preparing"
   | "generating"
   | "validating"
-  | "fallback";
+  | "fallback"
+  | "ready_for_review"
+  | "failed";
 
 const stageDetails: Record<
   AiReviewStage,
@@ -34,16 +36,30 @@ const stageDetails: Record<
     description: "AI 结果不可用或未通过校验，系统会提供可人工核对的规则结果。",
     completed: 4,
   },
+  ready_for_review: {
+    label: "候选已准备好，等待人工审核",
+    description: "结果仍是草稿或候选，必须由当前角色人工核对后才能继续。",
+    completed: 4,
+  },
+  failed: {
+    label: "审核未能完成",
+    description: "没有生成可用草稿。请重试，或按现有人工流程继续。",
+    completed: 0,
+  },
 };
+
+const terminalStages: AiReviewStage[] = ["ready_for_review", "failed"];
 
 export function AiReviewProgress({
   stage,
-  title = "AI 审核进行中",
+  title,
 }: {
   stage: AiReviewStage;
   title?: string;
 }) {
   const detail = stageDetails[stage];
+  const isTerminal = terminalStages.includes(stage);
+  const heading = isTerminal ? "AI 审核已结束" : (title ?? "AI 审核进行中");
 
   return (
     <section
@@ -51,15 +67,19 @@ export function AiReviewProgress({
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      aria-label={`${title}：${detail.label}`}
+      aria-label={`${heading}：${detail.label}`}
     >
       <div className="flex items-start gap-3">
         <span
-          className="mt-1 flex h-3 w-3 shrink-0 rounded-full bg-brand-600 motion-safe:animate-pulse motion-reduce:animate-none"
+          className={`mt-1 flex h-3 w-3 shrink-0 rounded-full bg-brand-600 ${
+            isTerminal
+              ? ""
+              : "motion-safe:animate-pulse motion-reduce:animate-none"
+          }`}
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <h3 className="m-0 text-sm font-bold text-slate-950">{title}</h3>
+          <h3 className="m-0 text-sm font-bold text-slate-950">{heading}</h3>
           <p className="mb-0 mt-1 leading-6">{detail.label}</p>
           <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">
             {detail.description}
@@ -76,7 +96,7 @@ export function AiReviewProgress({
                 className={`block h-1.5 rounded-full ${
                   isComplete ? "bg-brand-600" : "bg-brand-100"
                 } ${
-                  isCurrent
+                  isCurrent && !isTerminal
                     ? "motion-safe:animate-pulse motion-reduce:animate-none"
                     : ""
                 }`}

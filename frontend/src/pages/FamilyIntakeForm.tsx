@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiClientError, type SseEvent } from "../api/client";
+import { getAiExecution } from "../api/aiExecutions";
 import {
   acknowledgeIntakeAiInitialReview,
   confirmIntakeSession,
@@ -134,6 +135,7 @@ interface StoredIntakeState {
   session: StoredIntakeSession;
   answer: string;
   basicInformation: BasicInformationDraft;
+  aiExecution?: { id: string; workflow: string };
 }
 
 interface BasicInformationDraft {
@@ -177,6 +179,10 @@ export function FamilyIntakeForm({
   const [aiReviewStage, setAiReviewStage] = useState<AiReviewStage | null>(
     null,
   );
+  const [activeAiExecution, setActiveAiExecution] = useState<{
+    id: string;
+    workflow: string;
+  } | null>(null);
   const [confirmedInitialReviewIssues, setConfirmedInitialReviewIssues] =
     useState<string[]>([]);
   const [answerRevisions, setAnswerRevisions] = useState<
@@ -204,16 +210,44 @@ export function FamilyIntakeForm({
   const [error, setError] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
   const confirmDialogRef = useRef<HTMLDivElement>(null);
+  const basicInformationRef = useRef(basicInformation);
+  const activeAiExecutionRef = useRef(activeAiExecution);
+
+  useEffect(() => {
+    basicInformationRef.current = basicInformation;
+  }, [basicInformation]);
+
+  useEffect(() => {
+    activeAiExecutionRef.current = activeAiExecution;
+  }, [activeAiExecution]);
 
   const updateAiReviewStage = useCallback(({ event, payload }: SseEvent) => {
-    if (event !== "progress" || !payload || typeof payload !== "object") return;
+    if (!payload || typeof payload !== "object") return;
+    if (
+      event === "started" &&
+      "execution_id" in payload &&
+      typeof payload.execution_id === "string" &&
+      "workflow" in payload &&
+      typeof payload.workflow === "string"
+    ) {
+      const execution = {
+        id: payload.execution_id,
+        workflow: payload.workflow,
+      };
+      activeAiExecutionRef.current = execution;
+      setActiveAiExecution(execution);
+      setAiReviewStage("queued");
+    }
+    if (event !== "progress") return;
     const stage = "stage" in payload ? payload.stage : null;
     if (
       stage === "queued" ||
       stage === "preparing" ||
       stage === "generating" ||
       stage === "validating" ||
-      stage === "fallback"
+      stage === "fallback" ||
+      stage === "ready_for_review" ||
+      stage === "failed"
     ) {
       setAiReviewStage(stage);
     }
@@ -283,6 +317,7 @@ export function FamilyIntakeForm({
       setSession(stored.session);
       setAnswer(stored.answer);
       setBasicInformation(stored.basicInformation);
+      if (stored.aiExecution) setActiveAiExecution(stored.aiExecution);
       if (
         [
           "ready_for_confirmation",
@@ -322,9 +357,93 @@ export function FamilyIntakeForm({
       session: toStoredSession(session),
       answer,
       basicInformation,
+      aiExecution: activeAiExecution ?? undefined,
     };
     window.sessionStorage.setItem(storageKey, JSON.stringify(stored));
-  }, [answer, basicInformation, hasHydrated, session, storageKey]);
+  }, [
+    activeAiExecution,
+    answer,
+    basicInformation,
+    hasHydrated,
+    session,
+    storageKey,
+  ]);
+
+  useEffect(() => {
+    if (!token || !session || !activeAiExecution) return;
+    const sessionToken = token;
+    const executionId = activeAiExecution.id;
+    const workflow = activeAiExecution.workflow;
+    const sessionId = session.id;
+    let cancelled = false;
+    let retry: number | undefined;
+    let attempts = 0;
+    let networkFailures = 0;
+    const maxAttempts = 60;
+    const maxNetworkFailures = 3;
+
+    async function recover() {
+      attempts += 1;
+      if (attempts > maxAttempts) {
+        if (!cancelled) {
+          setAiReviewStage("failed");
+          setError("AI 审核恢复超时，请重试或按现有人工流程继续。");
+          setBusyAction(null);
+        }
+        return;
+      }
+      try {
+        const execution = await getAiExecution(sessionToken, executionId);
+        networkFailures = 0;
+        if (cancelled) return;
+        if (execution.status === "running") {
+          setAiReviewStage(execution.stage);
+          retry = window.setTimeout(recover, 2_000);
+          return;
+        }
+        if (execution.status === "failed") {
+          setAiReviewStage("failed");
+          setError("AI 审核未能完成，请重试或按现有人工流程继续。");
+          setBusyAction(null);
+          return;
+        }
+        if (workflow === "intake_profile_draft") {
+          await loadDraft(sessionId, true, basicInformationRef.current);
+        } else if (workflow === "intake_initial_review") {
+          const review = await getIntakeAiInitialReview(sessionToken, sessionId);
+          if (!cancelled) {
+            setInitialReview(review);
+            setConfirmedInitialReviewIssues([]);
+            setSession((current) =>
+              current ? { ...current, status: review.status } : current,
+            );
+          }
+        }
+        if (!cancelled) {
+          setAiReviewStage(null);
+          setActiveAiExecution(null);
+          setBusyAction(null);
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          networkFailures += 1;
+          if (networkFailures <= maxNetworkFailures && attempts < maxAttempts) {
+            retry = window.setTimeout(recover, 2_000);
+          } else {
+            setAiReviewStage("failed");
+            setError(messageFrom(cause));
+            setBusyAction(null);
+          }
+        }
+      }
+    }
+
+    void recover();
+    return () => {
+      cancelled = true;
+      if (retry !== undefined) window.clearTimeout(retry);
+    };
+  }, [activeAiExecution, loadDraft, session, token]);
 
   useEffect(() => {
     if (!answer.trim() || typeof window === "undefined") return;
@@ -346,6 +465,7 @@ export function FamilyIntakeForm({
       setDraft(null);
       setInitialReview(null);
       setAiReviewStage(null);
+      setActiveAiExecution(null);
       setConfirmedInitialReviewIssues([]);
       setAssessments([]);
       setAnswer("");
@@ -534,6 +654,8 @@ export function FamilyIntakeForm({
     setBusyAction("initial_review");
     setError("");
     setAiReviewStage("queued");
+    activeAiExecutionRef.current = null;
+    setActiveAiExecution(null);
     try {
       const review = await startIntakeAiInitialReview(
         token,
@@ -549,7 +671,7 @@ export function FamilyIntakeForm({
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
-      setAiReviewStage(null);
+      if (!activeAiExecutionRef.current) setAiReviewStage(null);
       setBusyAction(null);
     }
   }
@@ -559,6 +681,8 @@ export function FamilyIntakeForm({
     setBusyAction("generate");
     setError("");
     setAiReviewStage("queued");
+    activeAiExecutionRef.current = null;
+    setActiveAiExecution(null);
     try {
       const next = await generateIntakeDraft(
         token,
@@ -571,7 +695,7 @@ export function FamilyIntakeForm({
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
-      setAiReviewStage(null);
+      if (!activeAiExecutionRef.current) setAiReviewStage(null);
       setBusyAction(null);
     }
   }
@@ -740,7 +864,9 @@ export function FamilyIntakeForm({
                 {busyAction === "generate" ? "正在生成新版本" : "生成新版本"}
               </Button>
             </div>
-            {busyAction === "generate" && (
+            {(busyAction === "generate" ||
+              (activeAiExecution?.workflow === "intake_profile_draft" &&
+                aiReviewStage === "failed")) && (
               <AiReviewProgress
                 stage={aiReviewStage ?? "queued"}
                 title="AI 画像草稿生成中"
@@ -1131,7 +1257,11 @@ export function FamilyIntakeForm({
             />
             <InitialReviewPanel
               review={initialReview}
-              isReviewing={busyAction === "initial_review"}
+              isReviewing={
+                busyAction === "initial_review" ||
+                (activeAiExecution?.workflow === "intake_initial_review" &&
+                  aiReviewStage === "failed")
+              }
               stage={aiReviewStage}
               confirmedIssueIds={confirmedInitialReviewIssues}
               onToggleIssue={toggleInitialReviewIssue}
@@ -2111,10 +2241,22 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
       session: session as StoredIntakeSession,
       answer: typeof parsed.answer === "string" ? parsed.answer : "",
       basicInformation: readBasicInformation(parsed.basicInformation),
+      aiExecution: readAiExecution(parsed.aiExecution),
     };
   } catch {
     return discardStoredState(storageKey);
   }
+}
+
+function readAiExecution(
+  value: unknown,
+): { id: string; workflow: string } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const execution = value as Partial<{ id: string; workflow: string }>;
+  if (typeof execution.id !== "string" || !execution.id) return undefined;
+  if (typeof execution.workflow !== "string" || !execution.workflow)
+    return undefined;
+  return { id: execution.id, workflow: execution.workflow };
 }
 
 function readBasicInformation(value: unknown): BasicInformationDraft {

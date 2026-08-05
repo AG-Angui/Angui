@@ -19,6 +19,13 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function sseCompletedResponse(body: unknown): Response {
+  return new Response(`event: completed\ndata: ${JSON.stringify(body)}\n\n`, {
+    status: 201,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
 function requestOptions(call: unknown[]) {
   return call[1] as RequestInit;
 }
@@ -162,7 +169,7 @@ describe("case API contract", () => {
   it("preserves an explicit empty summary draft content so the server can reject it", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(201, { id: "summary-1" }))
+      .mockResolvedValueOnce(sseCompletedResponse({ id: "summary-1" }))
       .mockResolvedValueOnce(
         jsonResponse(400, {
           error: { code: "validation_error", message: "content is required" },

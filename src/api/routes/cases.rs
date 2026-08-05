@@ -1,4 +1,9 @@
-use actix_web::{HttpResponse, http::header, web};
+use std::time::Duration;
+
+use actix_web::{Error, HttpResponse, http::header, web};
+use futures_util::stream;
+use serde_json::json;
+use tokio::sync::mpsc;
 
 use crate::{
     app_state::AppState,
@@ -427,16 +432,92 @@ async fn create_clue_drafts(
     case_id: web::Path<String>,
     request: web::Json<CreateClueDraftRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Created().json(
-        crate::services::case_collaboration_service::create_clue_drafts(
+    let case_id = case_id.into_inner();
+    case_service::require_case_role(
+        &state.db,
+        &auth.id,
+        &case_id,
+        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let (execution, started) =
+        crate::services::ai_execution_service::start_case_execution(&state.db, &auth, "clue_draft")
+            .await?;
+    let request = request.into_inner();
+    let execution_id = execution.execution_id.clone();
+    let (sender, receiver) = mpsc::channel(8);
+    let _ = sender.try_send(sse_event(
+        "started",
+        json!({ "execution_id": execution_id, "event_id": started.event_id, "workflow": execution.workflow, "stage": "queued" }),
+    ));
+    tokio::spawn(async move {
+        for stage in ["preparing", "generating"] {
+            if let Ok(event) = crate::services::ai_execution_service::advance_execution(
+                &state.db,
+                &auth,
+                &execution.execution_id,
+                stage,
+            )
+            .await
+            {
+                let _ = sender.send(sse_event("progress", json!(event))).await;
+            }
+        }
+        let event = match crate::services::case_collaboration_service::create_clue_drafts(
             &state.db,
             &auth,
             &case_id,
-            request.into_inner(),
+            request,
             &state.ai_gateway,
         )
-        .await?,
-    ))
+        .await
+        {
+            Ok(drafts) => {
+                let fallback_used = drafts
+                    .iter()
+                    .any(|draft| draft.degradation_status.contains("fallback"));
+                let stage = if fallback_used {
+                    "fallback"
+                } else {
+                    "validating"
+                };
+                if let Ok(event) = crate::services::ai_execution_service::advance_execution(
+                    &state.db,
+                    &auth,
+                    &execution.execution_id,
+                    stage,
+                )
+                .await
+                {
+                    let _ = sender.send(sse_event("progress", json!(event))).await;
+                }
+                let _ = crate::services::ai_execution_service::complete_execution(
+                    &state.db,
+                    &auth,
+                    &execution.execution_id,
+                    "draft_ready",
+                    fallback_used,
+                )
+                .await;
+                sse_event("completed", json!(drafts))
+            }
+            Err(_) => {
+                let _ = crate::services::ai_execution_service::fail_execution(
+                    &state.db,
+                    &auth,
+                    &execution.execution_id,
+                    "processing_failed",
+                )
+                .await;
+                sse_event(
+                    "error",
+                    json!({ "message": "AI 草稿未能完成，请重试或改用人工流程。" }),
+                )
+            }
+        };
+        let _ = sender.send(event).await;
+    });
+    Ok(sse_response(receiver))
 }
 
 async fn list_clue_drafts(
@@ -493,16 +574,122 @@ async fn create_summary_draft(
     case_id: web::Path<String>,
     request: web::Json<CreateSummaryDraftRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Created().json(
-        crate::services::case_collaboration_service::create_summary_draft(
+    let case_id = case_id.into_inner();
+    let request = request.into_inner();
+    if request.content.is_some() {
+        return Ok(HttpResponse::Created().json(
+            crate::services::case_collaboration_service::create_summary_draft(
+                &state.db,
+                &auth,
+                &case_id,
+                request,
+                &state.ai_gateway,
+            )
+            .await?,
+        ));
+    }
+    case_service::require_case_role(&state.db, &auth.id, &case_id, &[CaseRole::Commander]).await?;
+    let (execution, started) = crate::services::ai_execution_service::start_case_execution(
+        &state.db,
+        &auth,
+        "summary_draft",
+    )
+    .await?;
+    let execution_id = execution.execution_id.clone();
+    let (sender, receiver) = mpsc::channel(8);
+    let _ = sender.try_send(sse_event(
+        "started",
+        json!({ "execution_id": execution_id, "event_id": started.event_id, "workflow": execution.workflow, "stage": "queued" }),
+    ));
+    tokio::spawn(async move {
+        for stage in ["preparing", "generating"] {
+            if let Ok(event) = crate::services::ai_execution_service::advance_execution(
+                &state.db,
+                &auth,
+                &execution.execution_id,
+                stage,
+            )
+            .await
+            {
+                let _ = sender.send(sse_event("progress", json!(event))).await;
+            }
+        }
+        let event = match crate::services::case_collaboration_service::create_summary_draft(
             &state.db,
             &auth,
             &case_id,
-            request.into_inner(),
+            request,
             &state.ai_gateway,
         )
-        .await?,
-    ))
+        .await
+        {
+            Ok(draft) => {
+                let fallback_used = draft.provider_model.is_none();
+                let stage = if fallback_used {
+                    "fallback"
+                } else {
+                    "validating"
+                };
+                if let Ok(event) = crate::services::ai_execution_service::advance_execution(
+                    &state.db,
+                    &auth,
+                    &execution.execution_id,
+                    stage,
+                )
+                .await
+                {
+                    let _ = sender.send(sse_event("progress", json!(event))).await;
+                }
+                let _ = crate::services::ai_execution_service::complete_execution(
+                    &state.db,
+                    &auth,
+                    &execution.execution_id,
+                    "draft_ready",
+                    fallback_used,
+                )
+                .await;
+                sse_event("completed", json!(draft))
+            }
+            Err(_) => {
+                let _ = crate::services::ai_execution_service::fail_execution(
+                    &state.db,
+                    &auth,
+                    &execution.execution_id,
+                    "processing_failed",
+                )
+                .await;
+                sse_event(
+                    "error",
+                    json!({ "message": "AI 摘要未能完成，请重试或改用人工流程。" }),
+                )
+            }
+        };
+        let _ = sender.send(event).await;
+    });
+    Ok(sse_response(receiver))
+}
+
+fn sse_response(receiver: mpsc::Receiver<web::Bytes>) -> HttpResponse {
+    let events = stream::unfold(
+        (receiver, tokio::time::interval(Duration::from_secs(10))),
+        |(mut receiver, mut heartbeat)| async move {
+            tokio::select! {
+                event = receiver.recv() => event.map(|event| (Ok::<_, Error>(event), (receiver, heartbeat))),
+                _ = heartbeat.tick() => Some((Ok(web::Bytes::from_static(b": keep-alive\n\n")), (receiver, heartbeat))),
+            }
+        },
+    );
+    HttpResponse::Created()
+        .insert_header((header::CONTENT_TYPE, "text/event-stream"))
+        .insert_header((header::CACHE_CONTROL, "no-cache"))
+        .insert_header(("X-Accel-Buffering", "no"))
+        .streaming(events)
+}
+
+fn sse_event(event: &str, payload: serde_json::Value) -> web::Bytes {
+    let payload = serde_json::to_string(&payload)
+        .unwrap_or_else(|_| "{\"message\":\"internal service error\"}".to_owned());
+    web::Bytes::from(format!("event: {event}\ndata: {payload}\n\n"))
 }
 
 async fn get_latest_summary_draft(

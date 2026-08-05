@@ -314,6 +314,93 @@ async fn initial_review_stream_exposes_safe_progress_before_the_completed_review
     assert_eq!(events.last(), Some(&"completed"));
     assert!(!stream.contains("system_instruction"));
     assert!(!stream.contains("raw_prompt"));
+
+    let execution_id = stream
+        .split("\n\n")
+        .find(|frame| frame.contains("event: started"))
+        .and_then(|frame| frame.lines().find_map(|line| line.strip_prefix("data: ")))
+        .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+        .and_then(|payload| payload["execution_id"].as_str().map(str::to_owned))
+        .expect("started event should expose a stable execution id");
+
+    let execution = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/ai/executions/{execution_id}"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(execution.status(), StatusCode::OK);
+    let execution: Value = test::read_body_json(execution).await;
+    assert_eq!(execution["status"], "completed");
+    assert_eq!(execution["stage"], "ready_for_review");
+    assert_eq!(execution["result_status"], "review_ready");
+    assert!(execution["last_event_id"].as_i64().unwrap_or_default() >= 5);
+
+    let execution_events = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/ai/executions/{execution_id}/events?after=0"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(execution_events.status(), StatusCode::OK);
+    let event_body = test::read_body(execution_events).await;
+    let event_stream = std::str::from_utf8(&event_body).expect("event stream is UTF-8");
+    assert!(event_stream.contains("event: ai_review.started"));
+    assert!(event_stream.contains("event: ai_review.completed"));
+    assert!(!event_stream.contains("Fictional confirmed elder"));
+
+    let after_last_event = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/ai/executions/{execution_id}/events?after={}",
+                execution["last_event_id"].as_i64().unwrap_or_default()
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(after_last_event.status(), StatusCode::OK);
+    assert!(test::read_body(after_last_event).await.is_empty());
+
+    let other_token = context.token(COMMANDER).await;
+    for uri in [
+        format!("/api/ai/executions/{execution_id}"),
+        format!("/api/ai/executions/{execution_id}/events?after=0"),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&uri)
+                .insert_header((header::AUTHORIZATION, format!("Bearer {other_token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    let audit_metadata: Vec<String> = audit_events::Entity::find()
+        .filter(audit_events::Column::EntityId.eq(&execution_id))
+        .all(&context.database)
+        .await
+        .expect("execution audits should be readable")
+        .into_iter()
+        .filter_map(|event| event.metadata_json)
+        .collect();
+    assert!(
+        audit_metadata
+            .iter()
+            .any(|metadata| metadata.contains(&execution_id))
+    );
+    assert!(
+        audit_metadata
+            .iter()
+            .all(|metadata| !metadata.contains("Fictional confirmed elder"))
+    );
 }
 
 #[actix_web::test]

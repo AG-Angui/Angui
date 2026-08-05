@@ -41,6 +41,7 @@ mod m0038_create_learning_center;
 mod m0039_create_learning_content_review_events;
 mod m0040_enforce_learning_lifecycle_event_uniqueness;
 mod m0041_add_learning_content_version_lineage;
+mod m0042_create_ai_executions;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -91,6 +92,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0039_create_learning_content_review_events::Migration),
             Box::new(m0040_enforce_learning_lifecycle_event_uniqueness::Migration),
             Box::new(m0041_add_learning_content_version_lineage::Migration),
+            Box::new(m0042_create_ai_executions::Migration),
         ]
     }
 }
@@ -396,9 +398,9 @@ mod tests {
         let database = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory sqlite connection should succeed");
-        Migrator::up(&database, None)
+        Migrator::up(&database, Some(41))
             .await
-            .expect("all migrations should succeed");
+            .expect("migrations through learning lineage should succeed");
         database
             .execute_unprepared(
                 "INSERT INTO learning_resources (id, title, summary, content, resource_type, tags_json, source_name, source_url, previous_version_id, version, visibility, status, effective_at, withdrawn_at, created_at, updated_at) VALUES ('lineage-v1', 'First version', 'First version summary', 'First version content', 'manual', '[]', 'Test source', NULL, NULL, 1, 'learner', 'published', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'), ('lineage-v2', 'Corrected version', 'Corrected version summary', 'Corrected version content', 'manual', '[]', 'Test source', NULL, 'lineage-v1', 2, 'learner', 'withdrawn', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",

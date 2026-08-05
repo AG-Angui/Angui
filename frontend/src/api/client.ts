@@ -9,6 +9,7 @@ interface ApiErrorPayload {
 }
 
 export interface SseEvent {
+  id?: string;
   event: string;
   payload: unknown;
 }
@@ -185,8 +186,10 @@ export async function apiSseRequest<T>(
       buffered = frames.pop() ?? "";
       for (const frame of frames) {
         let event = "message";
+        let id: string | undefined;
         const data: string[] = [];
         for (const line of frame.split(/\r?\n/)) {
+          if (line.startsWith("id:")) id = line.slice(3).trim();
           if (line.startsWith("event:")) event = line.slice(6).trim();
           if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
         }
@@ -202,7 +205,7 @@ export async function apiSseRequest<T>(
             userMessageFor(0, "invalid_stream"),
           );
         }
-        onEvent?.({ event, payload });
+        onEvent?.({ id, event, payload });
         if (event === "completed") return payload as T;
         if (event === "error") {
           const message =
