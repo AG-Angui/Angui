@@ -591,6 +591,53 @@ describe("CaseWorkspacePage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("labels family progress as reviewed publication without rendering internal clue content", async () => {
+    vi.clearAllMocks();
+    mocked.listCases.mockResolvedValue([
+      {
+        id: "family-progress",
+        case_code: "AG-FAMILY-PROGRESS",
+        status: "active",
+        access_role: "family",
+        display_name: "家属公开进展",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-07-24T00:00:00Z",
+        updated_at: "2026-07-24T00:00:00Z",
+      },
+    ]);
+    mocked.getCase.mockResolvedValue(
+      detail("family-progress", "家属公开进展", "family"),
+    );
+    mocked.getCaseResourceConfiguration.mockResolvedValue({
+      attachment_max_image_bytes: 5 * 1024 * 1024,
+      attachment_max_per_case: 12,
+      case_place_types: ["frequent"],
+    });
+    mocked.getCasePublicProgress.mockResolvedValue({
+      case_id: "family-progress",
+      status: "active",
+      generated_at: "2026-08-05T00:00:00Z",
+      confirmed_progress: [
+        {
+          clue_id: "confirmed-progress",
+          progress_type: "confirmed_update",
+          review_status: "confirmed",
+          updated_at: "2026-08-05T00:00:00Z",
+        },
+      ],
+      requested_family_information: [],
+      safety_and_contact_reminders: ["请联系负责人。"],
+    });
+
+    render(<CaseWorkspacePage mode="family" />);
+
+    expect(await screen.findByText("发布状态：已审核发布", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("更新于：", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("已确认一项案件进展。", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("内部未审核线索")).not.toBeInTheDocument();
+  });
+
   it("lets an authorized commander invite the demo volunteer to an active case", async () => {
     mocked.listCases.mockResolvedValue([
       {

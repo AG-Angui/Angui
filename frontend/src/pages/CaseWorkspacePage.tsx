@@ -1325,7 +1325,7 @@ function CaseDetailView({
                       next_action: nullable(clueNextAction),
                       attachment_ids: linkedAttachmentIds,
                     }),
-                  "线索已提交并进入人工审核",
+                  "线索已提交，状态：待人工审核",
                 ).then((succeeded) => {
                   if (succeeded) {
                     setClueContent("");
@@ -2755,6 +2755,10 @@ function CaseCollaborationPanel({
           )}
           {publicProgress && (
             <div className="mt-3 space-y-3">
+              <p className="m-0 text-xs leading-5 text-slate-600" role="status">
+                发布状态：已审核发布 · 更新于：
+                {formatDate(publicProgress.generated_at)}
+              </p>
               <div className="rounded-md border border-emerald-200 bg-white p-3">
                 <h4 className="m-0 text-sm font-semibold text-slate-900">
                   已确认信息
