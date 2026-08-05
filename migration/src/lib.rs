@@ -422,6 +422,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_intake_report_details_rollback_refuses_to_discard_v3_sessions() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should connect");
+        Migrator::up(&database, None)
+            .await
+            .expect("intake report detail migration should apply");
+        insert_member_and_session(&database, "intake-report-details-v3").await;
+        database
+            .execute_unprepared(
+                "UPDATE intake_sessions SET question_set_version = 3 WHERE id = 'intake-report-details-v3-session'",
+            )
+            .await
+            .expect("v3 session fixture should update");
+
+        let manager = SchemaManager::new(&database);
+        assert!(
+            m0043_add_intake_report_details::Migration
+                .down(&manager)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_intake_report_details_rollback_refuses_v2_status_changes() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should connect");
+        Migrator::up(&database, None)
+            .await
+            .expect("intake report detail migration should apply");
+        database
+            .execute_unprepared(
+                "UPDATE intake_question_definitions SET status = 'active' WHERE id = 'intake-q-0201'",
+            )
+            .await
+            .expect("v2 status fixture should update");
+
+        let manager = SchemaManager::new(&database);
+        assert!(
+            m0043_add_intake_report_details::Migration
+                .down(&manager)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn sqlite_learning_lineage_rollback_refuses_to_discard_correction_links() {
         let database = Database::connect("sqlite::memory:")
             .await

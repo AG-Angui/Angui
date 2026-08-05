@@ -2816,9 +2816,10 @@ components:
     SubmitIntakeAnswerResponse:
       type: object
       additionalProperties: false
-      required: [session_id, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, ai_initial_review_status, privacy_notice, updated_at]
+      required: [session_id, question_set_version, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, ai_initial_review_status, privacy_notice, updated_at]
       properties:
         session_id: { type: string, format: uuid }
+        question_set_version: { type: integer, minimum: 1 }
         status: { type: string, enum: [collecting, ready_for_confirmation] }
         raw_answer: { type: string, description: Original free-text response, separate from candidate fields. }
         candidate_fields:

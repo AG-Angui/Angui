@@ -96,7 +96,7 @@ pub async fn store_photo(
             return Err(ApiError::Database(error));
         }
     };
-    intake_session_service::write_attachment_audit(
+    if let Err(error) = intake_session_service::write_attachment_audit(
         &transaction,
         auth,
         "intake_session.photo_uploaded",
@@ -104,8 +104,15 @@ pub async fn store_photo(
         &model.id,
         &model.content_type,
     )
-    .await?;
-    transaction.commit().await?;
+    .await
+    {
+        remove_file_best_effort(storage_path.clone()).await;
+        return Err(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        remove_file_best_effort(storage_path).await;
+        return Err(ApiError::Database(error));
+    }
     Ok(response(model))
 }
 
@@ -181,4 +188,8 @@ fn require_creator(
 }
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+async fn remove_file_best_effort(path: std::path::PathBuf) {
+    let _ = web::block(move || fs::remove_file(path)).await;
 }

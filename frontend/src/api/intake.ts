@@ -12,7 +12,7 @@ export interface IntakeQuestion {
 
 export interface IntakeSession {
   id: string;
-  question_set_version?: number;
+  question_set_version: number;
   status:
     | "collecting"
     | "ready_for_confirmation"
@@ -84,6 +84,7 @@ export interface IntakeAssessment {
 
 export interface SubmitIntakeAnswerResponse extends IntakeSessionUpdate {
   session_id: string;
+  question_set_version: number;
   raw_answer: string;
   candidate_fields: IntakeCandidateField[];
   assessments: IntakeAssessment[];

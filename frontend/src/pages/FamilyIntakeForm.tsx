@@ -124,6 +124,7 @@ const blankProfile: ConfirmedIntakeProfile = {
 type StoredIntakeSession = Pick<
   IntakeSession,
   | "id"
+  | "question_set_version"
   | "status"
   | "missing_fields"
   | "phase"
@@ -584,8 +585,7 @@ export function FamilyIntakeForm({
       (session.next_question.field === "basic_information"
         ? basicInformationAnswer(
             basicInformation,
-            session.question_set_version !== undefined &&
-              session.question_set_version >= 3,
+            session.question_set_version >= 3,
           )
         : answer);
     if (!answerToSubmit) {
@@ -598,8 +598,7 @@ export function FamilyIntakeForm({
   async function saveBasicInformationAndReturn() {
     const nextAnswer = basicInformationAnswer(
       basicInformation,
-      session?.question_set_version !== undefined &&
-        session.question_set_version >= 3,
+      session?.question_set_version !== undefined && session.question_set_version >= 3,
     );
     if (!nextAnswer) {
       setError("请填写姓名或称呼，或返回补充线索继续填写。");
@@ -1427,7 +1426,8 @@ export function FamilyIntakeForm({
   const isReviewingPhaseOne =
     session.phase === "phase_two" && isReviewingBasicInformation;
   const completed = session.completed_phase_one_fields.length;
-  const phaseTotal = 5;
+  const isReportDetailsSession = session.question_set_version >= 3;
+  const phaseTotal = isReportDetailsSession ? 5 : 2;
   const currentLabel = isReviewingPhaseOne
     ? "基本情况（编辑）"
     : question
@@ -1491,7 +1491,7 @@ export function FamilyIntakeForm({
       {error && <Alert>{error}</Alert>}
       <AssessmentList items={displayedAssessments} />
 
-      <section
+      {isReportDetailsSession && <section
         className="mt-5 rounded-md border border-brand-200 bg-brand-50 p-4"
         aria-labelledby="intake-photo-title"
       >
@@ -1531,7 +1531,7 @@ export function FamilyIntakeForm({
             创建案件前必须至少上传一张照片。
           </p>
         )}
-      </section>
+      </section>}
 
       {question ? (
         <form
@@ -1550,7 +1550,7 @@ export function FamilyIntakeForm({
               value={basicInformation}
               onChange={setBasicInformation}
               required={isReviewingPhaseOne || question.required}
-              requiresReportDetails={session.question_set_version !== undefined && session.question_set_version >= 3}
+              requiresReportDetails={isReportDetailsSession}
               hint={
                 isReviewingPhaseOne
                   ? "可在这里更正基本情况；保存后将返回补充线索。"
@@ -2198,6 +2198,7 @@ function sessionFromAnswerResponse(
 ): IntakeSession {
   return {
     id: response.session_id,
+    question_set_version: response.question_set_version,
     status: response.status,
     missing_fields: response.missing_fields,
     phase: response.phase,
@@ -2297,6 +2298,7 @@ function normalizedProfile(
 function toStoredSession(session: IntakeSession): StoredIntakeSession {
   return {
     id: session.id,
+    question_set_version: session.question_set_version,
     status: session.status,
     missing_fields: session.missing_fields,
     phase: session.phase,
@@ -2317,6 +2319,12 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
     const parsed = JSON.parse(value) as Partial<StoredIntakeState>;
     const session = parsed.session;
     if (!session || typeof session.id !== "string")
+      return discardStoredState(storageKey);
+    if (
+      session.question_set_version !== undefined &&
+      (!Number.isInteger(session.question_set_version) ||
+        session.question_set_version < 1)
+    )
       return discardStoredState(storageKey);
     if (
       ![
@@ -2357,7 +2365,10 @@ function readStoredState(storageKey: string): StoredIntakeState | null {
     if (typeof session.ai_initial_review_status !== "string")
       return discardStoredState(storageKey);
     return {
-      session: session as StoredIntakeSession,
+      session: {
+        ...session,
+        question_set_version: session.question_set_version ?? 2,
+      } as StoredIntakeSession,
       answer: typeof parsed.answer === "string" ? parsed.answer : "",
       basicInformation: readBasicInformation(parsed.basicInformation),
       aiExecution: readAiExecution(parsed.aiExecution),

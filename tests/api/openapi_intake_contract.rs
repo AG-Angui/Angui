@@ -134,6 +134,7 @@ fn intake_openapi_contract_covers_runtime_requests_and_responses() {
     assert_schema_contains(
         "SubmitIntakeAnswerResponse",
         &[
+            "question_set_version:",
             "phase:",
             "completed_phase_one_fields:",
             "missing_phase_one_fields:",

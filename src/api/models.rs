@@ -648,6 +648,7 @@ pub struct ConfirmIntakeSessionResponse {
 #[derive(Clone, Debug, Serialize)]
 pub struct SubmitIntakeAnswerResponse {
     pub session_id: String,
+    pub question_set_version: i32,
     pub status: String,
     pub raw_answer: String,
     pub candidate_fields: Vec<IntakeCandidateField>,
@@ -675,6 +676,7 @@ impl SubmitIntakeAnswerResponse {
     ) -> Self {
         Self {
             session_id: session.id,
+            question_set_version: session.question_set_version,
             status: session.status,
             raw_answer: answer.raw_answer.clone(),
             candidate_fields: vec![IntakeCandidateField {

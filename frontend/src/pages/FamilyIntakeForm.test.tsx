@@ -53,6 +53,7 @@ vi.mock("../api/intake", () => ({
 
 const collectingSession: IntakeSession = {
   id: "intake-1",
+  question_set_version: 2,
   status: "collecting",
   missing_fields: ["last_seen"],
   phase: "phase_one",
@@ -67,6 +68,23 @@ const collectingSession: IntakeSession = {
   guidance_mode: "rule_based",
   ai_initial_review_status: "not_started",
   privacy_notice: "仅用于本次问询。",
+};
+
+const reportDetailsSession: IntakeSession = {
+  ...collectingSession,
+  question_set_version: 3,
+  missing_fields: [
+    "last_seen",
+    "suspicious_motive",
+    "police_report_status",
+    "family_phone",
+  ],
+  missing_phase_one_fields: [
+    "last_seen",
+    "suspicious_motive",
+    "police_report_status",
+    "family_phone",
+  ],
 };
 
 const readySession: IntakeSession = {
@@ -376,7 +394,7 @@ describe("FamilyIntakeForm", () => {
   it("uploads only a controlled JPEG or PNG portrait", async () => {
     window.sessionStorage.setItem(
       "angui:intake-tab-draft:family-1",
-      JSON.stringify({ session: collectingSession, answer: "" }),
+      JSON.stringify({ session: reportDetailsSession, answer: "" }),
     );
     mocked.uploadIntakePhoto.mockResolvedValue({
       id: "photo-1",
@@ -406,6 +424,89 @@ describe("FamilyIntakeForm", () => {
       ),
     );
     expect(await screen.findByText(/已上传：portrait\.png/)).toBeInTheDocument();
+  });
+
+  it("persists the v3 question-set version after submitting an answer", async () => {
+    const nextSession: IntakeSession = {
+      ...reportDetailsSession,
+      completed_phase_one_fields: ["basic_information", "last_seen"],
+      missing_phase_one_fields: ["suspicious_motive", "police_report_status", "family_phone"],
+      next_question: {
+        field: "suspicious_motive",
+        prompt: "请描述走失原因或可疑情况。",
+        required: true,
+      },
+    };
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: reportDetailsSession, answer: "" }),
+    );
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(nextSession));
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    fireEvent.change(await screen.findByRole("textbox"), {
+      target: { value: "外出后没有按时回家" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+
+    await waitFor(() =>
+      expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        expect.objectContaining({ field: "last_seen" }),
+      ),
+    );
+    await waitFor(() => {
+      const stored = window.sessionStorage.getItem("angui:intake-tab-draft:family-1");
+      expect(stored).not.toBeNull();
+      expect(JSON.parse(stored ?? "{}").session.question_set_version).toBe(3);
+    });
+  });
+
+  it("keeps v2 sessions free of the v3 photo requirement", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: collectingSession, answer: "" }),
+    );
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "最后出现情况" });
+    expect(screen.queryByLabelText("上传走失者照片")).not.toBeInTheDocument();
+    expect(screen.queryByText("创建案件前必须至少上传一张照片。")).not.toBeInTheDocument();
+  });
+
+  it("rejects a non-image portrait before calling the upload API", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: reportDetailsSession, answer: "" }),
+    );
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const input = await screen.findByLabelText("上传走失者照片");
+    fireEvent.change(input, {
+      target: { files: [new File(["not an image"], "report.txt", { type: "text/plain" })] },
+    });
+
+    expect(mocked.uploadIntakePhoto).not.toHaveBeenCalled();
+    expect(await screen.findByText("请上传 JPEG 或 PNG 格式的走失者照片。")).toBeInTheDocument();
   });
 
   it("omits a blank age from the structured basic-information answer", async () => {

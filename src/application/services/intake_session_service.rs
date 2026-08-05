@@ -570,7 +570,7 @@ pub async fn start_ai_initial_review(
         data_level: DataLevel::Sensitive,
         purpose: AiPurpose::IntakeDraft,
         data_region: "CN".to_owned(),
-        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family answers and which configured answer fields are still unanswered. `field` and `source_fields` must be `profile` or one of: basic_information, health_status, behavior_habits, last_seen, frequent_locations, belongings, transport_ability, follow_up_clues, suspicious_motive, police_report_status, family_phone. Flag placeholder, repeated-character, pure-number, or low-information descriptions for family clarification. An unanswered configured field may be cited only to explain that information is missing. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
+        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family answers and which configured answer fields are still unanswered. `field` and `source_fields` must be `profile` or one of: basic_information, health_status, behavior_habits, last_seen, frequent_locations, belongings, transport_ability, follow_up_clues, suspicious_motive, police_report_status. Flag placeholder, repeated-character, pure-number, or low-information descriptions for family clarification. An unanswered configured field may be cited only to explain that information is missing. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
         output_schema: Some(initial_review_schema()),
         output_schema_name: Some("intake_initial_review".to_owned()),
         input,
@@ -2322,7 +2322,8 @@ fn validate_basic_information_details(value: &str) -> Result<(), ApiError> {
             "身高" => {
                 height = detail
                     .chars()
-                    .filter(char::is_ascii_digit)
+                    .skip_while(|character| !character.is_ascii_digit())
+                    .take_while(char::is_ascii_digit)
                     .collect::<String>()
                     .parse::<u16>()
                     .ok();
@@ -2599,6 +2600,16 @@ mod tests {
         assert!(validate_basic_information_details("姓名：虚构老人；身高：168 厘米").is_err());
         assert!(
             validate_basic_information_details("姓名：虚构老人；身高：280 厘米；特征描述：戴帽子")
+                .is_err()
+        );
+        assert!(
+            validate_basic_information_details(
+                "姓名：虚构老人；身高：168 厘米，鞋码 42；特征描述：戴帽子"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_basic_information_details("姓名：虚构老人；身高：1.68 米；特征描述：戴帽子")
                 .is_err()
         );
     }

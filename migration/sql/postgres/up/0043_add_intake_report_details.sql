@@ -12,6 +12,14 @@ CREATE TABLE intake_session_photos (
 -- statement-break
 CREATE INDEX idx_intake_session_photos_session ON intake_session_photos(session_id, created_at DESC);
 -- statement-break
+CREATE TABLE intake_question_definition_status_backup_m0043 (
+    question_id VARCHAR(36) PRIMARY KEY REFERENCES intake_question_definitions(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    previous_status VARCHAR(16) NOT NULL CHECK (previous_status = 'active')
+);
+-- statement-break
+INSERT INTO intake_question_definition_status_backup_m0043 (question_id, previous_status)
+SELECT id, status FROM intake_question_definitions WHERE version = 2 AND status = 'active';
+-- statement-break
 UPDATE intake_question_definitions SET status = 'disabled' WHERE version = 2 AND status = 'active';
 -- statement-break
 INSERT INTO intake_question_definitions (id, version, field_code, prompt, display_order, is_required, max_answer_chars, status, created_at, updated_at) VALUES

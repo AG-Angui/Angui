@@ -30,6 +30,12 @@ impl MigrationTrait for Migration {
             &[(
                 "intake report photos exist",
                 "SELECT 1 FROM intake_session_photos LIMIT 1",
+            ), (
+                "intake sessions use question set version 3",
+                "SELECT 1 FROM intake_sessions WHERE question_set_version = 3 LIMIT 1",
+            ), (
+                "version 2 question definitions changed after this migration",
+                "SELECT 1 FROM intake_question_definitions WHERE version = 2 AND status <> 'disabled' LIMIT 1",
             )],
         )
         .await?;

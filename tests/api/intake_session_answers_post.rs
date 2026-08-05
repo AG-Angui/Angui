@@ -90,6 +90,7 @@ async fn post_intake_session_answers_stores_raw_and_draft_candidate_then_returns
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = test::read_body_json(response).await;
     assert_eq!(body["session_id"], session_id);
+    assert_eq!(body["question_set_version"], 2);
     assert_eq!(body["status"], "collecting");
     assert_eq!(body["raw_answer"], raw_answer);
     assert_eq!(body["candidate_fields"][0]["field"], "health_status");
