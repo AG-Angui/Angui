@@ -20,6 +20,8 @@
 | `POST` | `/api/intake-sessions/{session_id}/answers` | `201` | 追加一个未确认答案并获取下一问 |
 | `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
 | `POST` | `/api/intake-sessions/{session_id}/confirm` | `201` | 家属确认画像并创建正式案件 |
+| `GET` | `/api/ai/executions/{execution_id}` | `200` | 查询当前用户的受控 AI 执行阶段与安全终态 |
+| `GET` | `/api/ai/executions/{execution_id}/events` | `200` | 按事件 ID 恢复读取有序、可去重的安全 SSE 生命周期事件 |
 | `GET` | `/api/cases` | `200` | 按创建时间倒序列出案件 |
 | `GET` | `/api/cases/command-intake` | `200` | 指挥查看仅含最小接案信息的待受理队列 |
 | `POST` | `/api/cases` | `201` | 创建案件和老人画像 |
@@ -333,7 +335,9 @@ The following authenticated endpoints produce only drafts; none confirms a clue,
 
 Family intake now has a separate first-confirmation path: `POST /api/intake-sessions/{session_id}/ai-initial-review` stores a family-only initial-review draft and never creates a case. `GET /api/intake-sessions/{session_id}/ai-initial-review` returns the current result. The family must acknowledge every displayed issue through `POST /api/intake-sessions/{session_id}/ai-initial-review/acknowledge` before the existing `/confirm` endpoint performs the second confirmation and creates the case. Model failures, policy mismatches, and invalid JSON use the deterministic rule-check fallback; no fallback result confirms a fact or location.
 
-The intake profile-generation and initial-review POST endpoints respond as SSE. Before the final `completed` JSON event, they may emit `progress` events with the safe stage values `queued`, `preparing`, `generating`, `validating`, or `fallback`. Progress events carry only the stage name and never model reasoning, raw prompts, profile content, unvalidated candidate fields, provider credentials, or upstream SSE payloads. Clients must treat only `completed` as a final draft/review result and must discard a partial stream on interruption.
+The intake profile-generation and initial-review POST endpoints respond as SSE. Their first `started` event includes a stable `execution_id`; progress events include a monotonic `event_id` and the safe stage values `queued`, `preparing`, `generating`, `validating`, or `fallback`. Progress events carry lifecycle metadata only and never model reasoning, raw prompts, profile content, unvalidated candidate fields, provider credentials, or upstream SSE payloads. Clients must treat only `completed` as a final draft/review result and must discard a partial stream on interruption.
+
+`GET /api/ai/executions/{execution_id}` lets the owning authenticated user recover the current execution state after refresh or an interrupted stream. `GET /api/ai/executions/{execution_id}/events?after={last_event_id}` returns ordered, de-duplicable lifecycle metadata only. After completion, clients re-read the existing draft or review resource rather than treating a cached or partial event as a result. Execution audits contain only the execution ID, stage, safe failure kind, result status, and fallback flag; they do not store prompt text, sensitive inputs, model output, or preview content.
 
 - `GET /api/intake-sessions/{session_id}/ai-follow-up` returns one optional, skippable AI follow-up question or the static-question fallback. `GET /api/intake-sessions/{session_id}/answer-revisions` lists immutable answers for the session creator; `POST /api/intake-sessions/{session_id}/answers/{field}/restore` restores a selected answer by creating a new revision.
 - `PATCH /api/cases/{case_id}/clue-drafts/{draft_id}/review` accepts `field_decisions` for `content_summary`, `occurred_at`, `location_text`, `source_text`, and `action_candidates`. Decisions are `accept`, `edit`, or `clear`; only an accepted draft is promoted to a normal pending-review clue.

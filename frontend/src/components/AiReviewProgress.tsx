@@ -3,7 +3,9 @@ export type AiReviewStage =
   | "preparing"
   | "generating"
   | "validating"
-  | "fallback";
+  | "fallback"
+  | "ready_for_review"
+  | "failed";
 
 const stageDetails: Record<
   AiReviewStage,
@@ -33,6 +35,16 @@ const stageDetails: Record<
     label: "正在切换规则结果",
     description: "AI 结果不可用或未通过校验，系统会提供可人工核对的规则结果。",
     completed: 4,
+  },
+  ready_for_review: {
+    label: "候选已准备好，等待人工审核",
+    description: "结果仍是草稿或候选，必须由当前角色人工核对后才能继续。",
+    completed: 4,
+  },
+  failed: {
+    label: "审核未能完成",
+    description: "没有生成可用草稿。请重试，或按现有人工流程继续。",
+    completed: 0,
   },
 };
 

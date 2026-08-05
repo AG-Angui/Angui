@@ -2849,7 +2849,11 @@ function CaseCollaborationPanel({
               onPress={() =>
                 void run("pois", async () => {
                   if (!token) return;
-                  setPois(await listCasePois(token, detail.id, poiCategory));
+                  try {
+                    setPois(await listCasePois(token, detail.id, poiCategory));
+                  } catch (cause) {
+                    throw new Error(poiErrorMessage(cause));
+                  }
                 })
               }
             >
@@ -3965,6 +3969,12 @@ function toIsoOrNull(value: string): string | null {
 function messageFrom(cause: unknown): string {
   if (cause instanceof ApiClientError) return cause.message;
   return cause instanceof Error ? cause.message : "操作失败";
+}
+
+function poiErrorMessage(cause: unknown): string {
+  if (cause instanceof ApiClientError && cause.status === 409)
+    return "当前案件没有可用的任务或已确认地点坐标，无法检索周边资源。请使用任务区域文字并联系指挥确认。";
+  return messageFrom(cause);
 }
 
 function formatDate(value: string | null): string | null {

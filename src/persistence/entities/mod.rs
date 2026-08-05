@@ -1,3 +1,5 @@
+pub mod ai_execution_events;
+pub mod ai_executions;
 pub mod ai_prompt_templates;
 pub mod archive_drafts;
 pub mod archive_review_materials;
