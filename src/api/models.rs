@@ -36,6 +36,7 @@ pub struct LearningResourceResponse {
     pub tags: Vec<String>,
     pub source_name: String,
     pub source_url: Option<String>,
+    pub previous_version_id: Option<String>,
     pub version: i32,
     pub effective_at: String,
 }
@@ -56,6 +57,7 @@ pub struct LearningQuestionResponse {
     pub tags: Vec<String>,
     pub options: Value,
     pub source_resource_id: String,
+    pub previous_version_id: Option<String>,
     pub version: i32,
 }
 
@@ -104,6 +106,7 @@ pub struct CreateLearningResourceRequest {
     pub tags: Vec<String>,
     pub source_name: String,
     pub source_url: Option<String>,
+    pub previous_version_id: Option<String>,
     pub visibility: String,
     pub effective_at: String,
     pub permitted_use: String,
@@ -121,6 +124,7 @@ pub struct CreateLearningQuestionRequest {
     pub options: Value,
     pub correct_option_id: String,
     pub explanation: String,
+    pub previous_version_id: Option<String>,
     pub visibility: String,
     pub effective_at: String,
     pub permitted_use: String,
@@ -1279,6 +1283,7 @@ pub struct ClueDraftFieldDecision {
 pub struct CasePublicProgressResponse {
     pub case_id: String,
     pub status: String,
+    pub publication_status: String,
     pub generated_at: String,
     pub confirmed_progress: Vec<CasePublicProgressItem>,
     pub requested_family_information: Vec<CasePublicProgressItem>,

@@ -23,9 +23,12 @@ vi.mock("../auth/useAuth", () => ({
 }));
 
 vi.mock("../api/learning", () => ({
-  listManagedLearningResources: (...args: unknown[]) => mocked.listResources(...args),
-  listManagedLearningQuestions: (...args: unknown[]) => mocked.listQuestions(...args),
-  transitionManagedLearningResource: (...args: unknown[]) => mocked.transitionResource(...args),
+  listManagedLearningResources: (...args: unknown[]) =>
+    mocked.listResources(...args),
+  listManagedLearningQuestions: (...args: unknown[]) =>
+    mocked.listQuestions(...args),
+  transitionManagedLearningResource: (...args: unknown[]) =>
+    mocked.transitionResource(...args),
   transitionManagedLearningQuestion: vi.fn(),
   createManagedLearningResource: vi.fn(),
   createManagedLearningQuestion: vi.fn(),
@@ -71,6 +74,110 @@ describe("LearningGovernancePage", () => {
     expect(
       screen.getByText("提交人不能确认本条内容的脱敏，请由另一名管理员处理。"),
     ).toBeInTheDocument();
+  });
+
+  it("does not offer abandoning an unmanaged record even when it has a predecessor id", async () => {
+    const unmanaged = submittedResource("");
+    mocked.listResources.mockResolvedValue([
+      {
+        ...unmanaged,
+        previous_version_id: "resource-previous",
+        lifecycle: { ...unmanaged.lifecycle, state: "unmanaged" },
+      },
+    ]);
+    render(<LearningGovernancePage />);
+
+    await screen.findByText(unmanaged.title);
+    expect(
+      screen.queryByRole("button", { name: "放弃更正" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("limits a corrected question to its original source resource", async () => {
+    const originalSource = {
+      ...submittedResource("admin-2"),
+      id: "resource-original",
+      title: "原始来源",
+      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+    };
+    const otherSource = {
+      ...submittedResource("admin-2"),
+      id: "resource-other",
+      title: "其他来源",
+      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+    };
+    mocked.listResources.mockResolvedValue([originalSource, otherSource]);
+    mocked.listQuestions.mockResolvedValue([
+      {
+        id: "question-original",
+        prompt: "原始题目",
+        question_type: "single_choice",
+        difficulty: "basic",
+        tags: [],
+        options: [],
+        source_resource_id: "resource-original",
+        version: 1,
+        lifecycle: {
+          ...submittedResource("admin-2").lifecycle,
+          state: "published",
+        },
+      },
+    ]);
+    render(<LearningGovernancePage />);
+
+    const correctionSelectors = await screen.findAllByLabelText("更正上一版本");
+    fireEvent.change(correctionSelectors[1], {
+      target: { value: "question-original" },
+    });
+
+    expect(screen.getByRole("option", { name: "原始来源" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "其他来源" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("syncs the source resource when selecting a correction after choosing a source", async () => {
+    const originalSource = {
+      ...submittedResource("admin-2"),
+      id: "resource-original",
+      title: "Original source",
+      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+    };
+    const otherSource = {
+      ...submittedResource("admin-2"),
+      id: "resource-other",
+      title: "Other source",
+      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+    };
+    mocked.listResources.mockResolvedValue([originalSource, otherSource]);
+    mocked.listQuestions.mockResolvedValue([
+      {
+        id: "question-original",
+        prompt: "Original question",
+        question_type: "single_choice",
+        difficulty: "basic",
+        tags: [],
+        options: [],
+        source_resource_id: "resource-original",
+        version: 1,
+        lifecycle: {
+          ...submittedResource("admin-2").lifecycle,
+          state: "published",
+        },
+      },
+    ]);
+    render(<LearningGovernancePage />);
+
+    const sourceSelectors = await screen.findAllByLabelText("来源资源");
+    fireEvent.change(sourceSelectors[0], {
+      target: { value: "resource-other" },
+    });
+    const correctionSelectors = await screen.findAllByLabelText("更正上一版本");
+    fireEvent.change(correctionSelectors[1], {
+      target: { value: "question-original" },
+    });
+
+    expect(sourceSelectors[0]).toHaveValue("resource-original");
   });
 
   it("keeps a governance conflict in the current page with its specific reason", async () => {

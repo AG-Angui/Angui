@@ -5,7 +5,7 @@ use actix_web::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
-use crate::support::{COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
+use crate::support::{ADMIN, COMMANDER, FAMILY, LEARNER, TestContext, VOLUNTEER, assert_error};
 use angui::entities::{clue_drafts, summary_drafts};
 
 #[actix_web::test]
@@ -48,6 +48,7 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     .await;
     assert_eq!(public_progress.status(), StatusCode::OK);
     let public_progress: Value = test::read_body_json(public_progress).await;
+    assert_eq!(public_progress["publication_status"], "reviewed_public");
     assert_eq!(
         public_progress["confirmed_progress"][0]["clue_id"],
         confirmed_id
@@ -90,6 +91,36 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
         .await,
         StatusCode::FORBIDDEN,
         "forbidden",
+    )
+    .await;
+
+    for email in [VOLUNTEER, LEARNER, ADMIN] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/cases/{case_id}/public-progress"))
+                .insert_header((
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", context.token(email).await),
+                ))
+                .to_request(),
+        )
+        .await;
+        assert!(matches!(
+            response.status(),
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+        ));
+    }
+    assert_error(
+        test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/cases/{case_id}/public-progress"))
+                .to_request(),
+        )
+        .await,
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
     )
     .await;
 

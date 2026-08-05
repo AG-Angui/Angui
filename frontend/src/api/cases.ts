@@ -206,6 +206,7 @@ export interface PublicProgressItem {
 export interface CasePublicProgress {
   case_id: string;
   status: CaseStatus;
+  publication_status: "reviewed_public";
   generated_at: string;
   confirmed_progress: PublicProgressItem[];
   requested_family_information: PublicProgressItem[];

@@ -18,7 +18,8 @@ export function registerPreventionCache() {
     .then(async () => {
       const cache = await caches.open("angui-learning-offline-v1");
       setReady(
-        Boolean(navigator.serviceWorker.controller) && Boolean(await cache.match("/")),
+        Boolean(navigator.serviceWorker.controller) &&
+          Boolean(await cache.match("/")),
       );
     })
     .catch((cause: unknown) => {

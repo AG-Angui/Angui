@@ -915,6 +915,7 @@ pub async fn get_public_progress(
     Ok(CasePublicProgressResponse {
         case_id: detail.id,
         status: detail.status,
+        publication_status: "reviewed_public".to_owned(),
         generated_at: now(),
         confirmed_progress,
         requested_family_information,

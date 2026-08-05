@@ -40,6 +40,7 @@ mod m0037_add_ai_review_materials;
 mod m0038_create_learning_center;
 mod m0039_create_learning_content_review_events;
 mod m0040_enforce_learning_lifecycle_event_uniqueness;
+mod m0041_add_learning_content_version_lineage;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -89,6 +90,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0038_create_learning_center::Migration),
             Box::new(m0039_create_learning_content_review_events::Migration),
             Box::new(m0040_enforce_learning_lifecycle_event_uniqueness::Migration),
+            Box::new(m0041_add_learning_content_version_lineage::Migration),
         ]
     }
 }
@@ -387,6 +389,50 @@ mod tests {
         Migrator::up(&database, None)
             .await
             .expect("migrations should be repeatable after rollback");
+    }
+
+    #[tokio::test]
+    async fn sqlite_learning_lineage_rollback_refuses_to_discard_correction_links() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, None)
+            .await
+            .expect("all migrations should succeed");
+        database
+            .execute_unprepared(
+                "INSERT INTO learning_resources (id, title, summary, content, resource_type, tags_json, source_name, source_url, previous_version_id, version, visibility, status, effective_at, withdrawn_at, created_at, updated_at) VALUES ('lineage-v1', 'First version', 'First version summary', 'First version content', 'manual', '[]', 'Test source', NULL, NULL, 1, 'learner', 'published', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'), ('lineage-v2', 'Corrected version', 'Corrected version summary', 'Corrected version content', 'manual', '[]', 'Test source', NULL, 'lineage-v1', 2, 'learner', 'withdrawn', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+            )
+            .await
+            .expect("correction lineage should be stored");
+        database
+            .execute_unprepared(
+                "INSERT INTO learning_questions (id, source_resource_id, prompt, question_type, difficulty, tags_json, options_json, correct_option_id, explanation, previous_version_id, version, visibility, status, effective_at, withdrawn_at, created_at, updated_at) VALUES ('lineage-question-v1', 'lineage-v1', 'First question', 'single_choice', 'basic', '[]', '[{\"id\":\"a\",\"text\":\"First option\"}]', 'a', 'First explanation', NULL, 1, 'learner', 'published', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'), ('lineage-question-v2', 'lineage-v1', 'Corrected question', 'single_choice', 'basic', '[]', '[{\"id\":\"a\",\"text\":\"Corrected option\"}]', 'a', 'Corrected explanation', 'lineage-question-v1', 2, 'learner', 'withdrawn', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+            )
+            .await
+            .expect("question correction lineage should be stored");
+
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        assert!(
+            database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM learning_resources WHERE id = 'lineage-v2' AND previous_version_id = 'lineage-v1'",
+                ))
+                .await
+                .expect("lineage query should succeed")
+                .is_some()
+        );
+        assert!(
+            database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM learning_questions WHERE id = 'lineage-question-v2' AND previous_version_id = 'lineage-question-v1'",
+                ))
+                .await
+                .expect("question lineage query should succeed")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -1330,7 +1376,9 @@ mod tests {
 
         let mysql = scripts[2].1;
         assert!(
-            mysql.contains(") AS retained_events\n);"),
+            mysql
+                .replace("\r\n", "\n")
+                .contains(") AS retained_events\n);"),
             "MySQL needs an inner derived-table alias when deleting duplicate rows"
         );
         assert!(

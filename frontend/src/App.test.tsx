@@ -162,30 +162,43 @@ describe("application role routing", () => {
     ["learner", "learner", []],
     ["family", "member", []],
     ["volunteer", "member", ["volunteer"]],
-  ] as const)("exposes the learning center to %s audiences", async (_audience, accountType, capabilities) => {
-    setAuth(accountType, capabilities);
-    renderApp("/learning");
-    expect(await screen.findByRole("heading", { name: "学习中心" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "学习中心" })).toBeInTheDocument();
-  });
+  ] as const)(
+    "exposes the learning center to %s audiences",
+    async (_audience, accountType, capabilities) => {
+      setAuth(accountType, capabilities);
+      renderApp("/learning");
+      expect(
+        await screen.findByRole("heading", { name: "学习中心" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: "学习中心" }),
+      ).toBeInTheDocument();
+    },
+  );
 
   it("does not expose the learning center to commander-only audiences", async () => {
     setAuth("member", ["commander"]);
     renderApp("/learning");
     expect(await screen.findByText("行动总览")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "学习中心" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "学习中心" }),
+    ).not.toBeInTheDocument();
   });
 
   it("exposes content governance only to administrators", async () => {
     setAuth("member", ["admin"]);
     renderApp("/admin/learning");
-    expect(await screen.findByRole("heading", { name: "学习内容治理" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "学习内容治理" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "内容治理" })).toBeInTheDocument();
 
     cleanup();
     setAuth("member", ["commander"]);
     renderApp("/admin/learning");
     expect(await screen.findByText("行动总览")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "内容治理" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "内容治理" }),
+    ).not.toBeInTheDocument();
   });
 });

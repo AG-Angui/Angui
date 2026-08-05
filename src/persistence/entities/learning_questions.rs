@@ -13,6 +13,7 @@ pub struct Model {
     pub options_json: String,
     pub correct_option_id: String,
     pub explanation: String,
+    pub previous_version_id: Option<String>,
     pub version: i32,
     pub visibility: String,
     pub status: String,

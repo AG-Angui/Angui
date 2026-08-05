@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { load } from "@amap/amap-jsapi-loader";
 import { LocationConfirmationPicker } from "./LocationConfirmationPicker";
@@ -156,16 +162,16 @@ describe("LocationConfirmationPicker", () => {
       value: { getCurrentPosition },
     });
 
-    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    render(
+      <LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
     await act(async () => {
       getCurrentPosition.mock.calls[0][0]({
         coords: { longitude: 116.39, latitude: 39.91, accuracy: 80 },
       });
     });
-    expect(
-      await screen.findByText("地图服务加载失败"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("地图服务加载失败")).toBeInTheDocument();
     expect(amapLoad).toHaveBeenCalledOnce();
     expect(amapLoad).toHaveBeenCalledWith({
       key: "test-key",
@@ -197,7 +203,9 @@ describe("LocationConfirmationPicker", () => {
       value: { getCurrentPosition },
     });
 
-    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    render(
+      <LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
     await act(async () => {
       getCurrentPosition.mock.calls[0][0]({
@@ -221,7 +229,9 @@ describe("LocationConfirmationPicker", () => {
     });
     const onConfirm = vi.fn();
 
-    render(<LocationConfirmationPicker onConfirm={onConfirm} onClear={vi.fn()} />);
+    render(
+      <LocationConfirmationPicker onConfirm={onConfirm} onClear={vi.fn()} />,
+    );
     expect(getCurrentPosition).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
@@ -258,7 +268,9 @@ describe("LocationConfirmationPicker", () => {
   });
 
   it("searches a typed location before opening the map confirmation", async () => {
-    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    render(
+      <LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "搜索地点" }), {
       target: { value: "测试地点" },
@@ -298,7 +310,9 @@ describe("LocationConfirmationPicker", () => {
       pendingSearch = callback;
     });
 
-    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    render(
+      <LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />,
+    );
 
     fireEvent.change(screen.getByRole("textbox", { name: "搜索地点" }), {
       target: { value: "旧关键词" },
@@ -350,7 +364,9 @@ describe("LocationConfirmationPicker", () => {
       value: { getCurrentPosition },
     });
 
-    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    render(
+      <LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
     await act(async () => {
       getCurrentPosition.mock.calls[0][0]({
@@ -371,7 +387,9 @@ describe("LocationConfirmationPicker", () => {
       value: { getCurrentPosition },
     });
 
-    render(<LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />);
+    render(
+      <LocationConfirmationPicker onConfirm={vi.fn()} onClear={vi.fn()} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "获取当前位置" }));
 
     expect(

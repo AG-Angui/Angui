@@ -693,7 +693,7 @@ export function VolunteerWorkspacePage() {
                               occurred_at: localNow(),
                               location_text: clueDraft.location.trim() || null,
                               location_precision: clueDraft.location.trim()
-                                ? clueDraft.precision ?? "approximate"
+                                ? (clueDraft.precision ?? "approximate")
                                 : null,
                             });
                             setClueDrafts((value) => ({
