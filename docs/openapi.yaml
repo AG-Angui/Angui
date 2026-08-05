@@ -1790,7 +1790,7 @@ paths:
       tags: [Learning]
       operationId: listLearningResources
       summary: List reviewed learning resources visible to the current account
-      description: Returns only effective training resources whose visibility matches the authenticated account and whose immutable governance chain records independent de-identification, review, and publication. Withdrawn, future, public-information-only, internal-case, and raw archive material are never returned.
+      description: Returns only effective training or public-information resources whose visibility matches the authenticated account and whose immutable governance chain records independent de-identification, review, and publication. Withdrawn, future, internal-case, and raw archive material are never returned.
       security: [{ bearerAuth: [] }]
       x-account-types: [member, learner]
       x-data-classification: public-or-training
@@ -1824,6 +1824,265 @@ paths:
         "200": { description: Correctness and source-backed explanation }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/learning/resources:
+    get:
+      tags: [Learning governance]
+      operationId: listManagedLearningResources
+      summary: List learning resources and their immutable governance history
+      description: Administrator-only. Includes submitted, reviewed, published, withdrawn, and replacement versions with their audit-ready lifecycle events.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Managed resource records, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManagedLearningResource" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Learning governance]
+      operationId: createManagedLearningResource
+      summary: Submit a first or corrected learning resource version
+      description: Administrator-only. A corrected version sets previous_version_id, receives the preceding version plus one, begins at submitted, and must complete independent de-identification, review, and publication. A second direct successor returns 409.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateLearningResourceRequest" } } }
+      responses:
+        "201": { description: Submitted resource version, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningResource" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/resources/{resource_id}/deidentify:
+    post:
+      tags: [Learning governance]
+      operationId: deidentifyLearningResource
+      summary: Record independent de-identification for a submitted resource
+      description: Requires a different administrator from the submitter; lifecycle changes are append-only.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: resource_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Resource with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningResource" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/resources/{resource_id}/review:
+    post:
+      tags: [Learning governance]
+      operationId: reviewLearningResource
+      summary: Record independent review for a de-identified resource
+      description: Requires an administrator distinct from the submitter and de-identifier.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: resource_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Resource with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningResource" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/resources/{resource_id}/publish:
+    post:
+      tags: [Learning governance]
+      operationId: publishLearningResource
+      summary: Publish a reviewed resource
+      description: Requires a third independent administrator. Publishing a corrected version atomically withdraws its previous version.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: resource_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Published resource with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningResource" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/resources/{resource_id}/withdraw:
+    post:
+      tags: [Learning governance]
+      operationId: withdrawLearningResource
+      summary: Withdraw a published resource
+      description: The resource becomes unavailable to learners and exports return not found.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: resource_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Withdrawn resource with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningResource" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/resources/{resource_id}/export:
+    get:
+      tags: [Learning governance]
+      operationId: exportLearningResource
+      summary: Export one currently published resource
+      description: Administrator-only export of the currently published, independently governed version. Withdrawn or unknown resources return not found.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: JSON attachment, content: { application/json: { schema: { $ref: "#/components/schemas/LearningResource" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/learning/questions:
+    get:
+      tags: [Learning governance]
+      operationId: listManagedLearningQuestions
+      summary: List learning questions and their immutable governance history
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Managed question records, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManagedLearningQuestion" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Learning governance]
+      operationId: createManagedLearningQuestion
+      summary: Submit a first or corrected learning question version
+      description: Administrator-only. A corrected question is independently governed before publication and may reference the corresponding published resource version.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateLearningQuestionRequest" } } }
+      responses:
+        "201": { description: Submitted question version, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningQuestion" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/questions/{question_id}/deidentify:
+    post:
+      tags: [Learning governance]
+      operationId: deidentifyLearningQuestion
+      summary: Record independent de-identification for a submitted question
+      description: Requires a different administrator from the submitter; lifecycle changes are append-only.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: question_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Question with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningQuestion" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/questions/{question_id}/review:
+    post:
+      tags: [Learning governance]
+      operationId: reviewLearningQuestion
+      summary: Record independent review for a de-identified question
+      description: Requires an administrator distinct from the submitter and de-identifier.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: question_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Question with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningQuestion" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/questions/{question_id}/publish:
+    post:
+      tags: [Learning governance]
+      operationId: publishLearningQuestion
+      summary: Publish a reviewed question whose source resource remains published
+      description: Publishing a corrected version atomically withdraws its previous version.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: question_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Published question with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningQuestion" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/questions/{question_id}/withdraw:
+    post:
+      tags: [Learning governance]
+      operationId: withdrawLearningQuestion
+      summary: Withdraw a published question
+      description: The question becomes unavailable for listing, submission, and export.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: question_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Withdrawn question with updated lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningQuestion" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/questions/{question_id}/export:
+    get:
+      tags: [Learning governance]
+      operationId: exportLearningQuestion
+      summary: Export one currently published question without its answer key
+      description: Administrator-only. The exported response excludes correct_option_id and explanations; withdrawn or unknown questions return not found.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: JSON attachment without answer key, content: { application/json: { schema: { $ref: "#/components/schemas/LearningQuestion" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /api/knowledge/ask:
@@ -1970,6 +2229,130 @@ components:
                   message: database operation failed
 
   schemas:
+    LearningResource:
+      type: object
+      additionalProperties: false
+      required: [id, title, summary, content, resource_type, tags, source_name, source_url, previous_version_id, version, effective_at]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        content: { type: string }
+        resource_type: { type: string, enum: [team_intro, manual, prevention, case_study] }
+        tags: { type: array, items: { type: string } }
+        source_name: { type: string }
+        source_url: { type: [string, "null"], format: uri }
+        previous_version_id: { type: [string, "null"], description: Immutable direct predecessor. Null denotes a first version. }
+        version: { type: integer, minimum: 1 }
+        effective_at: { type: string, format: date-time }
+
+    LearningQuestionOption:
+      type: object
+      additionalProperties: false
+      required: [id, text]
+      properties:
+        id: { type: string }
+        text: { type: string }
+
+    LearningQuestion:
+      type: object
+      additionalProperties: false
+      required: [id, prompt, question_type, difficulty, tags, options, source_resource_id, previous_version_id, version]
+      properties:
+        id: { type: string }
+        prompt: { type: string }
+        question_type: { type: string, enum: [single_choice, true_false, scenario] }
+        difficulty: { type: string, enum: [basic, intermediate, advanced] }
+        tags: { type: array, items: { type: string } }
+        options: { type: array, items: { $ref: "#/components/schemas/LearningQuestionOption" } }
+        source_resource_id: { type: string }
+        previous_version_id: { type: [string, "null"], description: Immutable direct predecessor. Null denotes a first version. }
+        version: { type: integer, minimum: 1 }
+
+    LearningContentReviewEvent:
+      type: object
+      additionalProperties: false
+      required: [event_type, actor_user_id, reason, created_at]
+      properties:
+        event_type: { type: string, enum: [submitted, deidentified, reviewed, published, withdrawn] }
+        actor_user_id: { type: string }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+
+    LearningContentLifecycle:
+      type: object
+      additionalProperties: false
+      required: [submitted_by_user_id, deidentified_by_user_id, reviewed_by_user_id, published_by_user_id, withdrawn_by_user_id, state, permitted_use, events]
+      properties:
+        submitted_by_user_id: { type: string }
+        deidentified_by_user_id: { type: [string, "null"] }
+        reviewed_by_user_id: { type: [string, "null"] }
+        published_by_user_id: { type: [string, "null"] }
+        withdrawn_by_user_id: { type: [string, "null"] }
+        state: { type: string, enum: [unmanaged, submitted, deidentified, reviewed, published, withdrawn] }
+        permitted_use: { type: string, enum: [training, public_information] }
+        events: { type: array, items: { $ref: "#/components/schemas/LearningContentReviewEvent" } }
+
+    ManagedLearningResource:
+      allOf:
+        - $ref: "#/components/schemas/LearningResource"
+        - type: object
+          required: [lifecycle]
+          properties:
+            lifecycle: { $ref: "#/components/schemas/LearningContentLifecycle" }
+
+    ManagedLearningQuestion:
+      allOf:
+        - $ref: "#/components/schemas/LearningQuestion"
+        - type: object
+          required: [lifecycle]
+          properties:
+            lifecycle: { $ref: "#/components/schemas/LearningContentLifecycle" }
+
+    CreateLearningResourceRequest:
+      type: object
+      additionalProperties: false
+      required: [title, summary, content, resource_type, tags, source_name, source_url, previous_version_id, visibility, effective_at, permitted_use, submission_reason]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        summary: { type: string, minLength: 1, maxLength: 800 }
+        content: { type: string, minLength: 1, maxLength: 20000 }
+        resource_type: { type: string, enum: [team_intro, manual, prevention, case_study] }
+        tags: { type: array, items: { type: string } }
+        source_name: { type: string, minLength: 1, maxLength: 240 }
+        source_url: { type: [string, "null"], format: uri }
+        previous_version_id: { type: [string, "null"], description: Set only to correct one currently published, governance-approved resource version. }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+        effective_at: { type: string, format: date-time }
+        permitted_use: { type: string, enum: [training, public_information] }
+        submission_reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    CreateLearningQuestionRequest:
+      type: object
+      additionalProperties: false
+      required: [source_resource_id, prompt, question_type, difficulty, tags, options, correct_option_id, explanation, previous_version_id, visibility, effective_at, permitted_use, submission_reason]
+      properties:
+        source_resource_id: { type: string }
+        prompt: { type: string, minLength: 1, maxLength: 2000 }
+        question_type: { type: string, enum: [single_choice, true_false, scenario] }
+        difficulty: { type: string, enum: [basic, intermediate, advanced] }
+        tags: { type: array, items: { type: string } }
+        options: { type: array, items: { $ref: "#/components/schemas/LearningQuestionOption" } }
+        correct_option_id: { type: string, minLength: 1, maxLength: 128 }
+        explanation: { type: string, minLength: 1, maxLength: 4000 }
+        previous_version_id: { type: [string, "null"], description: Set only to correct one currently published, governance-approved question version. }
+        visibility: { type: string, enum: [authenticated, volunteer, learner] }
+        effective_at: { type: string, format: date-time }
+        permitted_use: { type: string, enum: [training] }
+        submission_reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    LearningContentActionRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
     HealthResponse:
       type: object
       additionalProperties: false
@@ -3198,10 +3581,11 @@ components:
     CasePublicProgress:
       type: object
       additionalProperties: false
-      required: [case_id, status, generated_at, confirmed_progress, requested_family_information, safety_and_contact_reminders]
+      required: [case_id, status, publication_status, generated_at, confirmed_progress, requested_family_information, safety_and_contact_reminders]
       properties:
         case_id: { type: string, format: uuid }
         status: { $ref: "#/components/schemas/CaseStatus" }
+        publication_status: { type: string, enum: [reviewed_public], description: Server-controlled family-safe publication state. }
         generated_at: { type: string, format: date-time }
         confirmed_progress: { type: array, items: { $ref: "#/components/schemas/CasePublicProgressItem" } }
         requested_family_information: { type: array, items: { $ref: "#/components/schemas/CasePublicProgressItem" } }

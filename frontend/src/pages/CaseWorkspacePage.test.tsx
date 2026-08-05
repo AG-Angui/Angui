@@ -565,6 +565,7 @@ describe("CaseWorkspacePage", () => {
       secondProgress.resolve({
         case_id: "case-2",
         status: "active",
+        publication_status: "reviewed_public",
         generated_at: "2026-07-24T00:00:00Z",
         confirmed_progress: [
           {
@@ -617,6 +618,7 @@ describe("CaseWorkspacePage", () => {
     mocked.getCasePublicProgress.mockResolvedValue({
       case_id: "family-progress",
       status: "active",
+      publication_status: "reviewed_public",
       generated_at: "2026-08-05T00:00:00Z",
       confirmed_progress: [
         {
@@ -632,7 +634,7 @@ describe("CaseWorkspacePage", () => {
 
     render(<CaseWorkspacePage mode="family" />);
 
-    expect(await screen.findByText("发布状态：已审核发布", { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText("发布状态：已审核公开", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("更新于：", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("已确认一项案件进展。", { exact: false })).toBeInTheDocument();
     expect(screen.queryByText("内部未审核线索")).not.toBeInTheDocument();

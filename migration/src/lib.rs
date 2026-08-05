@@ -40,6 +40,7 @@ mod m0037_add_ai_review_materials;
 mod m0038_create_learning_center;
 mod m0039_create_learning_content_review_events;
 mod m0040_enforce_learning_lifecycle_event_uniqueness;
+mod m0041_add_learning_content_version_lineage;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -89,6 +90,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0038_create_learning_center::Migration),
             Box::new(m0039_create_learning_content_review_events::Migration),
             Box::new(m0040_enforce_learning_lifecycle_event_uniqueness::Migration),
+            Box::new(m0041_add_learning_content_version_lineage::Migration),
         ]
     }
 }
@@ -1330,7 +1332,9 @@ mod tests {
 
         let mysql = scripts[2].1;
         assert!(
-            mysql.contains(") AS retained_events\n);"),
+            mysql
+                .replace("\r\n", "\n")
+                .contains(") AS retained_events\n);"),
             "MySQL needs an inner derived-table alias when deleting duplicate rows"
         );
         assert!(

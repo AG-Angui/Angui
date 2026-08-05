@@ -2756,7 +2756,11 @@ function CaseCollaborationPanel({
           {publicProgress && (
             <div className="mt-3 space-y-3">
               <p className="m-0 text-xs leading-5 text-slate-600" role="status">
-                发布状态：已审核发布 · 更新于：
+                发布状态：
+                {publicProgress.publication_status === "reviewed_public"
+                  ? "已审核公开"
+                  : "不可公开"}
+                {" · 更新于："}
                 {formatDate(publicProgress.generated_at)}
               </p>
               <div className="rounded-md border border-emerald-200 bg-white p-3">

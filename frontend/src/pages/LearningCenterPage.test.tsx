@@ -123,4 +123,38 @@ describe("LearningCenterPage", () => {
       screen.getByText("引用来源（均为已审核发布）：脱敏案例复盘 v2"),
     ).toBeInTheDocument();
   });
+
+  it("keeps published resources visible when the knowledge service fails", async () => {
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "未找到可访问的资源。"),
+    );
+    mocked.listLearningResources.mockResolvedValue([
+      {
+        id: "manual-v1",
+        title: "已发布手册",
+        summary: "摘要",
+        content: "受控资料正文。",
+        resource_type: "manual",
+        tags: [],
+        source_name: "资料负责人",
+        source_url: null,
+        version: 1,
+        effective_at: "2026-08-05T00:00:00.000Z",
+      },
+    ]);
+    mocked.askKnowledge.mockRejectedValue(new Error("服务暂不可用"));
+
+    render(<LearningCenterPage />);
+    expect(await screen.findByText("已发布手册")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("输入学习问题"), {
+      target: { value: "如何准备？" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交问题" }));
+
+    expect(
+      await screen.findByText("问答暂时不可用，已发布资料仍可查看。请稍后重试。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("已发布手册")).toBeInTheDocument();
+  });
 });

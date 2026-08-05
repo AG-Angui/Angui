@@ -242,6 +242,65 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     let exported_resource: Value = test::read_body_json(exported_resource).await;
     assert_eq!(exported_resource["id"], resource_id);
 
+    let correction = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/learning/resources")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(json!({
+                "title": "更正后的防走失准备清单",
+                "summary": "经核对的更正版本。",
+                "content": "该更正版本仍需完成独立脱敏、审核与发布，不能替代现场指令。",
+                "resource_type": "prevention",
+                "tags": ["防走失", "更正"],
+                "source_name": "测试审核来源",
+                "source_url": "https://example.invalid/corrected-source",
+                "previous_version_id": resource_id,
+                "visibility": "public",
+                "effective_at": "2020-01-01T00:00:00.000Z",
+                "permitted_use": "public_information",
+                "submission_reason": "纠正已发布资料的来源说明。"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(correction.status(), StatusCode::CREATED);
+    let correction: Value = test::read_body_json(correction).await;
+    assert_eq!(correction["previous_version_id"], resource_id);
+    assert_eq!(correction["version"], 2);
+    assert_eq!(correction["lifecycle"]["state"], "submitted");
+    let correction_id = correction["id"].as_str().expect("correction id").to_owned();
+
+    let duplicate_correction = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/learning/resources")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(json!({
+                "title": "重复更正应被拒绝",
+                "summary": "同一版本不能存在两个直接更正版本。",
+                "content": "该请求用于验证同一已发布版本的重复更正会明确返回冲突，而不会产生服务器错误。",
+                "resource_type": "prevention",
+                "tags": ["防走失", "更正"],
+                "source_name": "测试审核来源",
+                "source_url": "https://example.invalid/duplicate-correction",
+                "previous_version_id": resource_id,
+                "visibility": "public",
+                "effective_at": "2020-01-01T00:00:00.000Z",
+                "permitted_use": "public_information",
+                "submission_reason": "验证重复更正的冲突响应。"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_error(duplicate_correction, StatusCode::CONFLICT, "conflict").await;
+
     let question = test::call_service(
         &app,
         test::TestRequest::post()
@@ -413,11 +472,48 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     )
     .await;
 
+    for (email, action) in [
+        (COMMANDER, "deidentify"),
+        (VOLUNTEER, "review"),
+        (ADMIN, "publish"),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!(
+                    "/api/admin/learning/resources/{correction_id}/{action}"
+                ))
+                .insert_header((
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", context.token(email).await),
+                ))
+                .set_json(json!({ "reason": "更正版本的独立治理步骤。" }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let resources_after_correction = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/resources")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    let resources_after_correction: Value = test::read_body_json(resources_after_correction).await;
+    assert_eq!(resources_after_correction.as_array().map(Vec::len), Some(1));
+    assert_eq!(resources_after_correction[0]["id"], correction_id);
+
     let withdrawn = test::call_service(
         &app,
         test::TestRequest::post()
             .uri(&format!(
-                "/api/admin/learning/resources/{resource_id}/withdraw"
+                "/api/admin/learning/resources/{correction_id}/withdraw"
             ))
             .insert_header((
                 header::AUTHORIZATION,
@@ -437,6 +533,25 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     )
     .await;
     assert_error(withdrawn_public_card, StatusCode::NOT_FOUND, "not_found").await;
+
+    for export_id in [&correction_id, "missing-learning-resource"] {
+        assert_error(
+            test::call_service(
+                &app,
+                test::TestRequest::get()
+                    .uri(&format!("/api/admin/learning/resources/{export_id}/export"))
+                    .insert_header((
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", context.token(ADMIN).await),
+                    ))
+                    .to_request(),
+            )
+            .await,
+            StatusCode::NOT_FOUND,
+            "not_found",
+        )
+        .await;
+    }
 
     let questions_after_withdrawal = test::call_service(
         &app,

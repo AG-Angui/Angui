@@ -12,6 +12,7 @@ pub struct Model {
     pub tags_json: String,
     pub source_name: String,
     pub source_url: Option<String>,
+    pub previous_version_id: Option<String>,
     pub version: i32,
     pub visibility: String,
     pub status: String,

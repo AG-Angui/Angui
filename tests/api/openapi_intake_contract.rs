@@ -407,6 +407,10 @@ fn case_collaboration_openapi_contract_covers_public_progress_drafts_and_pois() 
     assert!(public_progress_item.contains("progress_type:"));
     assert!(public_progress_item.contains("Raw clue text is never returned."));
     assert!(!public_progress_item.contains("content:"));
+    assert_schema_contains(
+        "CasePublicProgress",
+        &["publication_status:", "enum: [reviewed_public]"],
+    );
 }
 
 #[test]
@@ -551,6 +555,84 @@ fn admin_openapi_contract_limits_access_and_sensitive_fields() {
     assert_schema_contains(
         "UpdateAdminUserStatusRequest",
         &["enum: [active, disabled, locked]", "reason:"],
+    );
+}
+
+#[test]
+fn learning_governance_openapi_contract_documents_versions_and_independent_actions() {
+    for (path, operation_id, response_schema) in [
+        (
+            "/api/admin/learning/resources:\n",
+            "operationId: createManagedLearningResource",
+            "#/components/schemas/CreateLearningResourceRequest",
+        ),
+        (
+            "/api/admin/learning/questions:\n",
+            "operationId: createManagedLearningQuestion",
+            "#/components/schemas/CreateLearningQuestionRequest",
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [
+            operation_id,
+            "x-global-capabilities: [admin]",
+            response_schema,
+            "\"409\": { $ref: \"#/components/responses/Conflict\" }",
+        ] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI operation {path} must declare {expected:?}"
+            );
+        }
+    }
+
+    for (path, operation_id) in [
+        (
+            "/api/admin/learning/resources/{resource_id}/publish:\n",
+            "operationId: publishLearningResource",
+        ),
+        (
+            "/api/admin/learning/questions/{question_id}/publish:\n",
+            "operationId: publishLearningQuestion",
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [
+            operation_id,
+            "x-global-capabilities: [admin]",
+            "LearningContentActionRequest",
+            "\"409\": { $ref: \"#/components/responses/Conflict\" }",
+        ] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI operation {path} must declare {expected:?}"
+            );
+        }
+    }
+
+    let question_export = operation("/api/admin/learning/questions/{question_id}/export:\n");
+    assert!(question_export.contains("without its answer key"));
+    assert!(!question_export.contains("correct_option_id:"));
+    assert_schema_contains(
+        "LearningContentLifecycle",
+        &[
+            "submitted_by_user_id:",
+            "deidentified_by_user_id:",
+            "reviewed_by_user_id:",
+            "published_by_user_id:",
+            "withdrawn_by_user_id:",
+        ],
+    );
+    assert_schema_contains(
+        "CreateLearningResourceRequest",
+        &[
+            "previous_version_id:",
+            "enum: [training, public_information]",
+        ],
+    );
+    assert_schema_contains(
+        "CreateLearningQuestionRequest",
+        &["previous_version_id:", "enum: [training]"],
     );
 }
 

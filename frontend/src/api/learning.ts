@@ -9,6 +9,7 @@ export interface LearningResource {
   tags: string[];
   source_name: string;
   source_url: string | null;
+  previous_version_id?: string | null;
   version: number;
   effective_at: string;
 }
@@ -22,6 +23,7 @@ export interface LearningQuestion {
   tags: string[];
   options: LearningQuestionOption[];
   source_resource_id: string;
+  previous_version_id?: string | null;
   version: number;
 }
 export interface LearningAnswer { question_id: string; is_correct: boolean; explanation: string; source: LearningSource; }
@@ -44,13 +46,13 @@ export interface ManagedLearningQuestion extends LearningQuestion { lifecycle: L
 export interface CreateLearningResourceInput {
   title: string; summary: string; content: string; resource_type: LearningResource["resource_type"];
   tags: string[]; source_name: string; source_url: string | null; visibility: "public" | "authenticated" | "volunteer" | "learner";
-  effective_at: string; permitted_use: "training" | "public_information"; submission_reason: string;
+  effective_at: string; permitted_use: "training" | "public_information"; submission_reason: string; previous_version_id?: string | null;
 }
 export interface CreateLearningQuestionInput {
   source_resource_id: string; prompt: string; question_type: LearningQuestion["question_type"];
   difficulty: LearningQuestion["difficulty"]; tags: string[]; options: LearningQuestionOption[];
   correct_option_id: string; explanation: string; visibility: "authenticated" | "volunteer" | "learner";
-  effective_at: string; permitted_use: "training"; submission_reason: string;
+  effective_at: string; permitted_use: "training"; submission_reason: string; previous_version_id?: string | null;
 }
 
 export const listLearningResources = (token: string) => apiRequest<LearningResource[]>("/learning/resources", {}, token);
