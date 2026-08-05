@@ -1,4 +1,4 @@
-use crate::{execute_script, sql_for_backend};
+use crate::{ensure_rollback_is_safe, execute_script, sql_for_backend};
 use sea_orm_migration::prelude::*;
 
 pub struct Migration;
@@ -25,6 +25,20 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        ensure_rollback_is_safe(
+            manager,
+            &[
+                (
+                    "learning resource version lineage exists",
+                    "SELECT 1 FROM learning_resources WHERE previous_version_id IS NOT NULL LIMIT 1",
+                ),
+                (
+                    "learning question version lineage exists",
+                    "SELECT 1 FROM learning_questions WHERE previous_version_id IS NOT NULL LIMIT 1",
+                ),
+            ],
+        )
+        .await?;
         execute_script(
             manager,
             sql_for_backend(

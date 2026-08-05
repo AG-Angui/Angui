@@ -720,7 +720,22 @@ async fn transition_content(
     let reason = required_text(&request.reason, "reason", 1_000)?;
     let transaction = db.begin().await?;
     let state = content_lifecycle(&transaction, content_type, content_id, content_version).await?;
-    validate_transition(&state, auth, event_type)?;
+    let is_correction = match content_type {
+        "resource" => learning_resources::Entity::find_by_id(content_id)
+            .one(&transaction)
+            .await?
+            .ok_or(ApiError::Internal)?
+            .previous_version_id
+            .is_some(),
+        "question" => learning_questions::Entity::find_by_id(content_id)
+            .one(&transaction)
+            .await?
+            .ok_or(ApiError::Internal)?
+            .previous_version_id
+            .is_some(),
+        _ => return Err(ApiError::Internal),
+    };
+    validate_transition(&state, auth, event_type, is_correction)?;
     append_lifecycle_event(
         &transaction,
         auth,
@@ -751,46 +766,57 @@ async fn transition_content(
                 .exec(&transaction)
                 .await?;
             if let Some(previous_version_id) = resource.previous_version_id {
-                learning_resources::Entity::update_many()
-                    .col_expr(learning_resources::Column::Status, Expr::value("withdrawn"))
-                    .col_expr(
-                        learning_resources::Column::WithdrawnAt,
-                        Expr::value(Some(now())),
-                    )
-                    .col_expr(learning_resources::Column::UpdatedAt, Expr::value(now()))
-                    .filter(learning_resources::Column::Id.eq(&previous_version_id))
-                    .exec(&transaction)
-                    .await?;
                 let previous = learning_resources::Entity::find_by_id(&previous_version_id)
                     .one(&transaction)
                     .await?
                     .ok_or(ApiError::Internal)?;
-                append_lifecycle_event(
-                    &transaction,
-                    auth,
-                    LifecycleEventInput::new(
-                        "resource",
-                        &previous.id,
-                        previous.version,
-                        "withdrawn",
-                        "已由审核发布的更正版本替代",
-                        &state.permitted_use,
-                    ),
-                )
-                .await?;
+                if previous.status != "withdrawn" {
+                    learning_resources::Entity::update_many()
+                        .col_expr(learning_resources::Column::Status, Expr::value("withdrawn"))
+                        .col_expr(
+                            learning_resources::Column::WithdrawnAt,
+                            Expr::value(Some(now())),
+                        )
+                        .col_expr(learning_resources::Column::UpdatedAt, Expr::value(now()))
+                        .filter(learning_resources::Column::Id.eq(&previous_version_id))
+                        .exec(&transaction)
+                        .await?;
+                    append_lifecycle_event(
+                        &transaction,
+                        auth,
+                        LifecycleEventInput::new(
+                            "resource",
+                            &previous.id,
+                            previous.version,
+                            "withdrawn",
+                            "已由审核发布的更正版本替代",
+                            &state.permitted_use,
+                        ),
+                    )
+                    .await?;
+                }
             }
         }
         ("resource", "withdrawn") => {
-            learning_resources::Entity::update_many()
+            let update = learning_resources::Entity::update_many()
                 .col_expr(learning_resources::Column::Status, Expr::value("withdrawn"))
                 .col_expr(
                     learning_resources::Column::WithdrawnAt,
                     Expr::value(Some(now())),
                 )
                 .col_expr(learning_resources::Column::UpdatedAt, Expr::value(now()))
-                .filter(learning_resources::Column::Id.eq(content_id))
-                .exec(&transaction)
-                .await?;
+                .filter(learning_resources::Column::Id.eq(content_id));
+            if is_correction && state.state() != "published" {
+                update
+                    .col_expr(
+                        learning_resources::Column::PreviousVersionId,
+                        Expr::value(None::<String>),
+                    )
+                    .exec(&transaction)
+                    .await?;
+            } else {
+                update.exec(&transaction).await?;
+            }
         }
         ("question", "published") => {
             let question = learning_questions::Entity::find_by_id(content_id)
@@ -808,46 +834,57 @@ async fn transition_content(
                 .exec(&transaction)
                 .await?;
             if let Some(previous_version_id) = question.previous_version_id {
-                learning_questions::Entity::update_many()
-                    .col_expr(learning_questions::Column::Status, Expr::value("withdrawn"))
-                    .col_expr(
-                        learning_questions::Column::WithdrawnAt,
-                        Expr::value(Some(now())),
-                    )
-                    .col_expr(learning_questions::Column::UpdatedAt, Expr::value(now()))
-                    .filter(learning_questions::Column::Id.eq(&previous_version_id))
-                    .exec(&transaction)
-                    .await?;
                 let previous = learning_questions::Entity::find_by_id(&previous_version_id)
                     .one(&transaction)
                     .await?
                     .ok_or(ApiError::Internal)?;
-                append_lifecycle_event(
-                    &transaction,
-                    auth,
-                    LifecycleEventInput::new(
-                        "question",
-                        &previous.id,
-                        previous.version,
-                        "withdrawn",
-                        "已由审核发布的更正版本替代",
-                        &state.permitted_use,
-                    ),
-                )
-                .await?;
+                if previous.status != "withdrawn" {
+                    learning_questions::Entity::update_many()
+                        .col_expr(learning_questions::Column::Status, Expr::value("withdrawn"))
+                        .col_expr(
+                            learning_questions::Column::WithdrawnAt,
+                            Expr::value(Some(now())),
+                        )
+                        .col_expr(learning_questions::Column::UpdatedAt, Expr::value(now()))
+                        .filter(learning_questions::Column::Id.eq(&previous_version_id))
+                        .exec(&transaction)
+                        .await?;
+                    append_lifecycle_event(
+                        &transaction,
+                        auth,
+                        LifecycleEventInput::new(
+                            "question",
+                            &previous.id,
+                            previous.version,
+                            "withdrawn",
+                            "已由审核发布的更正版本替代",
+                            &state.permitted_use,
+                        ),
+                    )
+                    .await?;
+                }
             }
         }
         ("question", "withdrawn") => {
-            learning_questions::Entity::update_many()
+            let update = learning_questions::Entity::update_many()
                 .col_expr(learning_questions::Column::Status, Expr::value("withdrawn"))
                 .col_expr(
                     learning_questions::Column::WithdrawnAt,
                     Expr::value(Some(now())),
                 )
                 .col_expr(learning_questions::Column::UpdatedAt, Expr::value(now()))
-                .filter(learning_questions::Column::Id.eq(content_id))
-                .exec(&transaction)
-                .await?;
+                .filter(learning_questions::Column::Id.eq(content_id));
+            if is_correction && state.state() != "published" {
+                update
+                    .col_expr(
+                        learning_questions::Column::PreviousVersionId,
+                        Expr::value(None::<String>),
+                    )
+                    .exec(&transaction)
+                    .await?;
+            } else {
+                update.exec(&transaction).await?;
+            }
         }
         _ => {}
     }
@@ -1341,6 +1378,7 @@ fn validate_transition(
     state: &ContentLifecycle,
     auth: &AuthenticatedUser,
     event_type: &str,
+    is_correction: bool,
 ) -> Result<(), ApiError> {
     let submitted_by = state
         .submitted_by_user_id
@@ -1351,6 +1389,12 @@ fn validate_transition(
         "reviewed" if state.state() == "deidentified" && submitted_by != auth.id => Ok(()),
         "published" if state.state() == "reviewed" => Ok(()),
         "withdrawn" if state.state() == "published" => Ok(()),
+        "withdrawn"
+            if is_correction
+                && matches!(state.state(), "submitted" | "deidentified" | "reviewed") =>
+        {
+            Ok(())
+        }
         "deidentified" | "reviewed" => Err(ApiError::Conflict(
             "脱敏和审核必须由非提交人按顺序完成".to_owned(),
         )),

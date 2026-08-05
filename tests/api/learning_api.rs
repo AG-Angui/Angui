@@ -272,7 +272,26 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     assert_eq!(correction["previous_version_id"], resource_id);
     assert_eq!(correction["version"], 2);
     assert_eq!(correction["lifecycle"]["state"], "submitted");
-    let correction_id = correction["id"].as_str().expect("correction id").to_owned();
+    let abandoned_correction_id = correction["id"].as_str().expect("correction id").to_owned();
+
+    let abandoned_correction = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/learning/resources/{abandoned_correction_id}/withdraw"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(json!({ "reason": "放弃该更正草稿，重新提交修订版本。" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(abandoned_correction.status(), StatusCode::OK);
+    let abandoned_correction: Value = test::read_body_json(abandoned_correction).await;
+    assert_eq!(abandoned_correction["lifecycle"]["state"], "withdrawn");
+    assert!(abandoned_correction["previous_version_id"].is_null());
 
     let duplicate_correction = test::call_service(
         &app,
@@ -299,7 +318,14 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
             .to_request(),
     )
     .await;
-    assert_error(duplicate_correction, StatusCode::CONFLICT, "conflict").await;
+    assert_eq!(duplicate_correction.status(), StatusCode::CREATED);
+    let duplicate_correction: Value = test::read_body_json(duplicate_correction).await;
+    assert_eq!(duplicate_correction["previous_version_id"], resource_id);
+    assert_eq!(duplicate_correction["version"], 2);
+    let correction_id = duplicate_correction["id"]
+        .as_str()
+        .expect("replacement correction id")
+        .to_owned();
 
     let question = test::call_service(
         &app,
@@ -351,6 +377,86 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
         .await;
         assert_eq!(response.status(), StatusCode::OK, "{action} should succeed");
     }
+
+    let question_correction_input = json!({
+        "source_resource_id": resource_id,
+        "prompt": "更正题目：哪项描述与来源资料一致？",
+        "question_type": "single_choice",
+        "difficulty": "basic",
+        "tags": ["防走失", "更正"],
+        "options": [{"id": "a", "text": "选项甲"}, {"id": "b", "text": "选项乙"}],
+        "correct_option_id": "a",
+        "explanation": "该题用于验证更正草稿可以被放弃并重新提交。",
+        "previous_version_id": question_id,
+        "visibility": "learner",
+        "effective_at": "2020-01-01T00:00:00.000Z",
+        "permitted_use": "training",
+        "submission_reason": "修订题目表述。"
+    });
+    let abandoned_question_correction = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/learning/questions")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(question_correction_input.clone())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(abandoned_question_correction.status(), StatusCode::CREATED);
+    let abandoned_question_correction: Value =
+        test::read_body_json(abandoned_question_correction).await;
+    let abandoned_question_correction_id = abandoned_question_correction["id"]
+        .as_str()
+        .expect("abandoned question correction id");
+    let abandoned_question_correction = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/learning/questions/{abandoned_question_correction_id}/withdraw"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(json!({ "reason": "放弃该题目更正草稿，重新提交修订版本。" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(abandoned_question_correction.status(), StatusCode::OK);
+    let abandoned_question_correction: Value =
+        test::read_body_json(abandoned_question_correction).await;
+    assert_eq!(
+        abandoned_question_correction["lifecycle"]["state"],
+        "withdrawn"
+    );
+    assert!(abandoned_question_correction["previous_version_id"].is_null());
+
+    let replacement_question_correction = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/learning/questions")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(question_correction_input)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(
+        replacement_question_correction.status(),
+        StatusCode::CREATED
+    );
+    let replacement_question_correction: Value =
+        test::read_body_json(replacement_question_correction).await;
+    assert_eq!(
+        replacement_question_correction["previous_version_id"],
+        question_id
+    );
+    assert_eq!(replacement_question_correction["version"], 2);
 
     let questions = test::call_service(
         &app,
@@ -472,6 +578,22 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     )
     .await;
 
+    let manually_withdrawn_original = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/learning/resources/{resource_id}/withdraw"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(json!({ "reason": "在更正版本发布前已主动撤回原版本。" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(manually_withdrawn_original.status(), StatusCode::OK);
+
     for (email, action) in [
         (COMMANDER, "deidentify"),
         (VOLUNTEER, "review"),
@@ -508,6 +630,36 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     let resources_after_correction: Value = test::read_body_json(resources_after_correction).await;
     assert_eq!(resources_after_correction.as_array().map(Vec::len), Some(1));
     assert_eq!(resources_after_correction[0]["id"], correction_id);
+
+    let managed_resources = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/learning/resources")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(managed_resources.status(), StatusCode::OK);
+    let managed_resources: Value = test::read_body_json(managed_resources).await;
+    let original_resource = managed_resources
+        .as_array()
+        .and_then(|resources| {
+            resources
+                .iter()
+                .find(|resource| resource["id"] == resource_id)
+        })
+        .expect("the original resource must remain in governance history");
+    assert_eq!(original_resource["lifecycle"]["state"], "withdrawn");
+    assert!(
+        original_resource["lifecycle"]["events"]
+            .as_array()
+            .is_some_and(|events| events
+                .iter()
+                .any(|event| event["event_type"] == "withdrawn"))
+    );
 
     let withdrawn = test::call_service(
         &app,

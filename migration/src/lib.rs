@@ -392,6 +392,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_learning_lineage_rollback_refuses_to_discard_correction_links() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, None)
+            .await
+            .expect("all migrations should succeed");
+        database
+            .execute_unprepared(
+                "INSERT INTO learning_resources (id, title, summary, content, resource_type, tags_json, source_name, source_url, previous_version_id, version, visibility, status, effective_at, withdrawn_at, created_at, updated_at) VALUES ('lineage-v1', 'First version', 'First version summary', 'First version content', 'manual', '[]', 'Test source', NULL, NULL, 1, 'learner', 'published', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'), ('lineage-v2', 'Corrected version', 'Corrected version summary', 'Corrected version content', 'manual', '[]', 'Test source', NULL, 'lineage-v1', 2, 'learner', 'withdrawn', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+            )
+            .await
+            .expect("correction lineage should be stored");
+
+        assert!(Migrator::down(&database, Some(1)).await.is_err());
+        assert!(
+            database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM learning_resources WHERE id = 'lineage-v2' AND previous_version_id = 'lineage-v1'",
+                ))
+                .await
+                .expect("lineage query should succeed")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn sqlite_learning_center_migration_repairs_a_partial_prior_run() {
         let database = Database::connect("sqlite::memory:")
             .await

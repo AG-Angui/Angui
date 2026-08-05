@@ -1925,7 +1925,7 @@ paths:
       tags: [Learning governance]
       operationId: withdrawLearningResource
       summary: Withdraw a published resource
-      description: The resource becomes unavailable to learners and exports return not found.
+      description: A published resource becomes unavailable to learners and exports return not found. A non-published corrected version may instead be abandoned; its withdrawal event is retained while its active predecessor pointer is cleared so a replacement correction can be submitted.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-global-capabilities: [admin]
@@ -2054,7 +2054,7 @@ paths:
       tags: [Learning governance]
       operationId: withdrawLearningQuestion
       summary: Withdraw a published question
-      description: The question becomes unavailable for listing, submission, and export.
+      description: A published question becomes unavailable for listing, submission, and export. A non-published corrected version may instead be abandoned; its withdrawal event is retained while its active predecessor pointer is cleared so a replacement correction can be submitted.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-global-capabilities: [admin]

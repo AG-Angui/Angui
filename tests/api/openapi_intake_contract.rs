@@ -621,7 +621,12 @@ fn learning_governance_openapi_contract_documents_versions_and_independent_actio
             "reviewed_by_user_id:",
             "published_by_user_id:",
             "withdrawn_by_user_id:",
+            "events:",
         ],
+    );
+    assert_schema_contains(
+        "LearningContentReviewEvent",
+        &["event_type:", "actor_user_id:", "reason:", "created_at:"],
     );
     assert_schema_contains(
         "CreateLearningResourceRequest",
