@@ -393,6 +393,28 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
         "permitted_use": "training",
         "submission_reason": "修订题目表述。"
     });
+    context
+        .database
+        .execute_unprepared(
+            "INSERT INTO learning_resources (id, title, summary, content, resource_type, tags_json, source_name, source_url, previous_version_id, version, visibility, status, effective_at, withdrawn_at, created_at, updated_at) VALUES ('alternate-question-source', 'Alternate source', 'Alternate source summary', 'Alternate source content', 'manual', '[]', 'Test source', NULL, NULL, 1, 'learner', 'withdrawn', '2020-01-01T00:00:00.000Z', NULL, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z')",
+        )
+        .await
+        .expect("alternate question source fixture should be stored");
+    let mut cross_source_correction_input = question_correction_input.clone();
+    cross_source_correction_input["source_resource_id"] = json!("alternate-question-source");
+    let cross_source_correction = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/learning/questions")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(cross_source_correction_input)
+            .to_request(),
+    )
+    .await;
+    assert_error(cross_source_correction, StatusCode::CONFLICT, "conflict").await;
     let abandoned_question_correction = test::call_service(
         &app,
         test::TestRequest::post()

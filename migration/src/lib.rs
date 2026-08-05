@@ -405,6 +405,12 @@ mod tests {
             )
             .await
             .expect("correction lineage should be stored");
+        database
+            .execute_unprepared(
+                "INSERT INTO learning_questions (id, source_resource_id, prompt, question_type, difficulty, tags_json, options_json, correct_option_id, explanation, previous_version_id, version, visibility, status, effective_at, withdrawn_at, created_at, updated_at) VALUES ('lineage-question-v1', 'lineage-v1', 'First question', 'single_choice', 'basic', '[]', '[{\"id\":\"a\",\"text\":\"First option\"}]', 'a', 'First explanation', NULL, 1, 'learner', 'published', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'), ('lineage-question-v2', 'lineage-v1', 'Corrected question', 'single_choice', 'basic', '[]', '[{\"id\":\"a\",\"text\":\"Corrected option\"}]', 'a', 'Corrected explanation', 'lineage-question-v1', 2, 'learner', 'withdrawn', '2026-08-01T00:00:00.000Z', NULL, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+            )
+            .await
+            .expect("question correction lineage should be stored");
 
         assert!(Migrator::down(&database, Some(1)).await.is_err());
         assert!(
@@ -415,6 +421,16 @@ mod tests {
                 ))
                 .await
                 .expect("lineage query should succeed")
+                .is_some()
+        );
+        assert!(
+            database
+                .query_one(Statement::from_string(
+                    sea_orm_migration::sea_orm::DbBackend::Sqlite,
+                    "SELECT 1 FROM learning_questions WHERE id = 'lineage-question-v2' AND previous_version_id = 'lineage-question-v1'",
+                ))
+                .await
+                .expect("question lineage query should succeed")
                 .is_some()
         );
     }

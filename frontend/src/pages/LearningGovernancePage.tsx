@@ -121,8 +121,7 @@ function LifecycleActions({
 
   const canAbandon =
     canAbandonCorrection &&
-    lifecycle.state !== "published" &&
-    lifecycle.state !== "withdrawn";
+    ["submitted", "deidentified", "reviewed"].includes(lifecycle.state);
   return action || canAbandon ? (
     <div className="grid justify-items-end gap-1">
       {action && (
@@ -320,6 +319,10 @@ export function LearningGovernancePage() {
       .catch((cause) => setOperationError(errorMessage(cause)))
       .finally(() => setBusyId(""));
   };
+  const correctionSourceResourceId = questionForm.previous_version_id
+    ? questions.find((question) => question.id === questionForm.previous_version_id)
+        ?.source_resource_id
+    : null;
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
@@ -569,7 +572,12 @@ export function LearningGovernancePage() {
             >
               <option value="">选择资源</option>
               {resources
-                .filter((resource) => resource.lifecycle.state === "published")
+                .filter(
+                  (resource) =>
+                    resource.lifecycle.state === "published" &&
+                    (!correctionSourceResourceId ||
+                      resource.id === correctionSourceResourceId),
+                )
                 .map((resource) => (
                   <option key={resource.id} value={resource.id}>
                     {resource.title}

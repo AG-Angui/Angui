@@ -543,8 +543,12 @@ pub async fn create_question(
     let tags_json =
         serde_json::to_string(&normalized_tags(&request.tags)?).map_err(|_| ApiError::Internal)?;
     let options_json = serde_json::to_string(&options).map_err(|_| ApiError::Internal)?;
-    let (previous_version_id, version) =
-        question_revision(db, request.previous_version_id.as_deref()).await?;
+    let (previous_version_id, version) = question_revision(
+        db,
+        request.previous_version_id.as_deref(),
+        &source_resource_id,
+    )
+    .await?;
     let timestamp = now();
     let id = case_service::new_id();
     let transaction = db.begin().await?;
@@ -1138,6 +1142,7 @@ async fn resource_revision(
 async fn question_revision(
     db: &DatabaseConnection,
     previous_version_id: Option<&str>,
+    source_resource_id: &str,
 ) -> Result<(Option<String>, i32), ApiError> {
     let Some(previous_version_id) = previous_version_id
         .map(str::trim)
@@ -1156,6 +1161,11 @@ async fn question_revision(
     {
         return Err(ApiError::Conflict(
             "只能更正已审核发布的学习题目".to_owned(),
+        ));
+    }
+    if previous.source_resource_id != source_resource_id {
+        return Err(ApiError::Conflict(
+            "更正题目必须保留原版本的来源资源".to_owned(),
         ));
     }
     Ok((Some(previous.id), previous.version + 1))
