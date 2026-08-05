@@ -41,10 +41,7 @@ type AmapApi = {
     position: [number, number];
     draggable: boolean;
   }) => AmapMarker;
-  Geocoder: new (options?: {
-    radius?: number;
-    extensions?: "base";
-  }) => {
+  Geocoder: new (options?: { radius?: number; extensions?: "base" }) => {
     getAddress(
       position: [number, number],
       callback: (
@@ -118,9 +115,7 @@ function loadAmap(): Promise<AmapApi> {
 
   const key = import.meta.env.VITE_AMAP_JS_API_KEY?.trim();
   if (!key) {
-    return Promise.reject(
-      new Error("地图服务尚未配置。你仍可手动填写地点。"),
-    );
+    return Promise.reject(new Error("地图服务尚未配置。你仍可手动填写地点。"));
   }
 
   const serviceHost =

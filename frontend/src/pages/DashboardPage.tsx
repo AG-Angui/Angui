@@ -368,7 +368,12 @@ function ArchiveReviewCard({
   const [error, setError] = useState("");
   const [materials, setMaterials] = useState<ArchiveReviewMaterial[]>([]);
   const [materialError, setMaterialError] = useState("");
-  const [diff, setDiff] = useState<{ from: number; to: number; added: string[]; removed: string[] } | null>(null);
+  const [diff, setDiff] = useState<{
+    from: number;
+    to: number;
+    added: string[];
+    removed: string[];
+  } | null>(null);
 
   const loadMaterials = useCallback(() => {
     if (!token) return;
@@ -424,69 +429,126 @@ function ArchiveReviewCard({
       <div className="mt-3 border-t border-slate-100 pt-3">
         <div className="flex items-center justify-between gap-3">
           <strong className="text-xs text-slate-800">审核材料版本</strong>
-          <span className="text-xs text-slate-500">{materials.length} 个版本</span>
+          <span className="text-xs text-slate-500">
+            {materials.length} 个版本
+          </span>
         </div>
         {materials.length > 0 && (
           <div className="mt-2 space-y-2">
             {materials.map((material) => (
-              <div key={material.id} className="rounded border border-slate-200 bg-slate-50 p-2 text-xs">
+              <div
+                key={material.id}
+                className="rounded border border-slate-200 bg-slate-50 p-2 text-xs"
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span>v{material.version} · {material.status}{material.selected_for_ai ? " · 当前 AI 输入" : ""}</span>
+                  <span>
+                    v{material.version} · {material.status}
+                    {material.selected_for_ai ? " · 当前 AI 输入" : ""}
+                  </span>
                   {material.status === "deidentified" &&
                     !material.selected_for_ai &&
                     matchesRestorableArchiveDraftStatus(draft.status) && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        isDisabled={busy || !reason.trim()}
+                        onPress={() => {
+                          if (!token) return;
+                          setBusy(true);
+                          void restoreArchiveReviewMaterial(
+                            token,
+                            draft.id,
+                            material.version,
+                            reason,
+                          )
+                            .then((updated) => {
+                              onChanged(updated);
+                              setDiff(null);
+                              loadMaterials();
+                            })
+                            .catch((cause) =>
+                              setMaterialError(
+                                cause instanceof Error
+                                  ? cause.message
+                                  : "无法恢复审核材料版本。",
+                              ),
+                            )
+                            .finally(() => setBusy(false));
+                        }}
+                      >
+                        恢复此版本
+                      </Button>
+                    )}
+                </div>
+                <p className="mb-0 mt-1 whitespace-pre-wrap text-slate-600">
+                  {material.content}
+                </p>
+                <p className="mb-0 mt-1 text-slate-500">
+                  Scope: {material.source_scope.join(", ")}
+                </p>
+                {materials.length > 1 &&
+                  material.version !==
+                    materials[materials.length - 1].version && (
                     <Button
+                      className="mt-1"
                       size="sm"
                       variant="ghost"
-                      isDisabled={busy || !reason.trim()}
                       onPress={() => {
                         if (!token) return;
-                        setBusy(true);
-                        void restoreArchiveReviewMaterial(token, draft.id, material.version, reason)
-                          .then((updated) => {
-                            onChanged(updated);
-                            setDiff(null);
-                            loadMaterials();
-                          })
-                          .catch((cause) => setMaterialError(cause instanceof Error ? cause.message : "无法恢复审核材料版本。"))
-                          .finally(() => setBusy(false));
+                        const oldest = materials[materials.length - 1].version;
+                        void diffArchiveReviewMaterials(
+                          token,
+                          draft.id,
+                          oldest,
+                          material.version,
+                        )
+                          .then((value) =>
+                            setDiff({
+                              from: value.from_version,
+                              to: value.to_version,
+                              added: value.added,
+                              removed: value.removed,
+                            }),
+                          )
+                          .catch((cause) =>
+                            setMaterialError(
+                              cause instanceof Error
+                                ? cause.message
+                                : "无法比较审核材料版本。",
+                            ),
+                          );
                       }}
                     >
-                      恢复此版本
+                      与最早版本比较
                     </Button>
                   )}
-                </div>
-                <p className="mb-0 mt-1 whitespace-pre-wrap text-slate-600">{material.content}</p>
-                <p className="mb-0 mt-1 text-slate-500">Scope: {material.source_scope.join(", ")}</p>
-                {materials.length > 1 && material.version !== materials[materials.length - 1].version && (
-                  <Button
-                    className="mt-1"
-                    size="sm"
-                    variant="ghost"
-                    onPress={() => {
-                      if (!token) return;
-                      const oldest = materials[materials.length - 1].version;
-                      void diffArchiveReviewMaterials(token, draft.id, oldest, material.version)
-                        .then((value) => setDiff({ from: value.from_version, to: value.to_version, added: value.added, removed: value.removed }))
-                        .catch((cause) => setMaterialError(cause instanceof Error ? cause.message : "无法比较审核材料版本。"));
-                    }}
-                  >
-                    与最早版本比较
-                  </Button>
-                )}
               </div>
             ))}
           </div>
         )}
         {diff && (
           <div className="mt-2 rounded border border-violet-200 bg-violet-50 p-2 text-xs">
-            <strong>差异：v{diff.from} 与 v{diff.to}</strong>
-            {diff.added.length > 0 && <p className="mb-0 mt-1 text-green-800">新增：{diff.added.join(" | ")}</p>}
-            {diff.removed.length > 0 && <p className="mb-0 mt-1 text-red-800">删除：{diff.removed.join(" | ")}</p>}
-            {diff.added.length === 0 && diff.removed.length === 0 && <p className="mb-0 mt-1">没有行级变更。</p>}
+            <strong>
+              差异：v{diff.from} 与 v{diff.to}
+            </strong>
+            {diff.added.length > 0 && (
+              <p className="mb-0 mt-1 text-green-800">
+                新增：{diff.added.join(" | ")}
+              </p>
+            )}
+            {diff.removed.length > 0 && (
+              <p className="mb-0 mt-1 text-red-800">
+                删除：{diff.removed.join(" | ")}
+              </p>
+            )}
+            {diff.added.length === 0 && diff.removed.length === 0 && (
+              <p className="mb-0 mt-1">没有行级变更。</p>
+            )}
           </div>
         )}
-        {materialError && <p className="mb-0 mt-2 text-xs text-red-700">{materialError}</p>}
+        {materialError && (
+          <p className="mb-0 mt-2 text-xs text-red-700">{materialError}</p>
+        )}
       </div>
       {draft.status !== "rejected" && draft.status !== "withdrawn" && (
         <>
@@ -604,6 +666,8 @@ function ArchiveReviewCard({
   );
 }
 
-function matchesRestorableArchiveDraftStatus(status: ArchiveDraft["status"]): boolean {
+function matchesRestorableArchiveDraftStatus(
+  status: ArchiveDraft["status"],
+): boolean {
   return status === "pending_review";
 }

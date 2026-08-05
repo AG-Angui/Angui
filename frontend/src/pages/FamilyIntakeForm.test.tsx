@@ -614,9 +614,9 @@ describe("FamilyIntakeForm", () => {
 
     await screen.findByText("确认后写入案件的资料");
     await waitFor(() =>
-      expect(
-        screen.getByRole("textbox", { name: "最后出现地点" }),
-      ).toHaveValue("模拟社区北门"),
+      expect(screen.getByRole("textbox", { name: "最后出现地点" })).toHaveValue(
+        "模拟社区北门",
+      ),
     );
     fireEvent.change(screen.getByRole("textbox", { name: "姓名或称呼" }), {
       target: { value: "模拟老人" },

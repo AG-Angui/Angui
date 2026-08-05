@@ -51,7 +51,9 @@ describe("LearningCenterPage", () => {
 
     expect(await screen.findByText("已审核防走失知识卡")).toBeInTheDocument();
     expect(screen.getByText("仅可在线查看")).toBeInTheDocument();
-    expect(screen.getByText("离线缓存尚未就绪，请保持联网查看。")).toBeInTheDocument();
+    expect(
+      screen.getByText("离线缓存尚未就绪，请保持联网查看。"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText("来源：指定负责人 · v2", { exact: false }),
     ).toBeInTheDocument();
@@ -66,7 +68,9 @@ describe("LearningCenterPage", () => {
 
     expect(await screen.findByText("等待发布")).toBeInTheDocument();
     expect(
-      screen.getByText("负责人尚未发布可离线使用的防走失知识卡。该卡发布并加载成功后，生产环境会保留最后一个已审核版本供离线查看。"),
+      screen.getByText(
+        "负责人尚未发布可离线使用的防走失知识卡。该卡发布并加载成功后，生产环境会保留最后一个已审核版本供离线查看。",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -110,15 +114,21 @@ describe("LearningCenterPage", () => {
     render(<LearningCenterPage />);
 
     expect(await screen.findByText("脱敏案例")).toBeInTheDocument();
-    expect(screen.getByText("审核状态：已发布", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("生效时间：", { exact: false })).toBeInTheDocument();
+    expect(
+      screen.getByText("审核状态：已发布", { exact: false }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("生效时间：", { exact: false }),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("输入学习问题"), {
       target: { value: "如何复盘？" },
     });
     fireEvent.click(screen.getByRole("button", { name: "提交问题" }));
 
-    expect(await screen.findByText("资料状态：已审核资料支持")).toBeInTheDocument();
+    expect(
+      await screen.findByText("资料状态：已审核资料支持"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText("引用来源（均为已审核发布）：脱敏案例复盘 v2"),
     ).toBeInTheDocument();
@@ -153,7 +163,9 @@ describe("LearningCenterPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "提交问题" }));
 
     expect(
-      await screen.findByText("问答暂时不可用，已发布资料仍可查看。请稍后重试。"),
+      await screen.findByText(
+        "问答暂时不可用，已发布资料仍可查看。请稍后重试。",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("已发布手册")).toBeInTheDocument();
   });

@@ -23,9 +23,12 @@ vi.mock("../auth/useAuth", () => ({
 }));
 
 vi.mock("../api/learning", () => ({
-  listManagedLearningResources: (...args: unknown[]) => mocked.listResources(...args),
-  listManagedLearningQuestions: (...args: unknown[]) => mocked.listQuestions(...args),
-  transitionManagedLearningResource: (...args: unknown[]) => mocked.transitionResource(...args),
+  listManagedLearningResources: (...args: unknown[]) =>
+    mocked.listResources(...args),
+  listManagedLearningQuestions: (...args: unknown[]) =>
+    mocked.listQuestions(...args),
+  transitionManagedLearningResource: (...args: unknown[]) =>
+    mocked.transitionResource(...args),
   transitionManagedLearningQuestion: vi.fn(),
   createManagedLearningResource: vi.fn(),
   createManagedLearningQuestion: vi.fn(),

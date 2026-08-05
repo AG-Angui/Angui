@@ -44,7 +44,11 @@ function LearningRoute({ children }: { children: ReactNode }) {
 
 function AdminRoute({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  return user?.global_capabilities.includes("admin") ? children : <Navigate to="/" replace />;
+  return user?.global_capabilities.includes("admin") ? (
+    children
+  ) : (
+    <Navigate to="/" replace />
+  );
 }
 
 function App() {

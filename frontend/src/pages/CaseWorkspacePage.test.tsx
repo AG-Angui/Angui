@@ -634,9 +634,13 @@ describe("CaseWorkspacePage", () => {
 
     render(<CaseWorkspacePage mode="family" />);
 
-    expect(await screen.findByText("发布状态：已审核公开", { exact: false })).toBeInTheDocument();
+    expect(
+      await screen.findByText("发布状态：已审核公开", { exact: false }),
+    ).toBeInTheDocument();
     expect(screen.getByText("更新于：", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("已确认一项案件进展。", { exact: false })).toBeInTheDocument();
+    expect(
+      screen.getByText("已确认一项案件进展。", { exact: false }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("内部未审核线索")).not.toBeInTheDocument();
   });
 

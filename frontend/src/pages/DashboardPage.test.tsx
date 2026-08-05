@@ -30,11 +30,13 @@ vi.mock("../auth/useAuth", () => ({
 vi.mock("../api/cases", () => ({
   deidentifyArchiveDraft: (...args: unknown[]) =>
     mocked.deidentifyArchiveDraft(...args),
-  reviewArchiveDraft: (...args: unknown[]) => mocked.reviewArchiveDraft(...args),
+  reviewArchiveDraft: (...args: unknown[]) =>
+    mocked.reviewArchiveDraft(...args),
   getCase: (...args: unknown[]) => mocked.getCase(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
   listCommandIntake: (...args: unknown[]) => mocked.listCommandIntake(...args),
-  listAdminArchiveDrafts: (...args: unknown[]) => mocked.listAdminArchiveDrafts(...args),
+  listAdminArchiveDrafts: (...args: unknown[]) =>
+    mocked.listAdminArchiveDrafts(...args),
   listArchiveReviewMaterials: (...args: unknown[]) =>
     mocked.listArchiveReviewMaterials(...args),
   diffArchiveReviewMaterials: (...args: unknown[]) =>
@@ -248,7 +250,10 @@ describe("DashboardPage", () => {
       await screen.findByText("Approved de-identified material"),
     ).toBeInTheDocument();
     expect(screen.getByText(/当前 AI 输入/)).toBeInTheDocument();
-    expect(mocked.listArchiveReviewMaterials).toHaveBeenCalledWith("test-session", "archive-1");
+    expect(mocked.listArchiveReviewMaterials).toHaveBeenCalledWith(
+      "test-session",
+      "archive-1",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "与最早版本比较" }));
     expect(await screen.findByText("差异：v1 与 v2")).toBeInTheDocument();
@@ -269,7 +274,9 @@ describe("DashboardPage", () => {
       1,
       "restore approved historical version",
     );
-    expect(await screen.findByText("Restored approved material")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Restored approved material"),
+    ).toBeInTheDocument();
     expect(mocked.listArchiveReviewMaterials).toHaveBeenCalledTimes(2);
   });
 });

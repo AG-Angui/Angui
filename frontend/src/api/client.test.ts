@@ -95,9 +95,9 @@ describe("apiSseRequest", () => {
       vi.fn().mockResolvedValue(
         new Response(
           [
-            "event: started\ndata: {\"session_id\":\"intake-1\"}\n\n",
+            'event: started\ndata: {"session_id":"intake-1"}\n\n',
             ": keep-alive\n\n",
-            "event: completed\ndata: {\"id\":\"draft-1\"}\n\n",
+            'event: completed\ndata: {"id":"draft-1"}\n\n',
           ].join(""),
           {
             status: 201,
@@ -108,15 +108,19 @@ describe("apiSseRequest", () => {
     );
 
     await expect(
-      apiSseRequest<{ id: string }>("/intake-sessions/intake-1/profile-draft/generate", {
-        method: "POST",
-      }, "test-session"),
+      apiSseRequest<{ id: string }>(
+        "/intake-sessions/intake-1/profile-draft/generate",
+        {
+          method: "POST",
+        },
+        "test-session",
+      ),
     ).resolves.toEqual({ id: "draft-1" });
   });
 
   it("sends JSON content type for a streamed request with a JSON body", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response("event: completed\ndata: {\"status\":\"ok\"}\n\n", {
+      new Response('event: completed\ndata: {"status":"ok"}\n\n', {
         status: 200,
         headers: { "Content-Type": "text/event-stream" },
       }),
@@ -142,7 +146,7 @@ describe("apiSseRequest", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response("event: started\ndata: {\"session_id\":\"intake-1\"}\n\n", {
+        new Response('event: started\ndata: {"session_id":"intake-1"}\n\n', {
           status: 201,
           headers: { "Content-Type": "text/event-stream" },
         }),
@@ -150,9 +154,13 @@ describe("apiSseRequest", () => {
     );
 
     await expect(
-      apiSseRequest("/intake-sessions/intake-1/profile-draft/generate", {
-        method: "POST",
-      }, "test-session"),
+      apiSseRequest(
+        "/intake-sessions/intake-1/profile-draft/generate",
+        {
+          method: "POST",
+        },
+        "test-session",
+      ),
     ).rejects.toMatchObject({ code: "stream_incomplete" });
   });
 });
