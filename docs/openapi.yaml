@@ -307,6 +307,72 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/intake-sessions/{session_id}/photos:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    get:
+      tags: [Intake sessions]
+      operationId: listIntakeSessionPhotos
+      summary: List controlled missing-person photo metadata
+      description: Only the session creator can list pre-confirmation photos. The response never exposes a storage key or public URL.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Owner-scoped photo metadata, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/IntakePhoto" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Intake sessions]
+      operationId: uploadIntakeSessionPhoto
+      summary: Upload a controlled missing-person portrait
+      description: Only the session creator can upload one JPEG or PNG image. The server validates, decodes, and re-encodes it; it does not process EXIF location or run face recognition.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: JPEG or PNG image.
+      responses:
+        "201": { description: Controlled photo metadata, content: { application/json: { schema: { $ref: "#/components/schemas/IntakePhoto" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/intake-sessions/{session_id}/photos/{photo_id}:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+      - name: photo_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Intake sessions]
+      operationId: downloadIntakeSessionPhoto
+      summary: Download an owner-scoped pre-confirmation photo
+      description: Only the session creator can retrieve the image. The response is private and no-store; it is not a public media URL.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: JPEG or PNG image, content: { image/jpeg: { schema: { type: string, format: binary } }, image/png: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/intake-sessions/{session_id}/profile-draft:
     parameters:
       - $ref: "#/components/parameters/IntakeSessionId"
@@ -2614,7 +2680,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        basic_information: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+        basic_information: { type: [string, "null"], minLength: 1, description: v3 requires name or appellation, height from 30 to 250 cm, and an appearance description. The limit is configured by the active question definition. }
+        police_report_status: { type: [string, "null"], enum: [已报警, 未报警, 不清楚, null], description: Required by v3; family-provided status only, never inferred by the service. }
+        family_phone: { type: [string, "null"], minLength: 7, maxLength: 40, description: Required by v3. Sensitive and omitted from AI requests and ordinary audit metadata. }
         health_status: { type: [string, "null"], minLength: 1, description: Sensitive; never included in audit metadata. Limit is configured by the active question definition. }
         behavior_habits: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
         last_seen: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
@@ -2623,6 +2691,17 @@ components:
         transport_ability: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
         follow_up_clues: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
         suspicious_motive: { type: [string, "null"], minLength: 1, description: Limit is configured by the active question definition. }
+
+    IntakePhoto:
+      type: object
+      additionalProperties: false
+      required: [id, original_filename, content_type, byte_size, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        original_filename: { type: string, maxLength: 255 }
+        content_type: { type: string, enum: [image/jpeg, image/png] }
+        byte_size: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
 
     SubmitIntakeAnswerRequest:
       type: object
@@ -2737,9 +2816,10 @@ components:
     SubmitIntakeAnswerResponse:
       type: object
       additionalProperties: false
-      required: [session_id, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, ai_initial_review_status, privacy_notice, updated_at]
+      required: [session_id, question_set_version, status, raw_answer, candidate_fields, missing_fields, phase, completed_phase_one_fields, missing_phase_one_fields, phase_transition_ready, assessments, next_question, guidance_mode, ai_initial_review_status, privacy_notice, updated_at]
       properties:
         session_id: { type: string, format: uuid }
+        question_set_version: { type: integer, minimum: 1 }
         status: { type: string, enum: [collecting, ready_for_confirmation] }
         raw_answer: { type: string, description: Original free-text response, separate from candidate fields. }
         candidate_fields:

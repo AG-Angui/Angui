@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, cases, intake_answer_revisions, intake_profile_drafts,
-        intake_question_definitions, intake_session_answers, intake_sessions,
+        audit_events, case_attachments, cases, intake_answer_revisions, intake_profile_drafts,
+        intake_question_definitions, intake_session_answers, intake_session_photos,
+        intake_sessions,
     },
     error::ApiError,
     models::{
@@ -51,8 +52,8 @@ pub async fn create_intake_session(
         .map(|question| question.version)
         .ok_or(ApiError::Internal)?;
     let answers = normalize_answers(request.initial_answers, &questions, answer_hard_max)?;
-    let phase = IntakePhaseProgress::for_answers(&answers);
-    if phase_two_answers_present(&answers) && !phase.phase_transition_ready {
+    let phase = IntakePhaseProgress::for_answers(&answers, question_set_version);
+    if phase_two_answers_present(&answers, question_set_version) && !phase.phase_transition_ready {
         return Err(ApiError::Validation(
             "complete required phase-one fields before submitting phase-two answers".to_owned(),
         ));
@@ -169,6 +170,7 @@ pub async fn submit_intake_answer_with_map(
         })?;
     let raw_answer =
         normalize_single_answer(request.answer, question.max_answer_chars, answer_hard_max)?;
+    validate_report_field(&field, &raw_answer, session.question_set_version >= 3)?;
     let mut answers: IntakeInitialAnswers =
         serde_json::from_str(&session.answers_json).map_err(|_| ApiError::Internal)?;
     let existing_answer = intake_session_answers::Entity::find()
@@ -179,8 +181,10 @@ pub async fn submit_intake_answer_with_map(
     if (answer_for(&answers, &field).is_some() || existing_answer.is_some()) && !request.replace {
         return Err(duplicate_answer_conflict());
     }
-    let phase_before = IntakePhaseProgress::for_answers(&answers);
-    if question_phase(&field) == "phase_two" && !phase_before.phase_transition_ready {
+    let phase_before = IntakePhaseProgress::for_answers(&answers, session.question_set_version);
+    if question_phase(&field, session.question_set_version) == "phase_two"
+        && !phase_before.phase_transition_ready
+    {
         return Err(ApiError::Conflict(
             "complete required phase-one fields before submitting phase-two answers".to_owned(),
         ));
@@ -246,7 +250,7 @@ pub async fn submit_intake_answer_with_map(
     };
 
     let missing_fields = missing_fields(&answers, &questions);
-    let phase = IntakePhaseProgress::for_answers(&answers);
+    let phase = IntakePhaseProgress::for_answers(&answers, session.question_set_version);
     let next_question = next_question_for_phase(&questions, &missing_fields, &phase);
     let next_status = if required_fields_are_complete(&answers, &questions) {
         "ready_for_confirmation"
@@ -428,7 +432,7 @@ pub async fn generate_intake_profile_draft(
         ));
     }
     let answers = parse_answers(&session)?;
-    let input = serde_json::to_string(&json!({"family_answers": answers}))
+    let input = serde_json::to_string(&json!({"family_answers": answers_for_ai(&answers)}))
         .map_err(|_| ApiError::Internal)?;
     let request = AiRequest {
         capability: AiCapability::StructuredExtraction,
@@ -551,9 +555,10 @@ pub async fn start_ai_initial_review(
     }
 
     let answers = parse_answers(&session)?;
+    let ai_answers = answers_for_ai(&answers);
     let assessments = parse_assessments(&session)?;
     let input = serde_json::to_string(&json!({
-        "family_answers": answers,
+        "family_answers": ai_answers,
         "family_reviewed_profile": request.profile,
         "rule_consistency_checks": assessments,
         "review_task": "Identify only ambiguous, incomplete, or internally inconsistent family-provided information that needs the family's confirmation."
@@ -565,7 +570,7 @@ pub async fn start_ai_initial_review(
         data_level: DataLevel::Sensitive,
         purpose: AiPurpose::IntakeDraft,
         data_region: "CN".to_owned(),
-        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family answers and which configured answer fields are still unanswered. `field` and `source_fields` must be `profile` or one of: basic_information, health_status, behavior_habits, last_seen, frequent_locations, belongings, transport_ability, follow_up_clues, suspicious_motive. An unanswered configured field may be cited only to explain that information is missing. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
+        system_instruction: Some("Return JSON only: {issues:[{field,severity,evidence_summary,clarification_question,source_fields}]}. `severity` must be `needs_confirmation` or `warning`. Raise at most 12 concrete items based only on the supplied family answers and which configured answer fields are still unanswered. `field` and `source_fields` must be `profile` or one of: basic_information, health_status, behavior_habits, last_seen, frequent_locations, belongings, transport_ability, follow_up_clues, suspicious_motive, police_report_status. Flag placeholder, repeated-character, pure-number, or low-information descriptions for family clarification. An unanswered configured field may be cited only to explain that information is missing. Do not diagnose, decide whether any report is true, infer a current or future location, advise an emergency action, add facts, or rewrite the family's answers. An empty issues array is valid.".to_owned()),
         output_schema: Some(initial_review_schema()),
         output_schema_name: Some("intake_initial_review".to_owned()),
         input,
@@ -576,7 +581,7 @@ pub async fn start_ai_initial_review(
     };
     let execution = gateway.execute(&ai_request).await;
     let execution_audits = crate::ai_gateway::execution_attempt_audits(&ai_request, &execution);
-    let (issues, review_status, _audit_status) = match execution {
+    let (mut issues, review_status, _audit_status) = match execution {
         AiExecutionResult::Completed { output, .. } => {
             match gateway.decode_json::<InitialReviewModelOutput>(&output) {
                 Ok(output) => match validate_initial_review_output(output) {
@@ -621,6 +626,7 @@ pub async fn start_ai_initial_review(
             AiTaskStatus::Failed,
         ),
     };
+    append_content_quality_issues(&mut issues, &answers);
 
     let transaction = db.begin().await?;
     let current = intake_sessions::Entity::find_by_id(session_id)
@@ -759,7 +765,7 @@ pub async fn get_ai_follow_up(
     let fallback = next_question_for_phase(
         &questions,
         &missing,
-        &IntakePhaseProgress::for_answers(&answers),
+        &IntakePhaseProgress::for_answers(&answers, session.question_set_version),
     );
     let Some(fallback) = fallback else {
         return Ok(IntakeAiFollowUpResponse {
@@ -769,7 +775,7 @@ pub async fn get_ai_follow_up(
         });
     };
     let input = serde_json::to_string(&serde_json::json!({
-        "answers": answers,
+        "answers": answers_for_ai(&answers),
         "missing_fields": missing,
         "fallback_field": fallback.field.clone(),
     }))
@@ -1573,6 +1579,16 @@ pub async fn confirm_intake_session(
         )));
     }
 
+    let photos = intake_session_photos::Entity::find()
+        .filter(intake_session_photos::Column::SessionId.eq(session_id))
+        .all(&transaction)
+        .await?;
+    if session.question_set_version >= 3 && photos.is_empty() {
+        return Err(ApiError::Conflict(
+            "upload at least one missing-person photo before confirming the case".to_owned(),
+        ));
+    }
+
     let timestamp = now();
     let case_model =
         crate::services::case_service::insert_case_records(&transaction, &case_request, &timestamp)
@@ -1586,6 +1602,24 @@ pub async fn confirm_intake_session(
         &timestamp,
     )
     .await?;
+    for photo in photos {
+        case_attachments::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            case_id: Set(case_model.id.clone()),
+            storage_key: Set(photo.storage_key),
+            original_filename: Set(photo.original_filename),
+            content_type: Set(photo.content_type),
+            byte_size: Set(photo.byte_size),
+            sha256: Set(photo.sha256),
+            source: Set("family".to_owned()),
+            review_status: Set("pending_review".to_owned()),
+            created_by_user_id: Set(auth.id.clone()),
+            created_at: Set(timestamp.clone()),
+            updated_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+    }
     crate::services::case_service::write_audit(
         &transaction,
         Some(case_model.id.clone()),
@@ -1852,19 +1886,46 @@ fn merge_structured_facts(target: &mut IntakeStructuredFacts, source: IntakeStru
     }
 }
 
-fn question_phase(field: &str) -> &'static str {
-    match field {
-        "basic_information" | "health_status" | "behavior_habits" | "last_seen" => "phase_one",
-        _ => "phase_two",
+fn question_phase(field: &str, question_set_version: i32) -> &'static str {
+    let phase_one_fields = if question_set_version >= 3 {
+        [
+            "basic_information",
+            "last_seen",
+            "suspicious_motive",
+            "police_report_status",
+            "family_phone",
+        ]
+    } else {
+        [
+            "basic_information",
+            "health_status",
+            "behavior_habits",
+            "last_seen",
+            "",
+        ]
+    };
+    if phase_one_fields.contains(&field) {
+        "phase_one"
+    } else {
+        "phase_two"
     }
 }
 
-fn phase_two_answers_present(answers: &IntakeInitialAnswers) -> bool {
-    answers.frequent_locations.is_some()
-        || answers.suspicious_motive.is_some()
-        || answers.belongings.is_some()
-        || answers.transport_ability.is_some()
-        || answers.follow_up_clues.is_some()
+fn phase_two_answers_present(answers: &IntakeInitialAnswers, question_set_version: i32) -> bool {
+    if question_set_version >= 3 {
+        answers.health_status.is_some()
+            || answers.behavior_habits.is_some()
+            || answers.frequent_locations.is_some()
+            || answers.belongings.is_some()
+            || answers.transport_ability.is_some()
+            || answers.follow_up_clues.is_some()
+    } else {
+        answers.frequent_locations.is_some()
+            || answers.belongings.is_some()
+            || answers.transport_ability.is_some()
+            || answers.follow_up_clues.is_some()
+            || answers.suspicious_motive.is_some()
+    }
 }
 
 fn case_request_from_confirmed_profile(request: ConfirmIntakeSessionRequest) -> CreateCaseRequest {
@@ -1969,6 +2030,99 @@ async fn write_audit<C: ConnectionTrait>(
     Ok(())
 }
 
+fn append_content_quality_issues(
+    issues: &mut Vec<IntakeAiInitialReviewIssue>,
+    answers: &IntakeInitialAnswers,
+) {
+    for field in [
+        "basic_information",
+        "last_seen",
+        "suspicious_motive",
+        "belongings",
+    ] {
+        if issues.len() >= 12
+            || !answer_for(answers, field).is_some_and(|value| {
+                low_information_text(value)
+                    || (field == "basic_information"
+                        && basic_information_details(value)
+                            .iter()
+                            .any(|detail| low_information_text(detail)))
+            })
+        {
+            continue;
+        }
+        issues.push(IntakeAiInitialReviewIssue {
+            id: Uuid::new_v4().to_string(),
+            field: field.to_owned(),
+            severity: "needs_confirmation".to_owned(),
+            evidence_summary: "该项看起来像占位符、纯数字、重复字符或信息不足的描述。".to_owned(),
+            clarification_question: "请补充可由家属核实的具体信息；不清楚时请明确填写“不清楚”。"
+                .to_owned(),
+            source_fields: vec![field.to_owned()],
+        });
+    }
+}
+
+fn low_information_text(value: &str) -> bool {
+    let normalized = value.trim().to_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "123" | "456" | "test" | "测试" | "未知"
+    ) {
+        return true;
+    }
+    let characters = normalized
+        .chars()
+        .filter(|value| !value.is_whitespace())
+        .collect::<Vec<_>>();
+    characters.len() < 3
+        || characters.iter().all(|value| value.is_ascii_digit())
+        || characters.windows(2).all(|pair| pair[0] == pair[1])
+}
+
+/// Returns the answer subset that can be sent to an AI provider. Family phone
+/// numbers stay in the owner-scoped intake record and never enter AI requests,
+/// execution events, or AI audit records.
+fn answers_for_ai(answers: &IntakeInitialAnswers) -> IntakeInitialAnswers {
+    let mut minimized = answers.clone();
+    minimized.family_phone = None;
+    minimized
+}
+
+fn basic_information_details(value: &str) -> Vec<&str> {
+    value
+        .split(['\n', ';', '；'])
+        .filter_map(|segment| {
+            let (label, detail) = segment.split_once(['：', ':'])?;
+            matches!(
+                label.trim(),
+                "姓名" | "姓名或称呼" | "外观特征" | "特征描述"
+            )
+            .then_some(detail.trim())
+        })
+        .collect()
+}
+
+/// Records only attachment identifiers and MIME metadata; image contents,
+/// filenames, phone numbers, and other report values never enter audit data.
+pub(crate) async fn write_attachment_audit<C: ConnectionTrait>(
+    db: &C,
+    auth: &AuthenticatedUser,
+    action: &str,
+    session_id: &str,
+    photo_id: &str,
+    content_type: &str,
+) -> Result<(), ApiError> {
+    write_audit(
+        db,
+        auth,
+        action,
+        session_id.to_owned(),
+        Some(json!({ "photo_id": photo_id, "content_type": content_type })),
+    )
+    .await
+}
+
 fn normalize_answers(
     mut answers: IntakeInitialAnswers,
     questions: &[intake_question_definitions::Model],
@@ -1976,6 +2130,8 @@ fn normalize_answers(
 ) -> Result<IntakeInitialAnswers, ApiError> {
     for (field_code, answer) in [
         ("basic_information", &mut answers.basic_information),
+        ("police_report_status", &mut answers.police_report_status),
+        ("family_phone", &mut answers.family_phone),
         ("health_status", &mut answers.health_status),
         ("behavior_habits", &mut answers.behavior_habits),
         ("last_seen", &mut answers.last_seen),
@@ -2007,6 +2163,7 @@ fn normalize_answers(
                 "{field_code} must contain between 1 and {answer_limit} characters"
             )));
         }
+        validate_report_field(field_code, trimmed, question.version >= 3)?;
         *answer = trimmed.to_owned();
     }
     Ok(answers)
@@ -2018,7 +2175,7 @@ fn response_for(
     questions: &[intake_question_definitions::Model],
 ) -> IntakeSessionResponse {
     let missing_fields = missing_fields(&answers, questions);
-    let phase = IntakePhaseProgress::for_answers(&answers);
+    let phase = IntakePhaseProgress::for_answers(&answers, model.question_set_version);
     let next_question = next_question_for_phase(questions, &missing_fields, &phase);
     IntakeSessionResponse::new(model, answers, missing_fields, next_question)
 }
@@ -2037,7 +2194,7 @@ fn next_question_for_phase(
         .iter()
         .find(|question| {
             missing_fields.contains(&question.field_code)
-                && question_phase(&question.field_code) == wanted_phase
+                && question_phase(&question.field_code, question.version) == wanted_phase
         })
         .or_else(|| {
             questions
@@ -2065,6 +2222,8 @@ fn missing_fields(
 fn answer_for<'a>(answers: &'a IntakeInitialAnswers, field_code: &str) -> Option<&'a String> {
     match field_code {
         "basic_information" => answers.basic_information.as_ref(),
+        "police_report_status" => answers.police_report_status.as_ref(),
+        "family_phone" => answers.family_phone.as_ref(),
         "health_status" => answers.health_status.as_ref(),
         "behavior_habits" => answers.behavior_habits.as_ref(),
         "last_seen" => answers.last_seen.as_ref(),
@@ -2084,6 +2243,8 @@ fn set_answer(
 ) -> Result<(), ApiError> {
     match field_code {
         "basic_information" => answers.basic_information = Some(answer),
+        "police_report_status" => answers.police_report_status = Some(answer),
+        "family_phone" => answers.family_phone = Some(answer),
         "health_status" => answers.health_status = Some(answer),
         "behavior_habits" => answers.behavior_habits = Some(answer),
         "last_seen" => answers.last_seen = Some(answer),
@@ -2118,6 +2279,68 @@ fn normalize_single_answer(
     Ok(trimmed.to_owned())
 }
 
+fn validate_report_field(
+    field: &str,
+    value: &str,
+    require_report_details: bool,
+) -> Result<(), ApiError> {
+    match field {
+        "basic_information" if require_report_details => validate_basic_information_details(value),
+        "police_report_status" if !matches!(value, "已报警" | "未报警" | "不清楚") => {
+            Err(ApiError::Validation(
+                "police_report_status must be 已报警, 未报警, or 不清楚".to_owned(),
+            ))
+        }
+        "family_phone" => {
+            let digits = value.chars().filter(char::is_ascii_digit).count();
+            if !(7..=15).contains(&digits)
+                || value
+                    .chars()
+                    .any(|ch| !ch.is_ascii_digit() && !matches!(ch, '+' | '-' | ' ' | '(' | ')'))
+            {
+                return Err(ApiError::Validation(
+                    "family_phone must be a valid phone number".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_basic_information_details(value: &str) -> Result<(), ApiError> {
+    let mut name_present = false;
+    let mut height = None;
+    let mut appearance_present = false;
+    for segment in value.split(['\n', ';', '；']) {
+        let Some((label, detail)) = segment.split_once(['：', ':']) else {
+            continue;
+        };
+        let detail = detail.trim();
+        match label.trim() {
+            "姓名" | "姓名或称呼" => name_present = !detail.is_empty(),
+            "身高" => {
+                height = detail
+                    .chars()
+                    .skip_while(|character| !character.is_ascii_digit())
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+                    .parse::<u16>()
+                    .ok();
+            }
+            "外观特征" | "特征描述" => appearance_present = !detail.is_empty(),
+            _ => {}
+        }
+    }
+    if !name_present || !matches!(height, Some(30..=250)) || !appearance_present {
+        return Err(ApiError::Validation(
+            "basic_information must include a name, height between 30 and 250 cm, and an appearance description"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn required_fields_are_complete(
     answers: &IntakeInitialAnswers,
     questions: &[intake_question_definitions::Model],
@@ -2137,6 +2360,8 @@ fn validate_question_configuration(
                 || !matches!(
                     question.field_code.as_str(),
                     "basic_information"
+                        | "police_report_status"
+                        | "family_phone"
                         | "health_status"
                         | "behavior_habits"
                         | "last_seen"
@@ -2216,10 +2441,10 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        InitialReviewModelIssue, InitialReviewModelOutput, IntakeInitialAnswers,
-        decode_profile_extraction_output, profile_extraction_schema,
-        profile_extraction_system_instruction, validate_initial_review_output,
-        validate_profile_extraction,
+        InitialReviewModelIssue, InitialReviewModelOutput, IntakeInitialAnswers, answers_for_ai,
+        append_content_quality_issues, decode_profile_extraction_output, profile_extraction_schema,
+        profile_extraction_system_instruction, validate_basic_information_details,
+        validate_initial_review_output, validate_profile_extraction,
     };
 
     fn answers() -> IntakeInitialAnswers {
@@ -2351,5 +2576,56 @@ mod tests {
         };
 
         assert!(validate_initial_review_output(output).is_err());
+    }
+
+    #[test]
+    fn removes_family_phone_from_every_ai_answer_snapshot() {
+        let answers = IntakeInitialAnswers {
+            family_phone: Some("+86 138-0000-0000".to_owned()),
+            basic_information: Some("姓名：虚构老人；身高：168 厘米；特征描述：戴帽子".to_owned()),
+            ..IntakeInitialAnswers::default()
+        };
+
+        let minimized = answers_for_ai(&answers);
+        assert_eq!(minimized.family_phone, None);
+        assert_eq!(minimized.basic_information, answers.basic_information);
+    }
+
+    #[test]
+    fn v3_basic_information_requires_name_height_and_appearance() {
+        assert!(
+            validate_basic_information_details("姓名：虚构老人；身高：168 厘米；特征描述：123")
+                .is_ok()
+        );
+        assert!(validate_basic_information_details("姓名：虚构老人；身高：168 厘米").is_err());
+        assert!(
+            validate_basic_information_details("姓名：虚构老人；身高：280 厘米；特征描述：戴帽子")
+                .is_err()
+        );
+        assert!(
+            validate_basic_information_details(
+                "姓名：虚构老人；身高：168 厘米，鞋码 42；特征描述：戴帽子"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_basic_information_details("姓名：虚构老人；身高：1.68 米；特征描述：戴帽子")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn initial_review_flags_low_information_appearance_without_rewriting_it() {
+        let answers = IntakeInitialAnswers {
+            basic_information: Some("姓名：虚构老人；身高：168 厘米；特征描述：123".to_owned()),
+            ..IntakeInitialAnswers::default()
+        };
+        let mut issues = Vec::new();
+
+        append_content_quality_issues(&mut issues, &answers);
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].field, "basic_information");
+        assert!(issues[0].evidence_summary.contains("信息不足"));
     }
 }

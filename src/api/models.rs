@@ -473,6 +473,8 @@ pub struct IntakeAiInitialReviewResponse {
 #[serde(deny_unknown_fields)]
 pub struct IntakeInitialAnswers {
     pub basic_information: Option<String>,
+    pub police_report_status: Option<String>,
+    pub family_phone: Option<String>,
     pub health_status: Option<String>,
     pub behavior_habits: Option<String>,
     pub last_seen: Option<String>,
@@ -509,6 +511,15 @@ pub struct IntakeSessionResponse {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct IntakePhotoResponse {
+    pub id: String,
+    pub original_filename: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub created_at: String,
+}
+
 impl IntakeSessionResponse {
     pub fn new(
         model: intake_sessions::Model,
@@ -516,7 +527,7 @@ impl IntakeSessionResponse {
         missing_fields: Vec<String>,
         next_question: Option<IntakeQuestion>,
     ) -> Self {
-        let phase = IntakePhaseProgress::for_answers(&initial_answers);
+        let phase = IntakePhaseProgress::for_answers(&initial_answers, model.question_set_version);
         Self {
             id: model.id,
             status: model.status,
@@ -637,6 +648,7 @@ pub struct ConfirmIntakeSessionResponse {
 #[derive(Clone, Debug, Serialize)]
 pub struct SubmitIntakeAnswerResponse {
     pub session_id: String,
+    pub question_set_version: i32,
     pub status: String,
     pub raw_answer: String,
     pub candidate_fields: Vec<IntakeCandidateField>,
@@ -664,6 +676,7 @@ impl SubmitIntakeAnswerResponse {
     ) -> Self {
         Self {
             session_id: session.id,
+            question_set_version: session.question_set_version,
             status: session.status,
             raw_answer: answer.raw_answer.clone(),
             candidate_fields: vec![IntakeCandidateField {
@@ -701,24 +714,33 @@ pub struct IntakePhaseProgress {
 }
 
 impl IntakePhaseProgress {
-    pub fn for_answers(answers: &IntakeInitialAnswers) -> Self {
-        let completed_phase_one_fields = [
-            ("basic_information", answers.basic_information.as_ref()),
-            ("health_status", answers.health_status.as_ref()),
-            ("behavior_habits", answers.behavior_habits.as_ref()),
-            ("last_seen", answers.last_seen.as_ref()),
-        ]
-        .into_iter()
-        .filter_map(|(field, value)| value.as_ref().map(|_| field.to_owned()))
-        .collect();
-        let missing_phase_one_fields = [
-            ("basic_information", answers.basic_information.is_none()),
-            ("last_seen", answers.last_seen.is_none()),
-        ]
-        .into_iter()
-        .filter(|(_, missing)| *missing)
-        .map(|(field, _)| field.to_owned())
-        .collect::<Vec<_>>();
+    pub fn for_answers(answers: &IntakeInitialAnswers, question_set_version: i32) -> Self {
+        let phase_one_fields = if question_set_version >= 3 {
+            vec![
+                ("basic_information", answers.basic_information.as_ref()),
+                ("last_seen", answers.last_seen.as_ref()),
+                ("suspicious_motive", answers.suspicious_motive.as_ref()),
+                (
+                    "police_report_status",
+                    answers.police_report_status.as_ref(),
+                ),
+                ("family_phone", answers.family_phone.as_ref()),
+            ]
+        } else {
+            vec![
+                ("basic_information", answers.basic_information.as_ref()),
+                ("last_seen", answers.last_seen.as_ref()),
+            ]
+        };
+        let completed_phase_one_fields = phase_one_fields
+            .iter()
+            .filter_map(|(field, value)| value.as_ref().map(|_| (*field).to_owned()))
+            .collect();
+        let missing_phase_one_fields = phase_one_fields
+            .iter()
+            .filter(|(_, value)| value.is_none())
+            .map(|(field, _)| (*field).to_owned())
+            .collect::<Vec<_>>();
         let phase_transition_ready = missing_phase_one_fields.is_empty();
         Self {
             current_phase: if phase_transition_ready {

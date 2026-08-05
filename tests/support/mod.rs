@@ -12,8 +12,9 @@ use angui::{
     services::{auth_service, case_service},
 };
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 pub const PASSWORD: &str = "demo-password-123";
 pub const FAMILY: &str = "family@demo.invalid";
@@ -28,16 +29,35 @@ pub struct TestContext {
 
 impl TestContext {
     pub async fn new() -> Self {
-        let database = Database::connect("sqlite::memory:")
+        let database_url = format!(
+            "sqlite:file:angui-api-test-{}?mode=memory&cache=shared",
+            Uuid::new_v4()
+        );
+        let database = Database::connect(&database_url)
             .await
             .expect("test database should connect");
         Migrator::up(&database, None)
             .await
             .expect("test migrations should succeed");
+        database
+            .execute_unprepared(
+                "UPDATE intake_question_definitions SET status = CASE WHEN version = 2 THEN 'active' WHEN version = 3 THEN 'disabled' ELSE status END",
+            )
+            .await
+            .expect("legacy intake contract should be available to existing tests");
         auth_service::bootstrap_demo_users(&database, PASSWORD)
             .await
             .expect("test demo users should bootstrap");
         Self { database }
+    }
+
+    pub async fn enable_intake_report_details(&self) {
+        self.database
+            .execute_unprepared(
+                "UPDATE intake_question_definitions SET status = CASE WHEN version = 2 THEN 'disabled' WHEN version = 3 THEN 'active' ELSE status END",
+            )
+            .await
+            .expect("intake report detail question set should be enabled");
     }
 
     pub fn app_state(&self) -> AppState {
