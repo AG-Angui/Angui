@@ -1299,6 +1299,47 @@ mod tests {
     }
 
     #[test]
+    fn learning_lifecycle_event_uniqueness_scripts_are_dialect_safe() {
+        let scripts = [
+            (
+                "sqlite",
+                include_str!(
+                    "../sql/sqlite/up/0040_enforce_learning_lifecycle_event_uniqueness.sql"
+                ),
+            ),
+            (
+                "postgres",
+                include_str!(
+                    "../sql/postgres/up/0040_enforce_learning_lifecycle_event_uniqueness.sql"
+                ),
+            ),
+            (
+                "mysql",
+                include_str!(
+                    "../sql/mysql/up/0040_enforce_learning_lifecycle_event_uniqueness.sql"
+                ),
+            ),
+        ];
+
+        for (dialect, script) in scripts {
+            assert!(
+                script.contains("CREATE UNIQUE INDEX uq_learning_content_review_event"),
+                "{dialect} must enforce one lifecycle event per content transition"
+            );
+        }
+
+        let mysql = scripts[2].1;
+        assert!(
+            mysql.contains(") AS retained_events\n);"),
+            "MySQL needs an inner derived-table alias when deleting duplicate rows"
+        );
+        assert!(
+            !mysql.contains("retained_event_ids"),
+            "MySQL does not permit an alias after a NOT IN subquery"
+        );
+    }
+
+    #[test]
     fn mysql_down_scripts_skip_indexes_removed_by_a_later_table_drop() {
         for script in MYSQL_DOWN_SCRIPTS {
             let statements: Vec<_> = script
