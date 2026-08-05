@@ -590,12 +590,21 @@ export function LearningGovernancePage() {
             <select
               className="h-10 rounded-md border border-slate-300 bg-white px-3"
               value={questionForm.previous_version_id ?? ""}
-              onChange={(event) =>
+              onChange={(event) => {
+                const previousVersionId = event.target.value || null;
+                const previousQuestion = previousVersionId
+                  ? questions.find(
+                      (question) => question.id === previousVersionId,
+                    )
+                  : null;
                 setQuestionForm({
                   ...questionForm,
-                  previous_version_id: event.target.value || null,
-                })
-              }
+                  previous_version_id: previousVersionId,
+                  source_resource_id:
+                    previousQuestion?.source_resource_id ??
+                    questionForm.source_resource_id,
+                });
+              }}
             >
               <option value="">新增首版</option>
               {questions

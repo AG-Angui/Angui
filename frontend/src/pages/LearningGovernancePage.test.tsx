@@ -136,6 +136,50 @@ describe("LearningGovernancePage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("syncs the source resource when selecting a correction after choosing a source", async () => {
+    const originalSource = {
+      ...submittedResource("admin-2"),
+      id: "resource-original",
+      title: "Original source",
+      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+    };
+    const otherSource = {
+      ...submittedResource("admin-2"),
+      id: "resource-other",
+      title: "Other source",
+      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+    };
+    mocked.listResources.mockResolvedValue([originalSource, otherSource]);
+    mocked.listQuestions.mockResolvedValue([
+      {
+        id: "question-original",
+        prompt: "Original question",
+        question_type: "single_choice",
+        difficulty: "basic",
+        tags: [],
+        options: [],
+        source_resource_id: "resource-original",
+        version: 1,
+        lifecycle: {
+          ...submittedResource("admin-2").lifecycle,
+          state: "published",
+        },
+      },
+    ]);
+    render(<LearningGovernancePage />);
+
+    const sourceSelectors = await screen.findAllByLabelText("来源资源");
+    fireEvent.change(sourceSelectors[0], {
+      target: { value: "resource-other" },
+    });
+    const correctionSelectors = await screen.findAllByLabelText("更正上一版本");
+    fireEvent.change(correctionSelectors[1], {
+      target: { value: "question-original" },
+    });
+
+    expect(sourceSelectors[0]).toHaveValue("resource-original");
+  });
+
   it("keeps a governance conflict in the current page with its specific reason", async () => {
     mocked.listResources.mockResolvedValue([submittedResource("admin-2")]);
     mocked.transitionResource.mockRejectedValue(
