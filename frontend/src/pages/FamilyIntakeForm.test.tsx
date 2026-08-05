@@ -16,9 +16,11 @@ const mocked = vi.hoisted(() => ({
   getIntakeDraft: vi.fn(),
   listIntakeAnswerRevisions: vi.fn(),
   listIntakeDraftVersions: vi.fn(),
+  listIntakePhotos: vi.fn(),
   acknowledgeIntakeAiInitialReview: vi.fn(),
   startIntakeAiInitialReview: vi.fn(),
   submitIntakeAnswer: vi.fn(),
+  uploadIntakePhoto: vi.fn(),
 }));
 
 vi.mock("../auth/useAuth", () => ({
@@ -39,12 +41,14 @@ vi.mock("../api/intake", () => ({
     mocked.listIntakeAnswerRevisions(...args),
   listIntakeDraftVersions: (...args: unknown[]) =>
     mocked.listIntakeDraftVersions(...args),
+  listIntakePhotos: (...args: unknown[]) => mocked.listIntakePhotos(...args),
   acknowledgeIntakeAiInitialReview: (...args: unknown[]) =>
     mocked.acknowledgeIntakeAiInitialReview(...args),
   startIntakeAiInitialReview: (...args: unknown[]) =>
     mocked.startIntakeAiInitialReview(...args),
   submitIntakeAnswer: (...args: unknown[]) =>
     mocked.submitIntakeAnswer(...args),
+  uploadIntakePhoto: (...args: unknown[]) => mocked.uploadIntakePhoto(...args),
 }));
 
 const collectingSession: IntakeSession = {
@@ -203,6 +207,7 @@ describe("FamilyIntakeForm", () => {
     });
     mocked.listIntakeAnswerRevisions.mockResolvedValue([]);
     mocked.listIntakeDraftVersions.mockResolvedValue({ items: [] });
+    mocked.listIntakePhotos.mockResolvedValue([]);
     window.sessionStorage.clear();
   });
 
@@ -366,6 +371,41 @@ describe("FamilyIntakeForm", () => {
         },
       ),
     );
+  });
+
+  it("uploads only a controlled JPEG or PNG portrait", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: collectingSession, answer: "" }),
+    );
+    mocked.uploadIntakePhoto.mockResolvedValue({
+      id: "photo-1",
+      original_filename: "portrait.png",
+      content_type: "image/png",
+      byte_size: 1024,
+      created_at: "2026-08-05T08:00:00Z",
+    });
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const input = await screen.findByLabelText("上传走失者照片");
+    expect(input).toHaveAttribute("accept", "image/jpeg,image/png");
+    const file = new File(["portrait"], "portrait.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() =>
+      expect(mocked.uploadIntakePhoto).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        file,
+      ),
+    );
+    expect(await screen.findByText(/已上传：portrait\.png/)).toBeInTheDocument();
   });
 
   it("omits a blank age from the structured basic-information answer", async () => {

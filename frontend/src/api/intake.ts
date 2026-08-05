@@ -12,6 +12,7 @@ export interface IntakeQuestion {
 
 export interface IntakeSession {
   id: string;
+  question_set_version?: number;
   status:
     | "collecting"
     | "ready_for_confirmation"
@@ -26,6 +27,14 @@ export interface IntakeSession {
   guidance_mode: "rule_based" | "ai_assisted";
   ai_initial_review_status: string;
   privacy_notice: string;
+}
+
+export interface IntakePhoto {
+  id: string;
+  original_filename: string;
+  content_type: "image/jpeg" | "image/png";
+  byte_size: number;
+  created_at: string;
 }
 
 export interface IntakeAiFollowUp {
@@ -158,6 +167,20 @@ export function createIntakeSession(token: string): Promise<IntakeSession> {
     { method: "POST", body: JSON.stringify({}) },
     token,
   );
+}
+
+export function listIntakePhotos(token: string, sessionId: string): Promise<IntakePhoto[]> {
+  return apiRequest(`/intake-sessions/${sessionId}/photos`, {}, token);
+}
+
+export function uploadIntakePhoto(
+  token: string,
+  sessionId: string,
+  file: File,
+): Promise<IntakePhoto> {
+  const body = new FormData();
+  body.append("file", file);
+  return apiRequest(`/intake-sessions/${sessionId}/photos`, { method: "POST", body }, token);
 }
 
 export function submitIntakeAnswer(

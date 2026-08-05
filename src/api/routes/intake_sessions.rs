@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use actix_multipart::Multipart;
 use actix_web::{Error, HttpResponse, http::header, web};
 use futures_util::stream;
 use serde_json::json;
@@ -22,6 +23,12 @@ pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/intake-sessions")
             .route("", web::post().to(create_intake_session))
+            .route("/{session_id}/photos", web::get().to(list_intake_photos))
+            .route("/{session_id}/photos", web::post().to(upload_intake_photo))
+            .route(
+                "/{session_id}/photos/{photo_id}",
+                web::get().to(download_intake_photo),
+            )
             .route(
                 "/{session_id}/answers",
                 web::post().to(submit_intake_answer),
@@ -79,6 +86,66 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 web::post().to(confirm_intake_session),
             ),
     );
+}
+
+async fn list_intake_photos(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::intake_photo_service::list_photos(&state.db, &auth, &session_id).await?,
+    ))
+}
+
+async fn upload_intake_photo(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+    multipart: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    let (filename, content_type, bytes) =
+        crate::services::case_resource_service::read_single_image_upload(
+            multipart,
+            state.attachment_max_image_bytes,
+        )
+        .await?;
+    let photo = crate::services::intake_photo_service::store_photo(
+        &state.db,
+        &auth,
+        &session_id,
+        crate::services::case_resource_service::AttachmentUpload {
+            filename: &filename,
+            declared_content_type: &content_type,
+            bytes: &bytes,
+        },
+        &state.attachment_storage_directory,
+        state.attachment_max_image_bytes,
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(photo))
+}
+
+async fn download_intake_photo(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, photo_id) = path.into_inner();
+    let photo = crate::services::intake_photo_service::load_photo(
+        &state.db,
+        &auth,
+        &session_id,
+        &photo_id,
+        &state.attachment_storage_directory,
+    )
+    .await?;
+    Ok(HttpResponse::Ok()
+        .insert_header((header::CONTENT_TYPE, photo.content_type))
+        .insert_header((header::CONTENT_DISPOSITION, "inline"))
+        .insert_header((header::CACHE_CONTROL, "no-store, private"))
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .body(photo.bytes))
 }
 
 async fn get_intake_profile_draft(

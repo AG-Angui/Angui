@@ -127,7 +127,7 @@ pub async fn store_image_attachment(
     storage: AttachmentStorage<'_>,
 ) -> Result<CaseAttachmentResponse, ApiError> {
     let (content_type, original_filename, normalized) =
-        normalize_attachment_upload(upload, storage.max_image_bytes).await?;
+        normalize_image_upload(upload, storage.max_image_bytes).await?;
     let transaction = db.begin().await?;
     let role = require_case_role(
         &transaction,
@@ -164,7 +164,7 @@ pub async fn store_image_attachment_for_clue(
     storage: AttachmentStorage<'_>,
 ) -> Result<CaseAttachmentResponse, ApiError> {
     let (content_type, original_filename, normalized) =
-        normalize_attachment_upload(upload, storage.max_image_bytes).await?;
+        normalize_image_upload(upload, storage.max_image_bytes).await?;
     let transaction = db.begin().await?;
     let clue = clues::Entity::find_by_id(clue_id)
         .one(&transaction)
@@ -307,7 +307,7 @@ pub struct DownloadedAttachment {
     pub filename: String,
 }
 
-async fn normalize_attachment_upload(
+pub async fn normalize_image_upload(
     upload: AttachmentUpload<'_>,
     max_image_bytes: usize,
 ) -> Result<(String, String, Vec<u8>), ApiError> {

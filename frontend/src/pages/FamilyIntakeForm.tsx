@@ -24,8 +24,10 @@ import {
   restoreIntakeDraft,
   listIntakeAnswerRevisions,
   restoreIntakeAnswerRevision,
+  listIntakePhotos,
   startIntakeAiInitialReview,
   submitIntakeAnswer,
+  uploadIntakePhoto,
 } from "../api/intake";
 import type {
   ConfirmedIntakeProfile,
@@ -36,6 +38,7 @@ import type {
   IntakeDraft,
   IntakeDraftProfile,
   IntakeProfileDraftFieldMetadata,
+  IntakePhoto,
   IntakeSession,
   SubmitIntakeAnswerResponse,
 } from "../api/intake";
@@ -47,6 +50,8 @@ import {
 
 const questionLabels: Record<string, string> = {
   basic_information: "基本信息",
+  police_report_status: "是否报警",
+  family_phone: "家属电话",
   health_status: "健康情况",
   behavior_habits: "行为习惯",
   last_seen: "最后出现情况",
@@ -169,6 +174,7 @@ export function FamilyIntakeForm({
   const [basicInformation, setBasicInformation] =
     useState<BasicInformationDraft>(blankBasicInformation);
   const [profile, setProfile] = useState<ConfirmedIntakeProfile>(blankProfile);
+  const [photos, setPhotos] = useState<IntakePhoto[]>([]);
   const [assessments, setAssessments] = useState<IntakeAssessment[]>([]);
   const [editSource, setEditSource] =
     useState<IntakeProfileDraftFieldMetadata | null>(null);
@@ -205,6 +211,7 @@ export function FamilyIntakeForm({
     | "initial_review"
     | "acknowledge_initial_review"
     | "confirm"
+    | "photo"
     | null
   >(null);
   const [error, setError] = useState("");
@@ -256,6 +263,14 @@ export function FamilyIntakeForm({
   const isBusy = busyAction !== null;
   const displayedAssessments = draft?.assessments ?? assessments;
   const sourceOptions = useMemo(() => uniqueSourceOptions(draft), [draft]);
+
+  useEffect(() => {
+    const sessionId = session?.id;
+    if (!token || !sessionId) return;
+    void listIntakePhotos(token, sessionId)
+      .then(setPhotos)
+      .catch(() => setPhotos([]));
+  }, [session, token]);
 
   useEffect(() => {
     if (confirmReviewOpen) confirmDialogRef.current?.focus();
@@ -470,6 +485,7 @@ export function FamilyIntakeForm({
       setAssessments([]);
       setAnswer("");
       setBasicInformation(blankBasicInformation);
+      setPhotos([]);
       setIsReviewingBasicInformation(false);
     } catch (cause) {
       setError(messageFrom(cause));
@@ -566,17 +582,25 @@ export function FamilyIntakeForm({
     const answerToSubmit =
       value ??
       (session.next_question.field === "basic_information"
-        ? basicInformationAnswer(basicInformation)
+        ? basicInformationAnswer(
+            basicInformation,
+            session.question_set_version !== undefined &&
+              session.question_set_version >= 3,
+          )
         : answer);
     if (!answerToSubmit) {
-      setError("请填写姓名或称呼，或选择“标记为未知”。");
+      setError("请填写必填资料后继续；第 3 版问询还需要身高和外观特征。");
       return;
     }
     await sendAnswer(session.next_question.field, answerToSubmit);
   }
 
   async function saveBasicInformationAndReturn() {
-    const nextAnswer = basicInformationAnswer(basicInformation);
+    const nextAnswer = basicInformationAnswer(
+      basicInformation,
+      session?.question_set_version !== undefined &&
+        session.question_set_version >= 3,
+    );
     if (!nextAnswer) {
       setError("请填写姓名或称呼，或返回补充线索继续填写。");
       return;
@@ -616,6 +640,24 @@ export function FamilyIntakeForm({
       if (cause instanceof ApiClientError && cause.status === 409) {
         await loadDraft(session.id, false);
       }
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function uploadPhoto(file: File | undefined) {
+    if (!token || !session || !file) return;
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      setError("请上传 JPEG 或 PNG 格式的走失者照片。");
+      return;
+    }
+    setBusyAction("photo");
+    setError("");
+    try {
+      const photo = await uploadIntakePhoto(token, session.id, file);
+      setPhotos((current) => [...current, photo]);
+    } catch (cause) {
+      setError(messageFrom(cause));
     } finally {
       setBusyAction(null);
     }
@@ -1385,7 +1427,7 @@ export function FamilyIntakeForm({
   const isReviewingPhaseOne =
     session.phase === "phase_two" && isReviewingBasicInformation;
   const completed = session.completed_phase_one_fields.length;
-  const phaseTotal = 4;
+  const phaseTotal = 5;
   const currentLabel = isReviewingPhaseOne
     ? "基本情况（编辑）"
     : question
@@ -1449,6 +1491,48 @@ export function FamilyIntakeForm({
       {error && <Alert>{error}</Alert>}
       <AssessmentList items={displayedAssessments} />
 
+      <section
+        className="mt-5 rounded-md border border-brand-200 bg-brand-50 p-4"
+        aria-labelledby="intake-photo-title"
+      >
+        <h3 id="intake-photo-title" className="m-0 text-sm font-bold text-slate-950">
+          走失者照片 <span aria-hidden="true">*</span>
+        </h3>
+        <p id="intake-photo-help" className="mb-3 mt-1 text-xs leading-5 text-slate-700">
+          请上传至少一张近期 JPEG 或 PNG 照片。照片仅用于受控案件处理，不会公开展示、用于人脸识别或写入 AI 审核日志。
+        </p>
+        <input
+          type="file"
+          accept="image/jpeg,image/png"
+          aria-describedby="intake-photo-help"
+          aria-label="上传走失者照片"
+          disabled={isBusy || photos.length >= 4}
+          onChange={(event) => {
+            void uploadPhoto(event.target.files?.[0]);
+            event.currentTarget.value = "";
+          }}
+          className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-brand-700 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2 disabled:opacity-60"
+        />
+        {busyAction === "photo" && (
+          <p className="mb-0 mt-2 text-xs text-slate-700" role="status">
+            正在安全处理照片…
+          </p>
+        )}
+        {photos.length > 0 ? (
+          <ul className="mb-0 mt-3 space-y-1 p-0 text-xs text-slate-700" aria-live="polite">
+            {photos.map((photo) => (
+              <li key={photo.id} className="list-none rounded bg-white px-2 py-1">
+                已上传：{photo.original_filename}（{Math.ceil(photo.byte_size / 1024)} KB）
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mb-0 mt-3 text-xs text-amber-800" role="status">
+            创建案件前必须至少上传一张照片。
+          </p>
+        )}
+      </section>
+
       {question ? (
         <form
           className="mt-5"
@@ -1466,12 +1550,39 @@ export function FamilyIntakeForm({
               value={basicInformation}
               onChange={setBasicInformation}
               required={isReviewingPhaseOne || question.required}
+              requiresReportDetails={session.question_set_version !== undefined && session.question_set_version >= 3}
               hint={
                 isReviewingPhaseOne
                   ? "可在这里更正基本情况；保存后将返回补充线索。"
                   : questionReasons[question.field]
               }
             />
+          ) : question.field === "police_report_status" ? (
+            <Field label="是否报警" required hint="请选择实际情况；系统不会自动判断报警状态。">
+              <select
+                aria-label="是否报警"
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              >
+                <option value="">请选择</option>
+                <option value="已报警">已报警</option>
+                <option value="未报警">未报警</option>
+                <option value="不清楚">不清楚</option>
+              </select>
+            </Field>
+          ) : question.field === "family_phone" ? (
+            <Field label="家属电话" required hint="仅向经授权的家属和指挥人员开放，不会出现在公开进展中。">
+              <Input
+                type="tel"
+                autoComplete="tel"
+                inputMode="tel"
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                maxLength={40}
+                fullWidth
+              />
+            </Field>
           ) : (
             <Field
               label={
@@ -1887,11 +1998,13 @@ function BasicInformationForm({
   value,
   onChange,
   required,
+  requiresReportDetails,
   hint,
 }: {
   value: BasicInformationDraft;
   onChange: (next: BasicInformationDraft) => void;
   required: boolean;
+  requiresReportDetails: boolean;
   hint?: string;
 }) {
   return (
@@ -1949,7 +2062,7 @@ function BasicInformationForm({
             fullWidth
           />
         </Field>
-        <Field label="身高（厘米）">
+        <Field label="身高（厘米）" required={requiresReportDetails}>
           <Input
             type="number"
             inputMode="numeric"
@@ -1963,7 +2076,7 @@ function BasicInformationForm({
           />
         </Field>
         <div className="sm:col-span-2">
-          <Field label="便于识别的外观特征">
+          <Field label="便于识别的外观特征" required={requiresReportDetails}>
             <TextArea
               value={value.appearance}
               onChange={(event) =>
@@ -2098,11 +2211,17 @@ function sessionFromAnswerResponse(
   };
 }
 
-function basicInformationAnswer(value: BasicInformationDraft): string | null {
+function basicInformationAnswer(
+  value: BasicInformationDraft,
+  requiresReportDetails = false,
+): string | null {
   const name = value.name.trim();
   if (!name) return null;
   const age = validInteger(value.age, 0, 130);
   const height = validInteger(value.height, 30, 250);
+  if (requiresReportDetails && (height === null || !value.appearance.trim())) {
+    return null;
+  }
   const lines = [`姓名或称呼：${name}`];
   if (value.gender) lines.push(`性别：${value.gender}`);
   if (age !== null) lines.push(`年龄：${age} 岁`);

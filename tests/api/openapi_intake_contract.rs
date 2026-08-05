@@ -53,7 +53,42 @@ fn assert_schema_contains(name: &str, expected_fragments: &[&str]) {
 
 #[test]
 fn intake_openapi_contract_covers_runtime_requests_and_responses() {
-    assert_schema_contains("IntakeInitialAnswers", &["suspicious_motive:"]);
+    assert_schema_contains(
+        "IntakeInitialAnswers",
+        &[
+            "suspicious_motive:",
+            "police_report_status:",
+            "family_phone:",
+        ],
+    );
+    assert_schema_contains(
+        "IntakePhoto",
+        &[
+            "original_filename:",
+            "content_type:",
+            "byte_size:",
+            "created_at:",
+        ],
+    );
+    for (path, operation_id) in [
+        (
+            "/api/intake-sessions/{session_id}/photos",
+            "operationId: listIntakeSessionPhotos",
+        ),
+        (
+            "/api/intake-sessions/{session_id}/photos/{photo_id}",
+            "operationId: downloadIntakeSessionPhoto",
+        ),
+    ] {
+        assert!(
+            operation(path).contains(operation_id),
+            "intake-photo API must declare {operation_id:?}"
+        );
+    }
+    assert!(
+        operation("/api/intake-sessions/{session_id}/photos").contains("multipart/form-data:"),
+        "the intake-photo upload must document multipart input"
+    );
     assert_schema_contains(
         "SubmitIntakeAnswerRequest",
         &[

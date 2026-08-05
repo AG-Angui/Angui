@@ -17,6 +17,9 @@
 | `GET` | `/api/auth/me` | `200` | 获取当前认证用户 |
 | `POST` | `/api/auth/logout` | `204` | 撤销当前服务端会话 |
 | `POST` | `/api/intake-sessions` | `201` | 创建成员的未确认走失信息问询会话 |
+| `GET` | `/api/intake-sessions/{session_id}/photos` | `200` | 列出创建者受控上传的走失者照片元数据 |
+| `POST` | `/api/intake-sessions/{session_id}/photos` | `201` | 上传一张受控处理的 JPEG/PNG 走失者照片 |
+| `GET` | `/api/intake-sessions/{session_id}/photos/{photo_id}` | `200` | 读取创建者受控照片，不返回公共 URL |
 | `POST` | `/api/intake-sessions/{session_id}/answers` | `201` | 追加一个未确认答案并获取下一问 |
 | `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
 | `POST` | `/api/intake-sessions/{session_id}/confirm` | `201` | 家属确认画像并创建正式案件 |
@@ -190,7 +193,11 @@ AI 或其他自动化能力未来只能生成草稿或待审核输入，不得�
 
 ## Intake session creation
 
-`POST /api/intake-sessions` is available only to authenticated `member` accounts. Its optional `initial_answers` object has eight structured draft fields: `basic_information`, `health_status`, `behavior_habits`, `last_seen`, `frequent_locations`, `belongings`, `transport_ability`, and `follow_up_clues`. Every supplied value is trimmed and must meet the active question's database-managed `max_answer_chars`; `ANGUI_INTAKE_ANSWER_HARD_MAX` is a server-side absolute cap (default `2000`, range `1`–`10000`) that cannot be exceeded by database configuration. Unknown properties, including `confirmed`, are rejected.
+`POST /api/intake-sessions` is available only to authenticated `member` accounts. New report sessions use question set v3: `basic_information` (name, height, and appearance description), `last_seen`, `suspicious_motive`, `police_report_status`, and `family_phone` are required; health, behavior, frequent locations, belongings, transport ability, and follow-up clues remain optional. The session stores its selected question-set version, so older sessions continue to follow their original definition. Every supplied value is trimmed and must meet the active question's database-managed `max_answer_chars`; `ANGUI_INTAKE_ANSWER_HARD_MAX` is a server-side absolute cap (default `2000`, range `1`–`10000`) that cannot be exceeded by database configuration. Unknown properties, including `confirmed`, are rejected.
+
+For v3, `basic_information` must explicitly contain a name (or appellation), height from 30 to 250 cm, and an appearance description. The initial AI review and its deterministic safeguard flag placeholders, pure numbers, repeated characters, `123`, `456`, and similarly low-information descriptions for family confirmation; they never replace or invent a reported fact.
+
+Before the second confirmation creates a v3 case, the family must upload at least one JPEG or PNG portrait through `POST /api/intake-sessions/{session_id}/photos`. The service decodes and re-encodes the image before encrypted-at-rest storage, limits each session to four photos, and exposes no public URL. Only the creating family member can list or retrieve a pre-confirmation image. After confirmation, the same controlled record becomes a pending-review family case attachment available to authorized commanders, but not volunteers. The system does not implement EXIF location extraction, face recognition, similarity search, or an automated conclusion from a photograph. Phone numbers and photographs are omitted from ordinary audit metadata and every AI request, execution event, and audit record.
 
 The server creates a `collecting` session and records the selected `question_set_version`. It always returns `guidance_mode: "rule_based"`, `missing_fields`, and the next ordered question from the active database definition. This is the required AI-unavailable fallback; no external model is called. The values remain unconfirmed drafts, never case facts. Raw answers are not included in audit metadata or ordinary logs. The session is owned by its creator; when a later confirmation associates it with a case, only an authorized commander of that case may additionally read it. The database's unique case association protects the later confirmation flow from linking a session to multiple cases.
 
@@ -209,7 +216,7 @@ Example:
 
 `GET /api/intake-sessions/{session_id}/profile-draft` returns the session creator's standardized profile draft. It is explicitly marked `draft`, lists its family-provided source scope and missing fields, includes a generated timestamp, and sets `requires_human_confirmation: true`. The endpoint does not infer a certain destination or expose the draft to commanders, volunteers, or other families before formal confirmation.
 
-`POST /api/intake-sessions/{session_id}/confirm` is available only to that session creator after required answers are complete. The request must set `human_confirmed: true` and contains the family-reviewed profile, so corrected values supersede any draft value. One database transaction creates the active case, elder profile, creator's `family` membership, `case.created` audit event, and confirmed-session link. A repeat submission returns the already-created case instead of creating a duplicate. See `docs/openapi.yaml` for the exact schemas.
+`POST /api/intake-sessions/{session_id}/confirm` is available only to that session creator after required answers are complete. The request must set `human_confirmed: true` and contains the family-reviewed profile, so corrected values supersede any draft value. For v3, it also requires at least one controlled missing-person photo. One database transaction creates the active case, elder profile, creator's `family` membership, controlled pending-review family attachment records, `case.created` audit event, and confirmed-session link. A repeat submission returns the already-created case instead of creating a duplicate. See `docs/openapi.yaml` for the exact schemas.
 
 ## 地点与图片补充
 
