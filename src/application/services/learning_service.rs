@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    TransactionTrait, TryInsertResult,
 };
 use serde_json::json;
 
@@ -887,20 +887,39 @@ async fn append_lifecycle_event(
     auth: &AuthenticatedUser,
     event: LifecycleEventInput<'_>,
 ) -> Result<(), ApiError> {
-    learning_content_review_events::ActiveModel {
-        id: Set(case_service::new_id()),
-        content_type: Set(event.content_type.to_owned()),
-        content_id: Set(event.content_id.to_owned()),
-        content_version: Set(event.content_version),
-        event_type: Set(event.event_type.to_owned()),
-        actor_user_id: Set(auth.id.clone()),
-        reason: Set(event.reason.to_owned()),
-        permitted_use: Set(event.permitted_use.to_owned()),
-        created_at: Set(now()),
-    }
-    .insert(transaction)
+    let result = learning_content_review_events::Entity::insert_many([
+        learning_content_review_events::ActiveModel {
+            id: Set(case_service::new_id()),
+            content_type: Set(event.content_type.to_owned()),
+            content_id: Set(event.content_id.to_owned()),
+            content_version: Set(event.content_version),
+            event_type: Set(event.event_type.to_owned()),
+            actor_user_id: Set(auth.id.clone()),
+            reason: Set(event.reason.to_owned()),
+            permitted_use: Set(event.permitted_use.to_owned()),
+            created_at: Set(now()),
+        },
+    ])
+    .on_conflict(
+        OnConflict::columns([
+            learning_content_review_events::Column::ContentType,
+            learning_content_review_events::Column::ContentId,
+            learning_content_review_events::Column::ContentVersion,
+            learning_content_review_events::Column::EventType,
+        ])
+        .do_nothing()
+        .to_owned(),
+    )
+    .do_nothing()
+    .exec(transaction)
     .await?;
-    Ok(())
+    if matches!(result, TryInsertResult::Inserted(_)) {
+        Ok(())
+    } else {
+        Err(ApiError::Conflict(
+            "学习内容状态已被其他管理员更新，请刷新后重试".to_owned(),
+        ))
+    }
 }
 
 async fn write_learning_audit(
@@ -937,6 +956,14 @@ async fn visible_question(
                 && visible_to(auth, &question.visibility)
         })
         .ok_or_else(|| ApiError::NotFound("learning question was not found".to_owned()))?;
+    if !content_lifecycle(db, "question", &question.id, question.version)
+        .await?
+        .is_training_published()
+    {
+        return Err(ApiError::NotFound(
+            "learning question was not found".to_owned(),
+        ));
+    }
     Ok(question)
 }
 
@@ -1057,7 +1084,11 @@ impl ContentLifecycle {
     }
 
     fn is_training_published(&self) -> bool {
-        self.state() == "published" && self.permitted_use == "training"
+        self.state() == "published"
+            && matches!(
+                self.permitted_use.as_str(),
+                "training" | "public_information"
+            )
     }
 
     fn response(self) -> Result<LearningContentLifecycleResponse, ApiError> {

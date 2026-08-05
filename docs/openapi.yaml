@@ -1779,7 +1779,7 @@ paths:
       tags: [Learning]
       operationId: getPublicPreventionCard
       summary: Get the approved public prevention card for offline use
-      description: Returns the current effective prevention resource only when it is public, published, training-scoped, and has a complete immutable governance chain. A withdrawn card is not returned.
+      description: Returns the current effective prevention resource only when it is public, published, training- or public-information-scoped, and has a complete immutable governance chain. A withdrawn card is not returned.
       x-data-classification: public
       responses:
         "200": { description: Approved public prevention card }

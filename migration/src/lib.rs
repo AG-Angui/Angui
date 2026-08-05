@@ -39,6 +39,7 @@ mod m0036_add_intake_ai_initial_review;
 mod m0037_add_ai_review_materials;
 mod m0038_create_learning_center;
 mod m0039_create_learning_content_review_events;
+mod m0040_enforce_learning_lifecycle_event_uniqueness;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -87,6 +88,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0037_add_ai_review_materials::Migration),
             Box::new(m0038_create_learning_center::Migration),
             Box::new(m0039_create_learning_content_review_events::Migration),
+            Box::new(m0040_enforce_learning_lifecycle_event_uniqueness::Migration),
         ]
     }
 }
@@ -1294,6 +1296,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn learning_lifecycle_event_uniqueness_scripts_are_dialect_safe() {
+        let scripts = [
+            (
+                "sqlite",
+                include_str!(
+                    "../sql/sqlite/up/0040_enforce_learning_lifecycle_event_uniqueness.sql"
+                ),
+            ),
+            (
+                "postgres",
+                include_str!(
+                    "../sql/postgres/up/0040_enforce_learning_lifecycle_event_uniqueness.sql"
+                ),
+            ),
+            (
+                "mysql",
+                include_str!(
+                    "../sql/mysql/up/0040_enforce_learning_lifecycle_event_uniqueness.sql"
+                ),
+            ),
+        ];
+
+        for (dialect, script) in scripts {
+            assert!(
+                script.contains("CREATE UNIQUE INDEX uq_learning_content_review_event"),
+                "{dialect} must enforce one lifecycle event per content transition"
+            );
+        }
+
+        let mysql = scripts[2].1;
+        assert!(
+            mysql.contains(") AS retained_events\n);"),
+            "MySQL needs an inner derived-table alias when deleting duplicate rows"
+        );
+        assert!(
+            !mysql.contains("retained_event_ids"),
+            "MySQL does not permit an alias after a NOT IN subquery"
+        );
     }
 
     #[test]

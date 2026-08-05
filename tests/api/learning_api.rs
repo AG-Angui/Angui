@@ -134,7 +134,7 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
                 "source_url": "https://example.invalid/approved-source",
                 "visibility": "public",
                 "effective_at": "2020-01-01T00:00:00.000Z",
-                "permitted_use": "training",
+                "permitted_use": "public_information",
                 "submission_reason": "已提交供独立脱敏与审核。"
             }))
             .to_request(),
@@ -224,6 +224,23 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     assert_eq!(public_card.status(), StatusCode::OK);
     let public_card: Value = test::read_body_json(public_card).await;
     assert_eq!(public_card["id"], resource_id);
+
+    let exported_resource = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/admin/learning/resources/{resource_id}/export"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(exported_resource.status(), StatusCode::OK);
+    let exported_resource: Value = test::read_body_json(exported_resource).await;
+    assert_eq!(exported_resource["id"], resource_id);
 
     let question = test::call_service(
         &app,
@@ -359,6 +376,42 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     let answer: Value = test::read_body_json(answer).await;
     assert_eq!(answer["is_correct"], true);
     assert_eq!(answer["source"]["resource_id"], resource_id);
+
+    let duplicate_submission_event = context
+        .database
+        .execute_unprepared(&format!(
+            "INSERT INTO learning_content_review_events (id, content_type, content_id, content_version, event_type, actor_user_id, reason, permitted_use, created_at) SELECT 'd{}', content_type, content_id, content_version, event_type, actor_user_id, reason, permitted_use, created_at FROM learning_content_review_events WHERE content_type = 'question' AND content_id = '{question_id}' AND event_type = 'submitted'",
+            &question_id[1..]
+        ))
+        .await;
+    assert!(duplicate_submission_event.is_err());
+
+    context
+        .database
+        .execute_unprepared(&format!(
+            "INSERT INTO learning_content_review_events (id, content_type, content_id, content_version, event_type, actor_user_id, reason, permitted_use, created_at) SELECT 'w{}', content_type, content_id, content_version, 'withdrawn', actor_user_id, reason, permitted_use, '9999-12-31T23:59:59.999Z' FROM learning_content_review_events WHERE content_type = 'question' AND content_id = '{question_id}' AND event_type = 'submitted'",
+            &question_id[1..]
+        ))
+        .await
+        .expect("fixture should simulate an externally withdrawn question lifecycle");
+    let answer_for_withdrawn_question = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/learning/questions/{question_id}/answers"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "selected_option_id": "a" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        answer_for_withdrawn_question,
+        StatusCode::NOT_FOUND,
+        "not_found",
+    )
+    .await;
 
     let withdrawn = test::call_service(
         &app,

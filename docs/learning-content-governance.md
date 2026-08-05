@@ -16,12 +16,12 @@
 { "reason": "可审计的人工处理理由" }
 ```
 
-资源提交额外要求来源名称、可选 HTTPS 来源地址、版本生效时间、可见级别和用途。`permitted_use` 目前仅允许 `training` 或 `public_information`；学习列表、问答、题库与导出只处理 `training` 内容，避免将公开信息、训练材料和其他用途混用。
+资源提交额外要求来源名称、可选 HTTPS 来源地址、版本生效时间、可见级别和用途。资源的 `permitted_use` 仅允许 `training` 或 `public_information`；两种用途均须完成同一脱敏、独立审核与发布链后才可读取或导出。题目及其判题、解析固定为 `training`，不将公开信息用途扩展为题库用途。
 
 ## 读取与导出边界
 
-- `GET /api/learning/public/prevention-card` 无需登录，但只返回当前已发布、已完成治理、公开可见且用途为培训的防走失知识卡。生产环境仅缓存这一张卡和前端应用壳，绝不缓存登录态学习资源、题目、问答或案件数据；在线发现卡片撤回后会删除本地缓存。
-- `GET /api/learning/resources`、`GET /api/learning/questions` 和 `POST /api/knowledge/ask` 仅读取当前账号可见、已生效、已脱敏、已独立审核、已发布的培训内容。
+- `GET /api/learning/public/prevention-card` 无需登录，但只返回当前已发布、已完成治理、公开可见且用途为培训或公开信息的防走失知识卡。生产环境仅缓存这一张卡和前端应用壳，绝不缓存登录态学习资源、题目、问答或案件数据；在线发现卡片撤回后会删除本地缓存。
+- `GET /api/learning/resources` 和 `POST /api/knowledge/ask` 仅读取当前账号可见、已生效、已脱敏、已独立审核、已发布的培训或公开信息资源；`GET /api/learning/questions` 只返回培训用途的题目。
 - 问答只返回匹配资源原文、来源、版本和人工核验提示；无可靠来源时返回 `insufficient_sources`，不生成行动建议。
 - `POST /api/learning/questions/{id}/answers` 在服务端校验选项；题目列表和题目导出均不返回 `correct_option_id`。
 - `GET /api/admin/learning/resources/{id}/export` 与 `GET /api/admin/learning/questions/{id}/export` 仅允许管理员获取当前已发布的受控版本，使用白名单响应字段并以 JSON 附件返回。

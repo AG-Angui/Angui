@@ -6,6 +6,7 @@ import type { KnowledgeAnswer, LearningQuestion, LearningResource } from "../api
 import { ApiClientError } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { ErrorState, LoadingState } from "../components/ContentState";
+import { usePreventionCacheReady } from "../offline/prevention-cache";
 
 function messageFrom(cause: unknown) {
   return cause instanceof ApiClientError ? cause.message : "暂时无法完成学习中心操作，请稍后重试。";
@@ -13,6 +14,7 @@ function messageFrom(cause: unknown) {
 
 export function LearningCenterPage() {
   const { token } = useAuth();
+  const preventionCacheReady = usePreventionCacheReady();
   const [resources, setResources] = useState<LearningResource[]>([]);
   const [questions, setQuestions] = useState<LearningQuestion[]>([]);
   const [preventionCard, setPreventionCard] = useState<LearningResource | null>(null);
@@ -25,7 +27,11 @@ export function LearningCenterPage() {
   const [answeringQuestion, setAnsweringQuestion] = useState("");
 
   const load = useCallback(async () => {
-    if (!token) return;
+    if (!token) {
+      setError("登录状态不可用，请重新登录后访问学习中心。");
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     setError("");
     try {
@@ -64,8 +70,8 @@ export function LearningCenterPage() {
       <div><h1 className="m-0 text-2xl font-bold text-slate-950">学习中心</h1><p className="mb-0 mt-1 text-sm text-slate-600">仅展示已发布、可追溯的教材；内容不能替代负责人审核或现场指令。</p></div>
     </header>
     <section className="mb-7 border-y border-emerald-200 bg-emerald-50" aria-labelledby="offline-prevention-title">
-      <header className="flex items-center justify-between gap-3 border-b border-emerald-200 px-5 py-4"><div className="flex items-center gap-2"><WifiOff size={18} aria-hidden="true" /><h2 id="offline-prevention-title" className="m-0 text-base font-bold text-slate-950">离线防走失知识卡</h2></div><Chip size="sm" variant="soft"><Chip.Label>{preventionCard ? "可离线使用" : "等待发布"}</Chip.Label></Chip></header>
-      {preventionCard ? <article className="px-5 py-4"><h3 className="m-0 text-sm font-semibold text-slate-950">{preventionCard.title}</h3><p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{preventionCard.content}</p><p className="mb-0 mt-3 text-xs text-slate-600">来源：{preventionCard.source_name} · v{preventionCard.version}</p></article> : <p className="m-0 px-5 py-6 text-sm leading-6 text-slate-600">负责人尚未发布可离线使用的防走失知识卡。该卡发布并加载成功后，生产环境会保留最后一个已审核版本供离线查看。</p>}
+      <header className="flex items-center justify-between gap-3 border-b border-emerald-200 px-5 py-4"><div className="flex items-center gap-2"><WifiOff size={18} aria-hidden="true" /><h2 id="offline-prevention-title" className="m-0 text-base font-bold text-slate-950">离线防走失知识卡</h2></div><Chip size="sm" variant="soft"><Chip.Label>{preventionCard ? (preventionCacheReady ? "可离线使用" : "仅可在线查看") : "等待发布"}</Chip.Label></Chip></header>
+      {preventionCard ? <article className="px-5 py-4"><h3 className="m-0 text-sm font-semibold text-slate-950">{preventionCard.title}</h3><p className="mb-0 mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{preventionCard.content}</p><p className="mb-0 mt-3 text-xs text-slate-600">来源：{preventionCard.source_name} · v{preventionCard.version}</p>{!preventionCacheReady && <p className="mb-0 mt-2 text-xs text-amber-800" role="status">离线缓存尚未就绪，请保持联网查看。</p>}</article> : <p className="m-0 px-5 py-6 text-sm leading-6 text-slate-600">负责人尚未发布可离线使用的防走失知识卡。该卡发布并加载成功后，生产环境会保留最后一个已审核版本供离线查看。</p>}
     </section>
     <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="learning-resources-title">
       <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><h2 id="learning-resources-title" className="m-0 text-base font-bold text-slate-950">手册与知识卡</h2><Chip size="sm" variant="soft"><Chip.Label>{resources.length} 项</Chip.Label></Chip></header>

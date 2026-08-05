@@ -1,8 +1,31 @@
 const CACHE_NAME = "angui-learning-offline-v1";
 const PREVENTION_CARD_PATH = "/api/learning/public/prevention-card";
 
+async function preCacheAppShell() {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const shell = await fetch("/", { cache: "reload" });
+    if (!shell.ok) throw new Error(`app shell request failed with ${shell.status}`);
+    const markup = await shell.clone().text();
+    await cache.put("/", shell);
+    const assetPaths = [...markup.matchAll(/(?:src|href)=["']([^"']+)["']/g)]
+      .map((match) => new URL(match[1], self.location.origin))
+      .filter((url) => url.origin === self.location.origin && url.pathname.startsWith("/assets/"));
+    await Promise.all(assetPaths.map(async (url) => {
+      try {
+        const response = await fetch(url, { cache: "reload" });
+        if (response.ok) await cache.put(url, response);
+      } catch (cause) {
+        console.warn("无法预缓存应用资源", url.pathname, cause);
+      }
+    }));
+  } catch (cause) {
+    console.warn("无法预缓存应用壳；将在联网时重试", cause);
+  }
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.add("/")));
+  event.waitUntil(preCacheAppShell());
   self.skipWaiting();
 });
 
