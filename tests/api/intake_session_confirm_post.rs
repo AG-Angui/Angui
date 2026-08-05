@@ -353,6 +353,36 @@ async fn initial_review_stream_exposes_safe_progress_before_the_completed_review
     assert!(event_stream.contains("event: ai_review.completed"));
     assert!(!event_stream.contains("Fictional confirmed elder"));
 
+    let after_last_event = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!(
+                "/api/ai/executions/{execution_id}/events?after={}",
+                execution["last_event_id"].as_i64().unwrap_or_default()
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(after_last_event.status(), StatusCode::OK);
+    assert!(test::read_body(after_last_event).await.is_empty());
+
+    let other_token = context.token(COMMANDER).await;
+    for uri in [
+        format!("/api/ai/executions/{execution_id}"),
+        format!("/api/ai/executions/{execution_id}/events?after=0"),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&uri)
+                .insert_header((header::AUTHORIZATION, format!("Bearer {other_token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     let audit_metadata: Vec<String> = audit_events::Entity::find()
         .filter(audit_events::Column::EntityId.eq(&execution_id))
         .all(&context.database)

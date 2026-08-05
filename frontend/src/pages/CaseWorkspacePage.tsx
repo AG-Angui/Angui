@@ -74,9 +74,13 @@ import type {
   PlaceType,
   PlaceVisibility,
 } from "../api/cases";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, type SseEvent } from "../api/client";
+import { getAiExecution } from "../api/aiExecutions";
 import { useAuth } from "../auth/useAuth";
-import { AiReviewProgress } from "../components/AiReviewProgress";
+import {
+  AiReviewProgress,
+  type AiReviewStage,
+} from "../components/AiReviewProgress";
 import {
   EmptyState,
   ErrorState,
@@ -2629,11 +2633,43 @@ function CaseCollaborationPanel({
   const [reviewReason, setReviewReason] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [aiReviewStage, setAiReviewStage] = useState<AiReviewStage | null>(
+    null,
+  );
+  const [activeAiExecution, setActiveAiExecution] = useState<{
+    id: string;
+    workflow: string;
+  } | null>(null);
   const progressRequestVersion = useRef(0);
   const isFamily = detail.access_role === "family";
   const canFindPois =
     detail.access_role === "commander" || detail.access_role === "volunteer";
   const isCommander = detail.access_role === "commander";
+
+  const updateAiReviewStage = useCallback(({ event, payload }: SseEvent) => {
+    if (!payload || typeof payload !== "object") return;
+    if (
+      event === "started" &&
+      "execution_id" in payload &&
+      typeof payload.execution_id === "string" &&
+      "workflow" in payload &&
+      typeof payload.workflow === "string"
+    ) {
+      setActiveAiExecution({ id: payload.execution_id, workflow: payload.workflow });
+      setAiReviewStage("queued");
+    }
+    if (event !== "progress" || !("stage" in payload)) return;
+    const stage = payload.stage;
+    if (
+      stage === "queued" ||
+      stage === "preparing" ||
+      stage === "generating" ||
+      stage === "validating" ||
+      stage === "fallback"
+    ) {
+      setAiReviewStage(stage);
+    }
+  }, []);
 
   const loadPublicProgress = useCallback(async () => {
     const requestVersion = progressRequestVersion.current + 1;
@@ -2709,6 +2745,85 @@ function CaseCollaborationPanel({
     void loadSummary();
     void loadClueDrafts();
   }, [detail.id, loadClueDrafts, loadPublicProgress, loadSummary]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const raw = window.sessionStorage.getItem(`angui:case-ai-execution:${detail.id}`);
+    if (!raw) return;
+    try {
+      const value = JSON.parse(raw) as { id?: unknown; workflow?: unknown };
+      if (typeof value.id === "string" && typeof value.workflow === "string")
+        setActiveAiExecution({ id: value.id, workflow: value.workflow });
+    } catch {
+      window.sessionStorage.removeItem(`angui:case-ai-execution:${detail.id}`);
+    }
+  }, [detail.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = `angui:case-ai-execution:${detail.id}`;
+    if (activeAiExecution) window.sessionStorage.setItem(key, JSON.stringify(activeAiExecution));
+    else window.sessionStorage.removeItem(key);
+  }, [activeAiExecution, detail.id]);
+
+  useEffect(() => {
+    if (!token || !activeAiExecution) return;
+    const executionId = activeAiExecution.id;
+    const workflow = activeAiExecution.workflow;
+    let cancelled = false;
+    let retry: number | undefined;
+    let attempts = 0;
+    let networkFailures = 0;
+    const maxAttempts = 60;
+    const maxNetworkFailures = 3;
+    const recover = async () => {
+      attempts += 1;
+      if (attempts > maxAttempts) {
+        if (!cancelled) {
+          setAiReviewStage("failed");
+          setError("AI 草稿恢复超时，请重试或改用人工流程。");
+          setBusy("");
+        }
+        return;
+      }
+      try {
+        const execution = await getAiExecution(token, executionId);
+        networkFailures = 0;
+        if (cancelled) return;
+        if (execution.status === "running") {
+          setAiReviewStage(execution.stage);
+          retry = window.setTimeout(() => void recover(), 2_000);
+          return;
+        }
+        if (execution.status === "failed") {
+          setAiReviewStage("failed");
+          setError("AI 草稿未能完成，请重试或改用人工流程。");
+        } else if (workflow === "clue_draft") await loadClueDrafts();
+        else if (workflow === "summary_draft") await loadSummary();
+        if (!cancelled) {
+          setActiveAiExecution(null);
+          setAiReviewStage(null);
+          setBusy("");
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          networkFailures += 1;
+          if (networkFailures <= maxNetworkFailures && attempts < maxAttempts) {
+            retry = window.setTimeout(() => void recover(), 2_000);
+          } else {
+            setAiReviewStage("failed");
+            setError(messageFrom(cause));
+            setBusy("");
+          }
+        }
+      }
+    };
+    void recover();
+    return () => {
+      cancelled = true;
+      if (retry !== undefined) window.clearTimeout(retry);
+    };
+  }, [activeAiExecution, loadClueDrafts, loadSummary, token]);
 
   async function run(key: string, action: () => Promise<void>) {
     setBusy(key);
@@ -2889,13 +3004,15 @@ function CaseCollaborationPanel({
 
       {isCommander && (
         <div className="min-w-0">
-          {(busy === "clue-draft" || busy === "summary-edit") && (
+          {(busy === "clue-draft" || activeAiExecution) && (
             <AiReviewProgress
-              stage="generating"
+              stage={aiReviewStage ?? "generating"}
               title={
                 busy === "clue-draft"
                   ? "AI 线索草稿生成中"
-                  : "AI 案情摘要生成中"
+                  : activeAiExecution?.workflow === "summary_draft"
+                    ? "AI 案情摘要生成中"
+                    : "AI 线索草稿生成中"
               }
             />
           )}
@@ -2950,9 +3067,11 @@ function CaseCollaborationPanel({
                   );
                   const created = await createClueDraft(token, detail.id, {
                     source_record_id: record.id,
-                  });
+                  }, updateAiReviewStage);
                   setClueDrafts((current) => [...created, ...current]);
                   setClueDraftText("");
+                  setActiveAiExecution(null);
+                  setAiReviewStage(null);
                 })
               }
             >

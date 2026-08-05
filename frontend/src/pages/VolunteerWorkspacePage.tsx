@@ -74,9 +74,13 @@ type ClueDraft = {
 };
 
 function messageFrom(cause: unknown) {
+  return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
+}
+
+function poiErrorMessage(cause: unknown) {
   if (cause instanceof ApiClientError && cause.status === 409)
     return "当前案件没有可用的任务或已确认公开地点坐标，无法检索周边资源。请使用任务区域文字并联系指挥确认。";
-  return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
+  return messageFrom(cause);
 }
 function localNow() {
   return new Date().toISOString();
@@ -828,7 +832,9 @@ export function VolunteerWorkspacePage() {
                                   token,
                                   workspace.detail.id,
                                   category,
-                                );
+                                ).catch((cause) => {
+                                  throw new Error(poiErrorMessage(cause));
+                                });
                                 setPois((value) => ({
                                   ...value,
                                   [workspace.detail.id]: result,

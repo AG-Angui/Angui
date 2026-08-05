@@ -24,5 +24,3 @@ CREATE TABLE ai_execution_events (
     created_at VARCHAR(40) NOT NULL,
     UNIQUE (execution_id, event_id)
 );
--- statement-break
-CREATE INDEX idx_ai_execution_events_execution ON ai_execution_events(execution_id, event_id);

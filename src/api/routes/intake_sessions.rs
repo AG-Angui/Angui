@@ -113,17 +113,9 @@ async fn generate_intake_profile_draft(
             "execution_id": execution_id.clone(),
             "event_id": started.event_id,
             "workflow": execution.workflow,
-        }),
-    ));
-    let _ = sender.try_send(sse_event(
-        "progress",
-        json!({
-            "execution_id": execution_id.clone(),
-            "event_id": started.event_id,
             "stage": "queued",
         }),
     ));
-
     tokio::spawn(async move {
         if let Ok(event) =
             ai_execution_service::advance_execution(&state.db, &auth, &execution_id, "preparing")
@@ -168,13 +160,16 @@ async fn generate_intake_profile_draft(
                 sse_event("completed", json!(draft))
             }
             Err(_) => {
-                let _ = ai_execution_service::fail_execution(
+                if let Err(error) = ai_execution_service::fail_execution(
                     &state.db,
                     &auth,
                     &execution_id,
                     "processing_failed",
                 )
-                .await;
+                .await
+                {
+                    log::error!("failed to persist failed AI execution {execution_id}: {error}");
+                }
                 sse_event(
                     "error",
                     json!({ "message": "AI 审核未能完成，请重试或改用人工流程。" }),
@@ -322,17 +317,9 @@ async fn start_ai_initial_review(
             "execution_id": execution_id.clone(),
             "event_id": started.event_id,
             "workflow": execution.workflow,
-        }),
-    ));
-    let _ = sender.try_send(sse_event(
-        "progress",
-        json!({
-            "execution_id": execution_id.clone(),
-            "event_id": started.event_id,
             "stage": "queued",
         }),
     ));
-
     tokio::spawn(async move {
         if let Ok(event) =
             ai_execution_service::advance_execution(&state.db, &auth, &execution_id, "preparing")
@@ -378,13 +365,16 @@ async fn start_ai_initial_review(
                 sse_event("completed", json!(review))
             }
             Err(_) => {
-                let _ = ai_execution_service::fail_execution(
+                if let Err(error) = ai_execution_service::fail_execution(
                     &state.db,
                     &auth,
                     &execution_id,
                     "processing_failed",
                 )
-                .await;
+                .await
+                {
+                    log::error!("failed to persist failed AI execution {execution_id}: {error}");
+                }
                 sse_event(
                     "error",
                     json!({ "message": "AI 审核未能完成，请重试或改用人工流程。" }),

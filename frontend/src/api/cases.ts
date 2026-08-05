@@ -1,4 +1,9 @@
-import { ApiClientError, apiRequest } from "./client";
+import {
+  ApiClientError,
+  apiRequest,
+  apiSseRequest,
+  type SseEventListener,
+} from "./client";
 import type { AccountType, GlobalCapability } from "./auth";
 
 export type CaseRole = "family" | "commander" | "volunteer";
@@ -752,11 +757,13 @@ export function createClueDraft(
   token: string,
   caseId: string,
   payload: { source_record_id: string },
+  onEvent?: SseEventListener,
 ): Promise<ClueDraft[]> {
-  return apiRequest<ClueDraft[]>(
+  return apiSseRequest<ClueDraft[]>(
     `/cases/${caseId}/clue-drafts`,
     { method: "POST", body: JSON.stringify(payload) },
     token,
+    onEvent,
   );
 }
 
@@ -830,14 +837,24 @@ export function createSummaryDraft(
   token: string,
   caseId: string,
   content?: string,
+  onEvent?: SseEventListener,
 ): Promise<SummaryDraft> {
-  return apiRequest<SummaryDraft>(
+  const options = {
+    method: "POST",
+    body: JSON.stringify(content === undefined ? {} : { content }),
+  };
+  if (content !== undefined) {
+    return apiRequest<SummaryDraft>(
+      `/cases/${caseId}/summary-drafts`,
+      options,
+      token,
+    );
+  }
+  return apiSseRequest<SummaryDraft>(
     `/cases/${caseId}/summary-drafts`,
-    {
-      method: "POST",
-      body: JSON.stringify(content === undefined ? {} : { content }),
-    },
+    options,
     token,
+    onEvent,
   );
 }
 

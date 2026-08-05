@@ -110,6 +110,7 @@ paths:
       x-data-classification: sensitive
       responses:
         "200": { description: Ordered safe SSE events, content: { text/event-stream: { schema: { type: string } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
@@ -2416,7 +2417,7 @@ components:
     AiExecution:
       type: object
       additionalProperties: false
-      required: [execution_id, workflow, stage, status, fallback_used, last_event_id, created_at, updated_at]
+      required: [execution_id, workflow, stage, status, failure_kind, result_status, fallback_used, last_event_id, created_at, updated_at]
       properties:
         execution_id: { type: string }
         workflow: { type: string }

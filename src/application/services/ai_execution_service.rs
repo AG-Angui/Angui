@@ -37,6 +37,14 @@ pub struct AiExecutionEventResponse {
     pub created_at: String,
 }
 
+struct ExecutionTransition<'a> {
+    stage: &'a str,
+    status: &'a str,
+    failure_kind: Option<&'a str>,
+    result_status: Option<&'a str>,
+    fallback_used: bool,
+}
+
 pub async fn start_intake_execution(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -86,10 +94,76 @@ pub async fn start_intake_execution(
         auth,
         "ai_execution.started",
         &execution_id,
-        "queued",
-        "running",
-        None,
-        false,
+        &ExecutionTransition {
+            stage: "queued",
+            status: "running",
+            failure_kind: None,
+            result_status: None,
+            fallback_used: false,
+        },
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok((response(model), event_response(event)))
+}
+
+/// Starts a case-scoped controlled execution. Case-role authorization remains
+/// workflow-specific in the caller; this function deliberately records no
+/// case content, source material, prompt, or candidate data.
+pub async fn start_case_execution(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    workflow: &str,
+) -> Result<(AiExecutionResponse, AiExecutionEventResponse), ApiError> {
+    start_execution(db, auth, None, workflow).await
+}
+
+async fn start_execution(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    intake_session_id: Option<&str>,
+    workflow: &str,
+) -> Result<(AiExecutionResponse, AiExecutionEventResponse), ApiError> {
+    let transaction = db.begin().await?;
+    let timestamp = now();
+    let execution_id = Uuid::new_v4().to_string();
+    let model = ai_executions::ActiveModel {
+        id: Set(execution_id.clone()),
+        owner_user_id: Set(auth.id.clone()),
+        intake_session_id: Set(intake_session_id.map(str::to_owned)),
+        workflow: Set(workflow.to_owned()),
+        stage: Set("queued".to_owned()),
+        status: Set("running".to_owned()),
+        failure_kind: Set(None),
+        result_status: Set(None),
+        fallback_used: Set(false),
+        last_event_id: Set(1),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await?;
+    let event = insert_event(
+        &transaction,
+        &execution_id,
+        1,
+        "ai_review.started",
+        Some("queued"),
+        &timestamp,
+    )
+    .await?;
+    write_execution_audit(
+        &transaction,
+        auth,
+        "ai_execution.started",
+        &execution_id,
+        &ExecutionTransition {
+            stage: "queued",
+            status: "running",
+            failure_kind: None,
+            result_status: None,
+            fallback_used: false,
+        },
     )
     .await?;
     transaction.commit().await?;
@@ -131,11 +205,13 @@ pub async fn advance_execution(
         db,
         auth,
         execution_id,
-        stage,
-        "running",
-        None,
-        None,
-        false,
+        &ExecutionTransition {
+            stage,
+            status: "running",
+            failure_kind: None,
+            result_status: None,
+            fallback_used: false,
+        },
         "ai_review.stage",
         "ai_execution.stage",
     )
@@ -153,11 +229,13 @@ pub async fn complete_execution(
         db,
         auth,
         execution_id,
-        "ready_for_review",
-        "completed",
-        None,
-        Some(result_status),
-        fallback_used,
+        &ExecutionTransition {
+            stage: "ready_for_review",
+            status: "completed",
+            failure_kind: None,
+            result_status: Some(result_status),
+            fallback_used,
+        },
         "ai_review.completed",
         "ai_execution.completed",
     )
@@ -174,27 +252,24 @@ pub async fn fail_execution(
         db,
         auth,
         execution_id,
-        "failed",
-        "failed",
-        Some(failure_kind),
-        None,
-        false,
+        &ExecutionTransition {
+            stage: "failed",
+            status: "failed",
+            failure_kind: Some(failure_kind),
+            result_status: None,
+            fallback_used: false,
+        },
         "ai_review.failed",
         "ai_execution.failed",
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn update_execution(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     execution_id: &str,
-    stage: &str,
-    status: &str,
-    failure_kind: Option<&str>,
-    result_status: Option<&str>,
-    fallback_used: bool,
+    transition: &ExecutionTransition<'_>,
     event_type: &str,
     audit_action: &str,
 ) -> Result<AiExecutionEventResponse, ApiError> {
@@ -208,11 +283,11 @@ async fn update_execution(
     let timestamp = now();
     let event_id = existing.last_event_id + 1;
     let mut active = existing.into_active_model();
-    active.stage = Set(stage.to_owned());
-    active.status = Set(status.to_owned());
-    active.failure_kind = Set(failure_kind.map(str::to_owned));
-    active.result_status = Set(result_status.map(str::to_owned));
-    active.fallback_used = Set(fallback_used);
+    active.stage = Set(transition.stage.to_owned());
+    active.status = Set(transition.status.to_owned());
+    active.failure_kind = Set(transition.failure_kind.map(str::to_owned));
+    active.result_status = Set(transition.result_status.map(str::to_owned));
+    active.fallback_used = Set(transition.fallback_used);
     active.last_event_id = Set(event_id);
     active.updated_at = Set(timestamp.clone());
     active.update(&transaction).await?;
@@ -221,21 +296,11 @@ async fn update_execution(
         execution_id,
         event_id,
         event_type,
-        Some(stage),
+        Some(transition.stage),
         &timestamp,
     )
     .await?;
-    write_execution_audit(
-        &transaction,
-        auth,
-        audit_action,
-        execution_id,
-        stage,
-        status,
-        failure_kind,
-        fallback_used,
-    )
-    .await?;
+    write_execution_audit(&transaction, auth, audit_action, execution_id, transition).await?;
     transaction.commit().await?;
     Ok(event_response(event))
 }
@@ -277,10 +342,7 @@ async fn write_execution_audit<C: sea_orm::ConnectionTrait>(
     auth: &AuthenticatedUser,
     action: &str,
     execution_id: &str,
-    stage: &str,
-    result_status: &str,
-    failure_kind: Option<&str>,
-    fallback_used: bool,
+    transition: &ExecutionTransition<'_>,
 ) -> Result<(), ApiError> {
     case_service::write_audit(
         db,
@@ -291,10 +353,11 @@ async fn write_execution_audit<C: sea_orm::ConnectionTrait>(
         execution_id.to_owned(),
         Some(json!({
             "execution_id": execution_id,
-            "stage": stage,
-            "result_status": result_status,
-            "failure_kind": failure_kind,
-            "fallback_used": fallback_used,
+            "stage": transition.stage,
+            "status": transition.status,
+            "result_status": transition.result_status,
+            "failure_kind": transition.failure_kind,
+            "fallback_used": transition.fallback_used,
         })),
     )
     .await

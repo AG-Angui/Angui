@@ -43,17 +43,14 @@ async fn list_execution_events(
         query.after.unwrap_or(0),
     )
     .await?;
-    let body = events
-        .into_iter()
-        .map(|event| {
-            let payload = serde_json::to_string(&event)
-                .unwrap_or_else(|_| "{\"message\":\"internal service error\"}".to_owned());
-            format!(
-                "id: {}\nevent: {}\ndata: {}\n\n",
-                event.event_id, event.event_type, payload
-            )
-        })
-        .collect::<String>();
+    let mut body = String::new();
+    for event in events {
+        let payload = serde_json::to_string(&event).map_err(|_| ApiError::Internal)?;
+        body.push_str(&format!(
+            "id: {}\nevent: {}\ndata: {}\n\n",
+            event.event_id, event.event_type, payload
+        ));
+    }
     Ok(HttpResponse::Ok()
         .insert_header((header::CONTENT_TYPE, "text/event-stream"))
         .insert_header((header::CACHE_CONTROL, "no-cache"))
