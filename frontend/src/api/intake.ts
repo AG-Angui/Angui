@@ -1,4 +1,8 @@
-import { apiRequest, apiSseRequest } from "./client";
+import {
+  apiRequest,
+  apiSseRequest,
+  type SseEventListener,
+} from "./client";
 
 export interface IntakeQuestion {
   field: string;
@@ -182,11 +186,13 @@ export function getIntakeDraft(
 export function generateIntakeDraft(
   token: string,
   sessionId: string,
+  onEvent?: SseEventListener,
 ): Promise<IntakeDraft> {
   return apiSseRequest(
     `/intake-sessions/${sessionId}/profile-draft/generate`,
     { method: "POST" },
     token,
+    onEvent,
   );
 }
 export function listIntakeDraftVersions(
@@ -291,11 +297,13 @@ export function startIntakeAiInitialReview(
   token: string,
   sessionId: string,
   profile: ConfirmedIntakeProfile,
+  onEvent?: SseEventListener,
 ): Promise<IntakeAiInitialReviewResponse> {
   return apiSseRequest<IntakeAiInitialReviewResponse>(
     `/intake-sessions/${sessionId}/ai-initial-review`,
     { method: "POST", body: JSON.stringify({ profile }) },
     token,
+    onEvent,
   );
 }
 

@@ -274,6 +274,49 @@ async fn post_confirm_creates_one_active_case_from_human_confirmed_overrides() {
 }
 
 #[actix_web::test]
+async fn initial_review_stream_exposes_safe_progress_before_the_completed_review() {
+    let context = TestContext::new().await;
+    let session_id = ready_session(&context).await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/ai-initial-review"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({ "profile": confirmation_json()["profile"].clone() }))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = test::read_body(response).await;
+    let stream = std::str::from_utf8(&body).expect("SSE response should be valid UTF-8");
+    let events = stream
+        .split("\n\n")
+        .filter_map(|frame| {
+            frame
+                .lines()
+                .find_map(|line| line.strip_prefix("event:").map(str::trim))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(events.first(), Some(&"started"));
+    assert!(
+        events
+            .windows(2)
+            .any(|pair| pair == ["started", "progress"])
+    );
+    assert!(events.iter().filter(|event| **event == "progress").count() >= 3);
+    assert_eq!(events.last(), Some(&"completed"));
+    assert!(!stream.contains("system_instruction"));
+    assert!(!stream.contains("raw_prompt"));
+}
+
+#[actix_web::test]
 async fn post_confirm_accepts_the_two_runtime_required_profile_fields() {
     let context = TestContext::new().await;
     let session_id = ready_session(&context).await;

@@ -349,7 +349,7 @@ paths:
       tags: [Intake sessions]
       operationId: startIntakeAiInitialReview
       summary: Start the family-visible AI initial review
-      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case.
+      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case. The response is SSE: optional safe `progress` events contain only a stage (`queued`, `preparing`, `generating`, `validating`, or `fallback`), and the final `completed` event contains the review result. Partial streams are not a valid review result.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-data-classification: sensitive
@@ -359,7 +359,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/StartIntakeAiInitialReviewRequest" }
       responses:
-        "201": { description: Family review draft created, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeAiInitialReviewResponse" } } } }
+        "201": { description: Family review draft stream; only the final completed event contains the review result, content: { text/event-stream: { schema: { type: string } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
