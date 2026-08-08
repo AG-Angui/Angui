@@ -33,6 +33,7 @@
 
 html {
   min-width: 320px;
+  font-size: 25px;
   background: var(--background);
 }
 
