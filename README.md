@@ -132,6 +132,13 @@ npm run lint:frontend
 npm run build:frontend
 ```
 
+Browser end-to-end tests create an isolated SQLite database, explicitly run migrations, and bootstrap only `.invalid` demo accounts. Playwright then starts the real Actix API and Vite server to verify API proxying, login failure, session logout, and role-based route access. Install Chromium once before running the suite locally:
+
+```powershell
+yarn --cwd frontend playwright install chromium
+npm run test:e2e
+```
+
 数据库迁移命令：
 
 ```powershell

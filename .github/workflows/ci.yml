@@ -207,10 +207,63 @@ jobs:
           VITE_AMAP_JS_API_KEY: ${{ secrets.AMAP_JS_API_KEY }}
         run: yarn build
 
+      - name: Test
+        working-directory: frontend
+        run: yarn test
+
       - name: Upload frontend bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: angui-frontend-${{ env.ARTIFACT_SHA }}
           path: frontend/dist
           if-no-files-found: error
+          retention-days: 7
+
+  e2e:
+    name: Browser end-to-end tests
+    needs: deduplicate
+    if: needs.deduplicate.outputs.should_run == 'true'
+    # External forks never execute on the server that holds deployment access.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmmirror.com
+          mirror: https://npmmirror.com/mirrors/node
+
+      - name: Enable Yarn
+        run: corepack enable
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+
+      - name: Install Chromium for Playwright
+        working-directory: frontend
+        run: yarn playwright install chromium
+
+      - name: Run browser end-to-end tests
+        working-directory: frontend
+        run: yarn test:e2e
+
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: playwright-diagnostics-${{ env.ARTIFACT_SHA }}
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
           retention-days: 7
