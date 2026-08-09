@@ -334,6 +334,14 @@ pub async fn bootstrap_demo_users(
     db: &DatabaseConnection,
     password: &str,
 ) -> Result<Vec<UserResponse>, ApiError> {
+    bootstrap_demo_users_with_reviewer_admins(db, password, false).await
+}
+
+pub async fn bootstrap_demo_users_with_reviewer_admins(
+    db: &DatabaseConnection,
+    password: &str,
+    grant_reviewer_admins: bool,
+) -> Result<Vec<UserResponse>, ApiError> {
     if !(12..=256).contains(&password.chars().count()) {
         return Err(ApiError::Validation(
             "ANGUI_DEMO_PASSWORD must contain between 12 and 256 characters".to_owned(),
@@ -351,13 +359,21 @@ pub async fn bootstrap_demo_users(
             "commander@demo.invalid",
             "模拟指挥",
             AccountType::Member,
-            &[GlobalCapability::Commander][..],
+            if grant_reviewer_admins {
+                &[GlobalCapability::Commander, GlobalCapability::Admin][..]
+            } else {
+                &[GlobalCapability::Commander][..]
+            },
         ),
         (
             "volunteer@demo.invalid",
             "模拟志愿者",
             AccountType::Member,
-            &[GlobalCapability::Volunteer][..],
+            if grant_reviewer_admins {
+                &[GlobalCapability::Volunteer, GlobalCapability::Admin][..]
+            } else {
+                &[GlobalCapability::Volunteer][..]
+            },
         ),
         (
             "learner@demo.invalid",

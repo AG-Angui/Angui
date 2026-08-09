@@ -37,7 +37,9 @@ export default defineConfig({
         ANGUI_RUNTIME_ENV: "test",
         ANGUI_ALLOW_DEMO_BOOTSTRAP: "1",
         ANGUI_DEMO_PASSWORD: "e2e-demo-password",
+        ANGUI_DEMO_GRANT_REVIEWER_ADMINS: "1",
         ANGUI_ATTACHMENT_STORAGE_DIRECTORY: ".e2e/attachments",
+        RUST_LOG: "info,sqlx=warn",
       },
     },
     {
