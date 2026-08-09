@@ -160,6 +160,25 @@ const blankBasicInformation: BasicInformationDraft = {
   appearance: "",
 };
 
+function isPhaseOneIntakeField(field: string, questionSetVersion: number) {
+  const phaseOneFields =
+    questionSetVersion >= 3
+      ? [
+          "basic_information",
+          "last_seen",
+          "suspicious_motive",
+          "police_report_status",
+          "family_phone",
+        ]
+      : [
+          "basic_information",
+          "health_status",
+          "behavior_habits",
+          "last_seen",
+        ];
+  return phaseOneFields.includes(field);
+}
+
 export function FamilyIntakeForm({
   onCancel,
   onConfirmed,
@@ -513,27 +532,30 @@ export function FamilyIntakeForm({
         replace,
       });
       const next = sessionFromAnswerResponse(response);
-      setIsFetchingAiFollowUp(true);
-      let guidance: IntakeAiFollowUpResponse;
-      try {
-        guidance = await getIntakeAiFollowUp(token, next.id);
-      } finally {
-        setIsFetchingAiFollowUp(false);
+      let guidedSession = next;
+      if (!isPhaseOneIntakeField(field, session.question_set_version)) {
+        setIsFetchingAiFollowUp(true);
+        let guidance: IntakeAiFollowUpResponse;
+        try {
+          guidance = await getIntakeAiFollowUp(token, next.id);
+        } finally {
+          setIsFetchingAiFollowUp(false);
+        }
+        guidedSession = guidance.question
+          ? {
+              ...next,
+              next_question: {
+                field: guidance.question.field,
+                prompt: guidance.question.prompt,
+                required: false,
+              },
+              guidance_mode:
+                guidance.degradation_status === "available"
+                  ? ("ai_assisted" as const)
+                  : ("rule_based" as const),
+            }
+          : next;
       }
-      const guidedSession = guidance.question
-        ? {
-            ...next,
-            next_question: {
-              field: guidance.question.field,
-              prompt: guidance.question.prompt,
-              required: false,
-            },
-            guidance_mode:
-              guidance.degradation_status === "available"
-                ? ("ai_assisted" as const)
-                : ("rule_based" as const),
-          }
-        : next;
       setSession(guidedSession);
       setInitialReview(null);
       setConfirmedInitialReviewIssues([]);

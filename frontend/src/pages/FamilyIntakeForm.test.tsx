@@ -389,6 +389,7 @@ describe("FamilyIntakeForm", () => {
         },
       ),
     );
+    expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
   });
 
   it("uploads only a controlled JPEG or PNG portrait", async () => {
@@ -462,11 +463,121 @@ describe("FamilyIntakeForm", () => {
         expect.objectContaining({ field: "last_seen" }),
       ),
     );
+    expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
     await waitFor(() => {
       const stored = window.sessionStorage.getItem("angui:intake-tab-draft:family-1");
       expect(stored).not.toBeNull();
       expect(JSON.parse(stored ?? "{}").session.question_set_version).toBe(3);
     });
+  });
+
+  it.each([
+    [
+      "police-report status",
+      {
+        ...reportDetailsSession,
+        completed_phase_one_fields: [
+          "basic_information",
+          "last_seen",
+          "suspicious_motive",
+        ],
+        missing_fields: ["police_report_status", "family_phone"],
+        missing_phase_one_fields: ["police_report_status", "family_phone"],
+        next_question: {
+          field: "police_report_status",
+          prompt: "是否报警",
+          required: true,
+        },
+      },
+      "已报警",
+    ],
+    [
+      "family phone",
+      {
+        ...reportDetailsSession,
+        completed_phase_one_fields: [
+          "basic_information",
+          "last_seen",
+          "suspicious_motive",
+          "police_report_status",
+        ],
+        missing_fields: ["family_phone"],
+        missing_phase_one_fields: ["family_phone"],
+        next_question: {
+          field: "family_phone",
+          prompt: "家属电话",
+          required: true,
+        },
+      },
+      "13800138000",
+    ],
+  ])("does not request AI follow-up for required %s", async (label, session, answer) => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session, answer: "" }),
+    );
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(session));
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    if (label === "police-report status") {
+      fireEvent.change(await screen.findByRole("combobox"), {
+        target: { value: answer },
+      });
+    } else {
+      fireEvent.change(await screen.findByRole("textbox"), {
+        target: { value: answer },
+      });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+
+    await waitFor(() =>
+      expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        expect.objectContaining({ field: session.next_question?.field }),
+      ),
+    );
+    expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
+  });
+
+  it("keeps AI follow-up for an optional phase-two clue", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: phaseTwoSession, answer: "" }),
+    );
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(phaseTwoSession));
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    fireEvent.change(await screen.findByRole("textbox"), {
+      target: { value: "社区公园" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+
+    await waitFor(() =>
+      expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        expect.objectContaining({ field: "frequent_locations" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(mocked.getIntakeAiFollowUp).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+      ),
+    );
   });
 
   it("keeps v2 sessions free of the v3 photo requirement", async () => {
