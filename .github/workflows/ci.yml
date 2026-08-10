@@ -249,9 +249,11 @@ jobs:
         working-directory: frontend
         run: yarn install --frozen-lockfile
 
-      - name: Install Chromium and Linux dependencies for Playwright
+      # The self-hosted runner image provides Chromium's Linux libraries.
+      # Do not use --with-deps here: it invokes apt through sudo.
+      - name: Install Chromium for Playwright
         working-directory: frontend
-        run: yarn playwright install --with-deps chromium
+        run: yarn playwright install chromium
 
       - name: Run browser end-to-end tests
         working-directory: frontend
