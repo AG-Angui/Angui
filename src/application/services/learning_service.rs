@@ -10,16 +10,17 @@ use serde_json::json;
 
 use crate::{
     entities::{
-        learning_content_review_events, learning_question_answers, learning_questions,
-        learning_resources,
+        learning_categories, learning_category_review_events, learning_content_review_events,
+        learning_question_answers, learning_questions, learning_resources,
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateLearningQuestionRequest, CreateLearningResourceRequest,
-        KnowledgeAnswerResponse, KnowledgeAskRequest, LearningAnswerSource,
-        LearningContentActionRequest, LearningContentLifecycleResponse,
-        LearningContentReviewEventResponse, LearningQuestionQuery, LearningQuestionResponse,
-        LearningResourceQuery, LearningResourceResponse, ManagedLearningQuestionResponse,
+        AuthenticatedUser, CreateLearningCategoryRequest, CreateLearningQuestionRequest,
+        CreateLearningResourceRequest, KnowledgeAnswerResponse, KnowledgeAskRequest,
+        LearningAnswerSource, LearningCategoryResponse, LearningContentActionRequest,
+        LearningContentLifecycleResponse, LearningContentReviewEventResponse,
+        LearningQuestionQuery, LearningQuestionResponse, LearningResourceQuery,
+        LearningResourceResponse, ManagedLearningCategoryResponse, ManagedLearningQuestionResponse,
         ManagedLearningResourceResponse, SubmitLearningAnswerRequest, SubmitLearningAnswerResponse,
     },
     roles::{AccountType, GlobalCapability},
@@ -101,8 +102,196 @@ pub async fn list_resources(
                 })
             })
         })
+        .filter(|resource| {
+            query.category_id.as_ref().is_none_or(|category_id| {
+                resource.category_id.as_deref() == Some(category_id.trim())
+            })
+        })
         .map(resource_response)
         .collect()
+}
+
+/// Lists only categories that may be selected for a new resource. Historical
+/// resources retain their category snapshot even after a category is disabled.
+pub async fn list_enabled_categories(
+    db: &DatabaseConnection,
+    _auth: &AuthenticatedUser,
+) -> Result<Vec<LearningCategoryResponse>, ApiError> {
+    learning_categories::Entity::find()
+        .filter(learning_categories::Column::Status.eq("enabled"))
+        .order_by_asc(learning_categories::Column::Name)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(category_response)
+        .collect()
+}
+
+pub async fn list_managed_categories(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<ManagedLearningCategoryResponse>, ApiError> {
+    require_admin(auth)?;
+    learning_categories::Entity::find()
+        .order_by_asc(learning_categories::Column::Name)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|category| {
+            Ok(ManagedLearningCategoryResponse {
+                category: category_response(category.clone())?,
+                submitted_by_user_id: category.submitted_by_user_id,
+                reviewed_by_user_id: category.reviewed_by_user_id,
+                created_at: category.created_at,
+                updated_at: category.updated_at,
+            })
+        })
+        .collect()
+}
+
+pub async fn propose_category(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    request: CreateLearningCategoryRequest,
+) -> Result<LearningCategoryResponse, ApiError> {
+    require_learner(auth)?;
+    let name = normalized_name(&request.name, "category", 160)?;
+    let reason = required_text(&request.submission_reason, "submission_reason", 1_000)?;
+    let requested_id = case_service::new_id();
+    let timestamp = now();
+    let transaction = db.begin().await?;
+    let inserted = learning_categories::Entity::insert(learning_categories::ActiveModel {
+        id: Set(requested_id.clone()),
+        name: Set(name.clone()),
+        normalized_name: Set(normalized_key(&name)),
+        status: Set("pending".to_owned()),
+        submitted_by_user_id: Set(auth.id.clone()),
+        reviewed_by_user_id: Set(None),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
+    })
+    .on_conflict(
+        OnConflict::column(learning_categories::Column::NormalizedName)
+            .do_nothing()
+            .to_owned(),
+    )
+    .do_nothing()
+    .exec(&transaction)
+    .await?;
+    let (id, name, audit_action) = if matches!(inserted, TryInsertResult::Inserted(_)) {
+        (requested_id, name, "learning_category.submitted")
+    } else {
+        let existing = learning_categories::Entity::find()
+            .filter(learning_categories::Column::NormalizedName.eq(normalized_key(&name)))
+            .one(&transaction)
+            .await?
+            .ok_or(ApiError::Internal)?;
+        match existing.status.as_str() {
+            "pending" => {
+                return Err(ApiError::Conflict(
+                    "category is already awaiting review".to_owned(),
+                ));
+            }
+            "enabled" => {
+                return Err(ApiError::Conflict("category is already enabled".to_owned()));
+            }
+            "rejected" | "disabled" => {
+                let update = learning_categories::Entity::update_many()
+                    .col_expr(learning_categories::Column::Status, Expr::value("pending"))
+                    .col_expr(
+                        learning_categories::Column::SubmittedByUserId,
+                        Expr::value(auth.id.clone()),
+                    )
+                    .col_expr(
+                        learning_categories::Column::ReviewedByUserId,
+                        Expr::value(Option::<String>::None),
+                    )
+                    .col_expr(
+                        learning_categories::Column::UpdatedAt,
+                        Expr::value(timestamp.clone()),
+                    )
+                    .filter(learning_categories::Column::Id.eq(&existing.id))
+                    .filter(learning_categories::Column::Status.eq(&existing.status))
+                    .exec(&transaction)
+                    .await?;
+                if update.rows_affected != 1 {
+                    return Err(ApiError::Conflict(
+                        "category lifecycle changed before the proposal could be resubmitted"
+                            .to_owned(),
+                    ));
+                }
+                (existing.id, existing.name, "learning_category.resubmitted")
+            }
+            _ => return Err(ApiError::Internal),
+        }
+    };
+    append_category_event(&transaction, auth, &id, "submitted", &reason).await?;
+    write_learning_audit(&transaction, auth, audit_action, &id, 0, "training").await?;
+    transaction.commit().await?;
+    Ok(LearningCategoryResponse {
+        id,
+        name,
+        status: "pending".to_owned(),
+    })
+}
+
+pub async fn transition_category(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    category_id: &str,
+    action: &str,
+    request: LearningContentActionRequest,
+) -> Result<LearningCategoryResponse, ApiError> {
+    require_admin(auth)?;
+    let reason = required_text(&request.reason, "reason", 1_000)?;
+    let (expected_status, status) = match action {
+        "enable" => ("pending", "enabled"),
+        "reject" => ("pending", "rejected"),
+        "disable" => ("enabled", "disabled"),
+        _ => return Err(ApiError::Validation("unknown category action".to_owned())),
+    };
+    let transaction = db.begin().await?;
+    let category = learning_categories::Entity::find_by_id(category_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("learning category does not exist".to_owned()))?;
+    if category.status != expected_status {
+        return Err(ApiError::Conflict(
+            "category lifecycle transition is not allowed".to_owned(),
+        ));
+    }
+    let update = learning_categories::Entity::update_many()
+        .col_expr(learning_categories::Column::Status, Expr::value(status))
+        .col_expr(
+            learning_categories::Column::ReviewedByUserId,
+            Expr::value(Some(auth.id.clone())),
+        )
+        .col_expr(learning_categories::Column::UpdatedAt, Expr::value(now()))
+        .filter(learning_categories::Column::Id.eq(&category.id))
+        .filter(learning_categories::Column::Status.eq(expected_status))
+        .exec(&transaction)
+        .await?;
+    if update.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "category lifecycle changed before this transition could be applied".to_owned(),
+        ));
+    }
+    let category = learning_categories::Entity::find_by_id(category_id)
+        .one(&transaction)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    append_category_event(&transaction, auth, &category.id, status, &reason).await?;
+    write_learning_audit(
+        &transaction,
+        auth,
+        &format!("learning_category.{status}"),
+        &category.id,
+        0,
+        "training",
+    )
+    .await?;
+    transaction.commit().await?;
+    category_response(category)
 }
 
 pub async fn list_questions(
@@ -263,6 +452,7 @@ pub async fn ask_knowledge(
         LearningResourceQuery {
             resource_type: None,
             tag: None,
+            category_id: None,
         },
     )
     .await?;
@@ -346,6 +536,27 @@ pub async fn create_resource(
     request: CreateLearningResourceRequest,
 ) -> Result<ManagedLearningResourceResponse, ApiError> {
     require_admin(auth)?;
+    create_resource_inner(db, auth, request, false).await
+}
+
+/// A learner can contribute a draft, but its audience and permitted use are
+/// deliberately fixed. It still enters the same independent governance chain
+/// as administrator-authored content and is never readable on submission.
+pub async fn submit_resource_draft(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    request: CreateLearningResourceRequest,
+) -> Result<ManagedLearningResourceResponse, ApiError> {
+    require_learner(auth)?;
+    create_resource_inner(db, auth, request, true).await
+}
+
+async fn create_resource_inner(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    request: CreateLearningResourceRequest,
+    learner_submission: bool,
+) -> Result<ManagedLearningResourceResponse, ApiError> {
     let title = required_text(&request.title, "title", 160)?;
     let summary = required_text(&request.summary, "summary", 800)?;
     let content = required_text(&request.content, "content", 20_000)?;
@@ -364,12 +575,19 @@ pub async fn create_resource(
         "permitted_use",
         &["training", "public_information"],
     )?;
+    if learner_submission && (visibility != "learner" || permitted_use != "training") {
+        return Err(ApiError::Forbidden(
+            "learner drafts must use learner visibility and training-only use".to_owned(),
+        ));
+    }
     let source_name = required_text(&request.source_name, "source_name", 240)?;
     let source_url = validate_source_url(request.source_url)?;
     let effective_at = valid_timestamp(&request.effective_at, "effective_at")?;
     let submission_reason = required_text(&request.submission_reason, "submission_reason", 1_000)?;
     let tags_json =
         serde_json::to_string(&normalized_tags(&request.tags)?).map_err(|_| ApiError::Internal)?;
+    let (category_id, category_name) =
+        enabled_category_assignment(db, request.category_id.as_deref()).await?;
     let (previous_version_id, version) =
         resource_revision(db, request.previous_version_id.as_deref()).await?;
     let timestamp = now();
@@ -382,6 +600,8 @@ pub async fn create_resource(
         content: Set(content),
         resource_type: Set(resource_type),
         tags_json: Set(tags_json),
+        category_id: Set(category_id),
+        category_name: Set(category_name),
         source_name: Set(source_name),
         source_url: Set(source_url),
         previous_version_id: Set(previous_version_id),
@@ -1077,6 +1297,26 @@ async fn write_learning_audit(
     .await
 }
 
+async fn append_category_event(
+    transaction: &sea_orm::DatabaseTransaction,
+    auth: &AuthenticatedUser,
+    category_id: &str,
+    event_type: &str,
+    reason: &str,
+) -> Result<(), ApiError> {
+    learning_category_review_events::Entity::insert(learning_category_review_events::ActiveModel {
+        id: Set(case_service::new_id()),
+        category_id: Set(category_id.to_owned()),
+        event_type: Set(event_type.to_owned()),
+        actor_user_id: Set(auth.id.clone()),
+        reason: Set(reason.to_owned()),
+        created_at: Set(now()),
+    })
+    .exec(transaction)
+    .await?;
+    Ok(())
+}
+
 async fn visible_question(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -1139,6 +1379,25 @@ async fn resource_revision(
     Ok((Some(previous.id), previous.version + 1))
 }
 
+async fn enabled_category_assignment(
+    db: &DatabaseConnection,
+    category_id: Option<&str>,
+) -> Result<(Option<String>, Option<String>), ApiError> {
+    let Some(category_id) = category_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return Ok((None, None));
+    };
+    let category = learning_categories::Entity::find_by_id(category_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::Validation("category_id does not exist".to_owned()))?;
+    if category.status != "enabled" {
+        return Err(ApiError::Validation(
+            "category_id is not enabled".to_owned(),
+        ));
+    }
+    Ok((Some(category.id), Some(category.name)))
+}
+
 async fn question_revision(
     db: &DatabaseConnection,
     previous_version_id: Option<&str>,
@@ -1181,11 +1440,32 @@ fn resource_response(
         content: resource.content,
         resource_type: resource.resource_type,
         tags: parse_string_array(&resource.tags_json)?,
+        category: match (resource.category_id, resource.category_name) {
+            (Some(id), Some(name)) => Some(LearningCategoryResponse {
+                id,
+                name,
+                // This is a historical resource snapshot. Its category may now
+                // be disabled, but that must not hide a previously published
+                // learning record.
+                status: "assigned".to_owned(),
+            }),
+            _ => None,
+        },
         source_name: resource.source_name,
         source_url: resource.source_url,
         previous_version_id: resource.previous_version_id,
         version: resource.version,
         effective_at: resource.effective_at,
+    })
+}
+
+fn category_response(
+    category: learning_categories::Model,
+) -> Result<LearningCategoryResponse, ApiError> {
+    Ok(LearningCategoryResponse {
+        id: category.id,
+        name: category.name,
+        status: category.status,
     })
 }
 
@@ -1423,6 +1703,14 @@ fn require_admin(auth: &AuthenticatedUser) -> Result<(), ApiError> {
         .ok_or_else(|| ApiError::Forbidden("只有管理员可以管理学习内容".to_owned()))
 }
 
+fn require_learner(auth: &AuthenticatedUser) -> Result<(), ApiError> {
+    (auth.account_type == AccountType::Learner)
+        .then_some(())
+        .ok_or_else(|| {
+            ApiError::Forbidden("only learner accounts may submit learning drafts".to_owned())
+        })
+}
+
 fn required_text(value: &str, field: &str, maximum: usize) -> Result<String, ApiError> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > maximum {
@@ -1448,12 +1736,31 @@ fn normalized_tags(tags: &[String]) -> Result<Vec<String>, ApiError> {
     }
     let tags: Vec<_> = tags
         .iter()
-        .map(|tag| required_text(tag, "tag", 64))
+        .map(|tag| normalized_name(tag, "tag", 64))
         .collect::<Result<_, _>>()?;
-    if tags.iter().collect::<HashSet<_>>().len() != tags.len() {
+    if tags
+        .iter()
+        .map(|tag| normalized_key(tag))
+        .collect::<HashSet<_>>()
+        .len()
+        != tags.len()
+    {
         return Err(ApiError::Validation("标签不能重复".to_owned()));
     }
     Ok(tags)
+}
+
+fn normalized_name(value: &str, field: &str, maximum: usize) -> Result<String, ApiError> {
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    required_text(&value, field, maximum)
+}
+
+fn normalized_key(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn valid_timestamp(value: &str, field: &str) -> Result<String, ApiError> {

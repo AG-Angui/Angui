@@ -777,6 +777,214 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     assert_error(answer_after_withdrawal, StatusCode::NOT_FOUND, "not_found").await;
 }
 
+#[actix_web::test]
+async fn learner_category_proposals_gate_resource_drafts_and_keep_legacy_resources_compatible() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+
+    let proposal = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/categories/proposals")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {}", context.token(LEARNER).await)))
+            .set_json(json!({ "name": "  Safe   Orientation  ", "submission_reason": "New learner material needs a governed category." }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(proposal.status(), StatusCode::CREATED);
+    let proposal: Value = test::read_body_json(proposal).await;
+    let category_id = proposal["id"].as_str().expect("category id").to_owned();
+    assert_eq!(proposal["name"], "Safe Orientation");
+    assert_eq!(proposal["status"], "pending");
+
+    let pending_categories = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/categories")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(
+        test::read_body_json::<Value, _>(pending_categories).await,
+        json!([])
+    );
+
+    let enable = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/learning/categories/{category_id}/enable"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(json!({ "reason": "Category is suitable for newcomer training." }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(enable.status(), StatusCode::OK);
+
+    let draft = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/resources/drafts")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({
+                "title": "Newcomer safety notes",
+                "summary": "Synthetic training-only summary.",
+                "content": "Synthetic training-only body that contains no real case material.",
+                "resource_type": "manual",
+                "tags": [" Orientation ", "orientation"],
+                "category_id": category_id,
+                "source_name": "Synthetic source",
+                "source_url": null,
+                "visibility": "learner",
+                "effective_at": "2020-01-01T00:00:00.000Z",
+                "permitted_use": "training",
+                "submission_reason": "A learner contributed a draft for independent review."
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_error(draft, StatusCode::BAD_REQUEST, "validation_error").await;
+
+    let valid_draft = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/resources/drafts")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({
+                "title": "Newcomer safety notes",
+                "summary": "Synthetic training-only summary.",
+                "content": "Synthetic training-only body that contains no real case material.",
+                "resource_type": "manual",
+                "tags": [" Orientation "],
+                "category_id": category_id,
+                "source_name": "Synthetic source",
+                "source_url": null,
+                "visibility": "learner",
+                "effective_at": "2020-01-01T00:00:00.000Z",
+                "permitted_use": "training",
+                "submission_reason": "A learner contributed a draft for independent review."
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(valid_draft.status(), StatusCode::CREATED);
+    let valid_draft: Value = test::read_body_json(valid_draft).await;
+    assert_eq!(valid_draft["category"]["name"], "Safe Orientation");
+    assert_eq!(valid_draft["lifecycle"]["state"], "submitted");
+
+    let disabled = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/learning/categories/{category_id}/disable"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(json!({ "reason": "Temporarily remove this selection from new drafts." }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(disabled.status(), StatusCode::OK);
+    let disabled_categories = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/categories")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(
+        test::read_body_json::<Value, _>(disabled_categories).await,
+        json!([])
+    );
+
+    let resubmitted_after_disable = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/categories/proposals")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "name": "safe orientation", "submission_reason": "The category is needed again for a revised newcomer curriculum." }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resubmitted_after_disable.status(), StatusCode::CREATED);
+    let resubmitted_after_disable: Value = test::read_body_json(resubmitted_after_disable).await;
+    assert_eq!(resubmitted_after_disable["id"], category_id);
+    assert_eq!(resubmitted_after_disable["status"], "pending");
+
+    let duplicate_pending = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/categories/proposals")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "name": "Safe Orientation", "submission_reason": "This duplicate must remain pending only once." }))
+            .to_request(),
+    )
+    .await;
+    assert_error(duplicate_pending, StatusCode::CONFLICT, "conflict").await;
+
+    let reject_resubmission = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/learning/categories/{category_id}/reject"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(
+                json!({ "reason": "The revised curriculum still needs a narrower category." }),
+            )
+            .to_request(),
+    )
+    .await;
+    assert_eq!(reject_resubmission.status(), StatusCode::OK);
+
+    let resubmitted_after_rejection = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/categories/proposals")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "name": "SAFE ORIENTATION", "submission_reason": "A learner revised the proposal after administrator feedback." }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resubmitted_after_rejection.status(), StatusCode::CREATED);
+    let resubmitted_after_rejection: Value =
+        test::read_body_json(resubmitted_after_rejection).await;
+    assert_eq!(resubmitted_after_rejection["id"], category_id);
+    assert_eq!(resubmitted_after_rejection["status"], "pending");
+}
+
 async fn grant_admin(context: &TestContext, email: &str) {
     context
         .database

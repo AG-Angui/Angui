@@ -13,8 +13,10 @@ const mocked = vi.hoisted(() => ({
   listLearningResources: vi.fn().mockResolvedValue([]),
   getPublicPreventionCard: vi.fn().mockResolvedValue(null),
   listLearningQuestions: vi.fn().mockResolvedValue([]),
+  listLearningCategories: vi.fn().mockResolvedValue([]),
   listManagedLearningResources: vi.fn().mockResolvedValue([]),
   listManagedLearningQuestions: vi.fn().mockResolvedValue([]),
+  listManagedLearningCategories: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./auth/useAuth", () => ({ useAuth: () => mocked.auth }));
@@ -40,10 +42,14 @@ vi.mock("./api/learning", () => ({
     mocked.getPublicPreventionCard(...args),
   listLearningQuestions: (...args: unknown[]) =>
     mocked.listLearningQuestions(...args),
+  listLearningCategories: (...args: unknown[]) =>
+    mocked.listLearningCategories(...args),
   listManagedLearningResources: (...args: unknown[]) =>
     mocked.listManagedLearningResources(...args),
   listManagedLearningQuestions: (...args: unknown[]) =>
     mocked.listManagedLearningQuestions(...args),
+  listManagedLearningCategories: (...args: unknown[]) =>
+    mocked.listManagedLearningCategories(...args),
   askKnowledge: vi.fn(),
   submitLearningAnswer: vi.fn(),
 }));

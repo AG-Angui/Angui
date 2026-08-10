@@ -678,6 +678,55 @@ fn learning_governance_openapi_contract_documents_versions_and_independent_actio
 }
 
 #[test]
+fn learning_category_openapi_contract_matches_explicit_transition_routes() {
+    for (path, operation_id, summary) in [
+        (
+            "/api/admin/learning/categories/{category_id}/enable:\n",
+            "operationId: enableLearningCategory",
+            "Enable a pending learning category",
+        ),
+        (
+            "/api/admin/learning/categories/{category_id}/reject:\n",
+            "operationId: rejectLearningCategory",
+            "Reject a pending learning category",
+        ),
+        (
+            "/api/admin/learning/categories/{category_id}/disable:\n",
+            "operationId: disableLearningCategory",
+            "Disable an enabled learning category",
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [
+            "post:",
+            operation_id,
+            summary,
+            "name: category_id",
+            "x-global-capabilities: [admin]",
+            "#/components/schemas/LearningContentActionRequest",
+            "#/components/schemas/LearningCategory",
+        ] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI category operation {path} must declare {expected:?}"
+            );
+        }
+        assert!(
+            !operation.contains("name: action"),
+            "explicit category route {path} must not expose a synthetic action path parameter"
+        );
+    }
+    assert_schema_contains(
+        "LearningCategory",
+        &[
+            "status:",
+            "enum: [pending, enabled, rejected, disabled, assigned]",
+        ],
+    );
+    assert_schema_contains("CreateLearningResourceRequest", &["category_id:", "tags:"]);
+}
+
+#[test]
 fn clue_attachment_openapi_contract_keeps_evidence_case_restricted() {
     let attachment_operation = operation("/api/clues/{clue_id}/attachments:\n");
     for expected in [

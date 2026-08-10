@@ -7,11 +7,23 @@ export interface LearningResource {
   content: string;
   resource_type: "team_intro" | "manual" | "prevention" | "case_study";
   tags: string[];
+  category?: LearningCategory | null;
   source_name: string;
   source_url: string | null;
   previous_version_id?: string | null;
   version: number;
   effective_at: string;
+}
+export interface LearningCategory {
+  id: string;
+  name: string;
+  status: "pending" | "enabled" | "rejected" | "disabled" | "assigned";
+}
+export interface ManagedLearningCategory extends LearningCategory {
+  submitted_by_user_id: string;
+  reviewed_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface LearningQuestionOption {
@@ -81,6 +93,7 @@ export interface CreateLearningResourceInput {
   content: string;
   resource_type: LearningResource["resource_type"];
   tags: string[];
+  category_id?: string | null;
   source_name: string;
   source_url: string | null;
   visibility: "public" | "authenticated" | "volunteer" | "learner";
@@ -105,8 +118,35 @@ export interface CreateLearningQuestionInput {
   previous_version_id?: string | null;
 }
 
-export const listLearningResources = (token: string) =>
-  apiRequest<LearningResource[]>("/learning/resources", {}, token);
+export const listLearningResources = (
+  token: string,
+  filters: { category_id?: string; tag?: string } = {},
+) => {
+  const query = new URLSearchParams(
+    Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][],
+  );
+  const suffix = query.size ? `?${query}` : "";
+  return apiRequest<LearningResource[]>(`/learning/resources${suffix}`, {}, token);
+};
+export const listLearningCategories = (token: string) =>
+  apiRequest<LearningCategory[]>("/learning/categories", {}, token);
+export const submitLearningCategoryProposal = (
+  token: string,
+  name: string,
+  submission_reason: string,
+) => apiRequest<LearningCategory>(
+  "/learning/categories/proposals",
+  { method: "POST", body: JSON.stringify({ name, submission_reason }) },
+  token,
+);
+export const submitLearningResourceDraft = (
+  token: string,
+  input: CreateLearningResourceInput,
+) => apiRequest<ManagedLearningResource>(
+  "/learning/resources/drafts",
+  { method: "POST", body: JSON.stringify(input) },
+  token,
+);
 export const getPublicPreventionCard = () =>
   apiRequest<LearningResource>("/learning/public/prevention-card");
 export const listLearningQuestions = (token: string) =>
@@ -132,6 +172,18 @@ export const askKnowledge = (token: string, question: string) =>
   );
 export const listManagedLearningResources = (token: string) =>
   apiRequest<ManagedLearningResource[]>("/admin/learning/resources", {}, token);
+export const listManagedLearningCategories = (token: string) =>
+  apiRequest<ManagedLearningCategory[]>("/admin/learning/categories", {}, token);
+export const transitionManagedLearningCategory = (
+  token: string,
+  categoryId: string,
+  action: "enable" | "reject" | "disable",
+  reason: string,
+) => apiRequest<LearningCategory>(
+  `/admin/learning/categories/${categoryId}/${action}`,
+  { method: "POST", body: JSON.stringify({ reason }) },
+  token,
+);
 export const listManagedLearningQuestions = (token: string) =>
   apiRequest<ManagedLearningQuestion[]>("/admin/learning/questions", {}, token);
 export const createManagedLearningResource = (

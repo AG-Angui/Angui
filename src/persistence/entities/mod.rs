@@ -22,6 +22,8 @@ pub mod intake_question_definitions;
 pub mod intake_session_answers;
 pub mod intake_session_photos;
 pub mod intake_sessions;
+pub mod learning_categories;
+pub mod learning_category_review_events;
 pub mod learning_content_review_events;
 pub mod learning_question_answers;
 pub mod learning_questions;

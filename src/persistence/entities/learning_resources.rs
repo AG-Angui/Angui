@@ -10,6 +10,8 @@ pub struct Model {
     pub content: String,
     pub resource_type: String,
     pub tags_json: String,
+    pub category_id: Option<String>,
+    pub category_name: Option<String>,
     pub source_name: String,
     pub source_url: Option<String>,
     pub previous_version_id: Option<String>,

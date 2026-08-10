@@ -7,6 +7,8 @@ const mocked = vi.hoisted(() => ({
   listResources: vi.fn(),
   listQuestions: vi.fn(),
   transitionResource: vi.fn(),
+  listCategories: vi.fn(),
+  transitionCategory: vi.fn(),
 }));
 
 vi.mock("../auth/useAuth", () => ({
@@ -27,6 +29,10 @@ vi.mock("../api/learning", () => ({
     mocked.listResources(...args),
   listManagedLearningQuestions: (...args: unknown[]) =>
     mocked.listQuestions(...args),
+  listManagedLearningCategories: (...args: unknown[]) =>
+    mocked.listCategories(...args),
+  transitionManagedLearningCategory: (...args: unknown[]) =>
+    mocked.transitionCategory(...args),
   transitionManagedLearningResource: (...args: unknown[]) =>
     mocked.transitionResource(...args),
   transitionManagedLearningQuestion: vi.fn(),
@@ -63,7 +69,14 @@ describe("LearningGovernancePage", () => {
   beforeEach(() => {
     mocked.listResources.mockResolvedValue([submittedResource()]);
     mocked.listQuestions.mockResolvedValue([]);
+    mocked.listCategories.mockResolvedValue([]);
     mocked.transitionResource.mockReset();
+    mocked.transitionCategory.mockReset();
+    mocked.transitionCategory.mockResolvedValue({
+      id: "category-1",
+      name: "安全基础",
+      status: "enabled",
+    });
   });
 
   it("does not allow the submitter to confirm de-identification", async () => {
@@ -205,5 +218,61 @@ describe("LearningGovernancePage", () => {
     expect(
       screen.getByRole("heading", { name: "学习内容治理" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows a retryable error instead of an empty category list when category loading fails", async () => {
+    mocked.listCategories.mockRejectedValue(
+      new ApiClientError(503, "request_failed", "分类治理服务暂时不可用"),
+    );
+    render(<LearningGovernancePage />);
+
+    expect(
+      await screen.findByText("分类治理服务暂时不可用"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+  });
+
+  it("offers category lifecycle actions and sends the administrator reason", async () => {
+    mocked.listCategories.mockResolvedValue([
+      {
+        id: "category-pending",
+        name: "安全基础",
+        status: "pending",
+        submitted_by_user_id: "learner-1",
+        reviewed_by_user_id: null,
+        created_at: "2026-08-05T00:00:00.000Z",
+        updated_at: "2026-08-05T00:00:00.000Z",
+      },
+      {
+        id: "category-enabled",
+        name: "沟通技巧",
+        status: "enabled",
+        submitted_by_user_id: "learner-2",
+        reviewed_by_user_id: "admin-1",
+        created_at: "2026-08-04T00:00:00.000Z",
+        updated_at: "2026-08-04T00:00:00.000Z",
+      },
+    ]);
+    render(<LearningGovernancePage />);
+
+    expect(await screen.findByText("安全基础")).toBeInTheDocument();
+    expect(screen.getAllByText("沟通技巧").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "启用" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "驳回" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停用" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("操作理由"), {
+      target: { value: "分类符合新人课程结构" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "启用" }));
+
+    await waitFor(() =>
+      expect(mocked.transitionCategory).toHaveBeenCalledWith(
+        "admin-session",
+        "category-pending",
+        "enable",
+        "分类符合新人课程结构",
+      ),
+    );
   });
 });
