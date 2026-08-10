@@ -249,9 +249,9 @@ jobs:
         working-directory: frontend
         run: yarn install --frozen-lockfile
 
-      - name: Install Chromium for Playwright
+      - name: Install Chromium and Linux dependencies for Playwright
         working-directory: frontend
-        run: yarn playwright install chromium
+        run: yarn playwright install --with-deps chromium
 
       - name: Run browser end-to-end tests
         working-directory: frontend
