@@ -6,6 +6,7 @@ use angui::{
     api::{rate_limit::LoginRateLimiter, routes},
     application::{app_state::AppState, services::task_service},
     config::{Settings, load_local_env_file, validate_ai_provider_configurations_from_env},
+    integrations::message_delivery::MessageDelivery,
     integrations::{ai_gateway::AiGateway, amap_service::AmapService},
 };
 use sea_orm::Database;
@@ -31,6 +32,7 @@ async fn main() -> io::Result<()> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     let state = web::Data::new(AppState {
         db: database,
+        frontend_origin: settings.frontend_origin.clone(),
         session_ttl_hours: settings.session_ttl_hours,
         intake_answer_hard_max: settings.intake_answer_hard_max,
         attachment_storage_directory: settings.attachment_storage_directory.clone(),
@@ -45,6 +47,8 @@ async fn main() -> io::Result<()> {
         .map_err(|error| io::Error::other(format!("AMap client initialization failed: {error}")))?,
         ai_gateway,
         login_limiter: LoginRateLimiter::default(),
+        message_delivery: MessageDelivery::from_env()
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?,
     });
     task_service::start_location_report_retention_purger(state.db.clone());
 

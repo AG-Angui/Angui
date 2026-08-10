@@ -1,3 +1,4 @@
+pub mod access_request_service;
 pub mod admin_service;
 pub mod ai_execution_service;
 pub mod auth_service;

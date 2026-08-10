@@ -10,6 +10,9 @@ import { LearningCenterPage } from "./pages/LearningCenterPage";
 import { LearningGovernancePage } from "./pages/LearningGovernancePage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { VolunteerWorkspacePage } from "./pages/VolunteerWorkspacePage";
+import { AccessRequestPage } from "./pages/AccessRequestPage";
+import { PasswordSetupPage } from "./pages/PasswordSetupPage";
+import { AccessRequestAdminPage } from "./pages/AccessRequestAdminPage";
 
 function CaseRoleRoute({
   capability,
@@ -66,7 +69,14 @@ function App() {
   }
 
   if (!user) {
-    return <LoginPage />;
+    if (window.location.hash.startsWith("#password-setup=")) return <PasswordSetupPage />;
+    if (window.location.hash.startsWith("#access-verify=")) return <AccessRequestPage />;
+    return (
+      <Routes>
+        <Route path="access-request" element={<AccessRequestPage />} />
+        <Route path="*" element={<LoginPage />} />
+      </Routes>
+    );
   }
 
   return (
@@ -82,6 +92,7 @@ function App() {
           }
         />
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="admin/access-requests" element={<AdminRoute><AccessRequestAdminPage /></AdminRoute>} />
         <Route
           path="admin/learning"
           element={

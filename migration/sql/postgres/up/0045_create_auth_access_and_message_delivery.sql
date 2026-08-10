@@ -1,0 +1,7 @@
+CREATE TABLE access_requests (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, requested_role TEXT NOT NULL CHECK (requested_role IN ('family','volunteer','commander')), status TEXT NOT NULL CHECK (status IN ('pending_verification','pending_review','approved','rejected')), email_verified_at TEXT NULL, reviewed_by_user_id TEXT NULL REFERENCES users(id), reviewed_at TEXT NULL, review_reason TEXT NULL, created_user_id TEXT NULL REFERENCES users(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+-- statement-break
+CREATE INDEX idx_access_requests_status_created ON access_requests(status, created_at);
+-- statement-break
+CREATE TABLE auth_email_tokens (id TEXT PRIMARY KEY, access_request_id TEXT NULL REFERENCES access_requests(id) ON DELETE CASCADE, user_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE, purpose TEXT NOT NULL CHECK (purpose IN ('access_request_verify','password_setup')), token_hash TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, consumed_at TEXT NULL, created_at TEXT NOT NULL, CHECK ((access_request_id IS NOT NULL) <> (user_id IS NOT NULL)));
+-- statement-break
+CREATE TABLE message_deliveries (id TEXT PRIMARY KEY, channel TEXT NOT NULL, template TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('delivered','failed','not_configured')), attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0), failure_reason TEXT NULL, created_at TEXT NOT NULL, delivered_at TEXT NULL);

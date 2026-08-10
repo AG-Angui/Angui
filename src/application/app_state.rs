@@ -2,11 +2,15 @@ use std::path::PathBuf;
 
 use sea_orm::DatabaseConnection;
 
-use crate::{ai_gateway::AiGateway, amap_service::AmapService, rate_limit::LoginRateLimiter};
+use crate::{
+    ai_gateway::AiGateway, amap_service::AmapService, message_delivery::MessageDelivery,
+    rate_limit::LoginRateLimiter,
+};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
+    pub frontend_origin: String,
     pub session_ttl_hours: i64,
     pub intake_answer_hard_max: usize,
     pub attachment_storage_directory: PathBuf,
@@ -16,4 +20,5 @@ pub struct AppState {
     pub amap_service: AmapService,
     pub ai_gateway: AiGateway,
     pub login_limiter: LoginRateLimiter,
+    pub message_delivery: MessageDelivery,
 }

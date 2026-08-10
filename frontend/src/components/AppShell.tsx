@@ -54,6 +54,7 @@ const navigation: NavigationItem[] = [
     capability: "volunteer",
   },
   { to: "/profile", label: "个人资料", icon: UserRound },
+  { to: "/admin/access-requests", label: "账号审核", icon: ShieldCheck, adminOnly: true },
 ];
 
 const roleLabels: Record<GlobalCapability, string> = {
