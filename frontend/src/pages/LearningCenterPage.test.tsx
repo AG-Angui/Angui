@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiClientError } from "../api/client";
 import { LearningCenterPage } from "./LearningCenterPage";
@@ -7,12 +7,20 @@ const mocked = vi.hoisted(() => ({
   getPublicPreventionCard: vi.fn(),
   askKnowledge: vi.fn(),
   listLearningQuestions: vi.fn(),
+  listLearningCategories: vi.fn(),
   listLearningResources: vi.fn(),
+  submitLearningCategoryProposal: vi.fn(),
+  submitLearningResourceDraft: vi.fn(),
   token: "learner-session" as string | null,
 }));
 
 vi.mock("../auth/useAuth", () => ({
-  useAuth: () => ({ token: mocked.token }),
+  useAuth: () => ({
+    token: mocked.token,
+    user: mocked.token
+      ? { account_type: "learner", id: "learner-1" }
+      : undefined,
+  }),
 }));
 
 vi.mock("../api/learning", () => ({
@@ -22,6 +30,12 @@ vi.mock("../api/learning", () => ({
     mocked.listLearningQuestions(...args),
   listLearningResources: (...args: unknown[]) =>
     mocked.listLearningResources(...args),
+  listLearningCategories: (...args: unknown[]) =>
+    mocked.listLearningCategories(...args),
+  submitLearningCategoryProposal: (...args: unknown[]) =>
+    mocked.submitLearningCategoryProposal(...args),
+  submitLearningResourceDraft: (...args: unknown[]) =>
+    mocked.submitLearningResourceDraft(...args),
   askKnowledge: (...args: unknown[]) => mocked.askKnowledge(...args),
   submitLearningAnswer: vi.fn(),
 }));
@@ -31,6 +45,13 @@ describe("LearningCenterPage", () => {
     mocked.token = "learner-session";
     mocked.listLearningResources.mockResolvedValue([]);
     mocked.listLearningQuestions.mockResolvedValue([]);
+    mocked.listLearningCategories.mockResolvedValue([]);
+    mocked.submitLearningCategoryProposal.mockResolvedValue({
+      id: "category-new",
+      name: "新分类",
+      status: "pending",
+    });
+    mocked.submitLearningResourceDraft.mockResolvedValue({});
   });
 
   it("renders only the approved public prevention card supplied by the API", async () => {
@@ -168,5 +189,129 @@ describe("LearningCenterPage", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("已发布手册")).toBeInTheDocument();
+  });
+
+  it("renders category and tag chips and sends server-side filter changes", async () => {
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "没有卡片"),
+    );
+    mocked.listLearningCategories.mockResolvedValue([
+      { id: "cat-safety", name: "安全基础", status: "enabled" },
+    ]);
+    mocked.listLearningResources.mockResolvedValue([
+      {
+        id: "resource-safety",
+        title: "安全手册",
+        summary: "摘要",
+        content: "正文",
+        resource_type: "manual",
+        tags: ["基础"],
+        category: { id: "cat-safety", name: "安全基础", status: "assigned" },
+        source_name: "来源",
+        source_url: null,
+        version: 1,
+        effective_at: "2026-08-05T00:00:00.000Z",
+      },
+    ]);
+
+    render(<LearningCenterPage />);
+    expect(await screen.findByText("安全手册")).toBeInTheDocument();
+    expect(screen.getAllByText("安全基础").length).toBeGreaterThan(0);
+    expect(screen.getByText("#基础")).toBeInTheDocument();
+
+    mocked.listLearningResources.mockClear();
+    fireEvent.change(screen.getByLabelText("分类筛选"), {
+      target: { value: "cat-safety" },
+    });
+    await waitFor(() =>
+      expect(mocked.listLearningResources).toHaveBeenLastCalledWith(
+        "learner-session",
+        { category_id: "cat-safety", tag: "" },
+      ),
+    );
+
+    mocked.listLearningResources.mockClear();
+    fireEvent.change(screen.getByLabelText("标签筛选"), {
+      target: { value: "基础" },
+    });
+    await waitFor(() =>
+      expect(mocked.listLearningResources).toHaveBeenLastCalledWith(
+        "learner-session",
+        { category_id: "cat-safety", tag: "基础" },
+      ),
+    );
+  });
+
+  it("submits learner drafts with normalized tags and fixed learner training scope", async () => {
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "没有卡片"),
+    );
+    mocked.listLearningCategories.mockResolvedValue([
+      { id: "cat-safety", name: "安全基础", status: "enabled" },
+    ]);
+    render(<LearningCenterPage />);
+
+    await screen.findByRole("heading", { name: "提交学习资源草稿" });
+    fireEvent.change(screen.getByLabelText("草稿标题"), {
+      target: { value: "新人安全提示" },
+    });
+    fireEvent.change(screen.getByLabelText("草稿来源名称"), {
+      target: { value: "学习小组" },
+    });
+    fireEvent.change(screen.getByLabelText("草稿标签"), {
+      target: { value: "基础, 安全，基础" },
+    });
+    fireEvent.change(screen.getByLabelText("摘要"), {
+      target: { value: "摘要" },
+    });
+    fireEvent.change(screen.getByLabelText("正文"), {
+      target: { value: "正文" },
+    });
+    fireEvent.change(screen.getByLabelText("提交理由"), {
+      target: { value: "供新人学习" },
+    });
+    const draftSection = screen
+      .getByRole("heading", { name: "提交学习资源草稿" })
+      .closest("section");
+    expect(draftSection).not.toBeNull();
+    fireEvent.change(draftSection!.querySelector("select")!, {
+      target: { value: "cat-safety" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交草稿" }));
+
+    await waitFor(() => expect(mocked.submitLearningResourceDraft).toHaveBeenCalled());
+    const [, input] = mocked.submitLearningResourceDraft.mock.calls.at(-1)!;
+    expect(input).toMatchObject({
+      title: "新人安全提示",
+      category_id: "cat-safety",
+      tags: ["基础", "安全", "基础"],
+      visibility: "learner",
+      permitted_use: "training",
+    });
+  });
+
+  it("submits a learner category proposal with a reason", async () => {
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "没有卡片"),
+    );
+    render(<LearningCenterPage />);
+
+    await screen.findByRole("heading", { name: "提交学习资源草稿" });
+    fireEvent.change(screen.getByLabelText("申请分类名称"), {
+      target: { value: "现场沟通" },
+    });
+    fireEvent.change(screen.getByLabelText("申请分类理由"), {
+      target: { value: "便于新人按场景学习" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "申请分类" }));
+
+    await waitFor(() =>
+      expect(mocked.submitLearningCategoryProposal).toHaveBeenCalledWith(
+        "learner-session",
+        "现场沟通",
+        "便于新人按场景学习",
+      ),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("分类申请已提交");
   });
 });

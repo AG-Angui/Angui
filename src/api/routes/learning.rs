@@ -4,9 +4,9 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateLearningQuestionRequest, CreateLearningResourceRequest,
-        KnowledgeAskRequest, LearningContentActionRequest, LearningQuestionQuery,
-        LearningResourceQuery, SubmitLearningAnswerRequest,
+        AuthenticatedUser, CreateLearningCategoryRequest, CreateLearningQuestionRequest,
+        CreateLearningResourceRequest, KnowledgeAskRequest, LearningContentActionRequest,
+        LearningQuestionQuery, LearningResourceQuery, SubmitLearningAnswerRequest,
     },
     services::learning_service,
 };
@@ -20,6 +20,9 @@ pub fn configure(config: &mut web::ServiceConfig) {
                     web::get().to(public_prevention_card),
                 )
                 .route("/resources", web::get().to(list_resources))
+                .route("/resources/drafts", web::post().to(submit_resource_draft))
+                .route("/categories", web::get().to(list_enabled_categories))
+                .route("/categories/proposals", web::post().to(propose_category))
                 .route("/questions", web::get().to(list_questions))
                 .route(
                     "/questions/{question_id}/answers",
@@ -30,6 +33,19 @@ pub fn configure(config: &mut web::ServiceConfig) {
             web::scope("/admin/learning")
                 .route("/resources", web::get().to(list_managed_resources))
                 .route("/resources", web::post().to(create_resource))
+                .route("/categories", web::get().to(list_managed_categories))
+                .route(
+                    "/categories/{category_id}/enable",
+                    web::post().to(enable_category),
+                )
+                .route(
+                    "/categories/{category_id}/reject",
+                    web::post().to(reject_category),
+                )
+                .route(
+                    "/categories/{category_id}/disable",
+                    web::post().to(disable_category),
+                )
                 .route(
                     "/resources/{resource_id}/deidentify",
                     web::post().to(deidentify_resource),
@@ -89,6 +105,32 @@ async fn list_resources(
         .json(learning_service::list_resources(&state.db, &auth, query.into_inner()).await?))
 }
 
+async fn list_enabled_categories(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::list_enabled_categories(&state.db, &auth).await?))
+}
+
+async fn propose_category(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    request: web::Json<CreateLearningCategoryRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created()
+        .json(learning_service::propose_category(&state.db, &auth, request.into_inner()).await?))
+}
+
+async fn submit_resource_draft(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    request: web::Json<CreateLearningResourceRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        learning_service::submit_resource_draft(&state.db, &auth, request.into_inner()).await?,
+    ))
+}
+
 async fn list_questions(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -124,6 +166,67 @@ async fn list_managed_resources(
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(learning_service::list_managed_resources(&state.db, &auth).await?))
+}
+
+async fn list_managed_categories(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::list_managed_categories(&state.db, &auth).await?))
+}
+
+async fn enable_category(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    category_id: web::Path<String>,
+    request: web::Json<LearningContentActionRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        learning_service::transition_category(
+            &state.db,
+            &auth,
+            &category_id,
+            "enable",
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn reject_category(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    category_id: web::Path<String>,
+    request: web::Json<LearningContentActionRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        learning_service::transition_category(
+            &state.db,
+            &auth,
+            &category_id,
+            "reject",
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn disable_category(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    category_id: web::Path<String>,
+    request: web::Json<LearningContentActionRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        learning_service::transition_category(
+            &state.db,
+            &auth,
+            &category_id,
+            "disable",
+            request.into_inner(),
+        )
+        .await?,
+    ))
 }
 
 async fn create_resource(

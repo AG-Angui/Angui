@@ -1905,9 +1905,53 @@ paths:
       security: [{ bearerAuth: [] }]
       x-account-types: [member, learner]
       x-data-classification: public-or-training
+      parameters:
+        - { name: category_id, in: query, required: false, schema: { type: string }, description: Filter by one assigned category; unclassified historical resources remain available without this filter. }
+        - { name: tag, in: query, required: false, schema: { type: string }, description: Normalized tag filter, combined with category_id using AND semantics. }
       responses:
         "200": { description: Reviewed learning resources }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/learning/categories:
+    get:
+      tags: [Learning]
+      operationId: listEnabledLearningCategories
+      summary: List categories selectable for new learning-resource drafts
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      responses:
+        "200": { description: Enabled categories only, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/LearningCategory" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/learning/categories/proposals:
+    post:
+      tags: [Learning]
+      operationId: proposeLearningCategory
+      summary: Submit a normalized category proposal for administrator review
+      security: [{ bearerAuth: [] }]
+      x-account-types: [learner]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateLearningCategoryRequest" } } } }
+      responses:
+        "201": { description: Pending category proposal, content: { application/json: { schema: { $ref: "#/components/schemas/LearningCategory" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/learning/resources/drafts:
+    post:
+      tags: [Learning]
+      operationId: submitLearnerLearningResourceDraft
+      summary: Submit a learner-only training draft for the existing independent governance chain
+      description: Learner submissions are fixed to learner visibility and training use. They are never published by this endpoint.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [learner]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateLearningResourceRequest" } } } }
+      responses:
+        "201": { description: Submitted draft, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningResource" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /api/learning/questions:
     get:
@@ -1965,6 +2009,69 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/CreateLearningResourceRequest" } } }
       responses:
         "201": { description: Submitted resource version, content: { application/json: { schema: { $ref: "#/components/schemas/ManagedLearningResource" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/categories:
+    get:
+      tags: [Learning governance]
+      operationId: listManagedLearningCategories
+      summary: List category proposals and lifecycle state
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      responses:
+        "200": { description: All categories, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManagedLearningCategory" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/learning/categories/{category_id}/enable:
+    post:
+      tags: [Learning governance]
+      operationId: enableLearningCategory
+      summary: Enable a pending learning category
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      parameters: [{ name: category_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Enabled category, content: { application/json: { schema: { $ref: "#/components/schemas/LearningCategory" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/categories/{category_id}/reject:
+    post:
+      tags: [Learning governance]
+      operationId: rejectLearningCategory
+      summary: Reject a pending learning category
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      parameters: [{ name: category_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Rejected category, content: { application/json: { schema: { $ref: "#/components/schemas/LearningCategory" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/learning/categories/{category_id}/disable:
+    post:
+      tags: [Learning governance]
+      operationId: disableLearningCategory
+      summary: Disable an enabled learning category
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      parameters: [{ name: category_id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LearningContentActionRequest" } } } }
+      responses:
+        "200": { description: Disabled category, content: { application/json: { schema: { $ref: "#/components/schemas/LearningCategory" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -2343,7 +2450,7 @@ components:
     LearningResource:
       type: object
       additionalProperties: false
-      required: [id, title, summary, content, resource_type, tags, source_name, source_url, previous_version_id, version, effective_at]
+      required: [id, title, summary, content, resource_type, tags, category, source_name, source_url, previous_version_id, version, effective_at]
       properties:
         id: { type: string }
         title: { type: string }
@@ -2351,11 +2458,32 @@ components:
         content: { type: string }
         resource_type: { type: string, enum: [team_intro, manual, prevention, case_study] }
         tags: { type: array, items: { type: string } }
+        category: { anyOf: [{ $ref: "#/components/schemas/LearningCategory" }, { type: "null" }], description: Assigned category snapshot. Null keeps historical resources compatible. }
         source_name: { type: string }
         source_url: { type: [string, "null"], format: uri }
         previous_version_id: { type: [string, "null"], description: Immutable direct predecessor. Null denotes a first version. }
         version: { type: integer, minimum: 1 }
         effective_at: { type: string, format: date-time }
+
+    LearningCategory:
+      type: object
+      additionalProperties: false
+      required: [id, name, status]
+      properties:
+        id: { type: string }
+        name: { type: string, maxLength: 160 }
+        status: { type: string, enum: [pending, enabled, rejected, disabled, assigned] }
+
+    ManagedLearningCategory:
+      allOf:
+        - $ref: "#/components/schemas/LearningCategory"
+        - type: object
+          required: [submitted_by_user_id, reviewed_by_user_id, created_at, updated_at]
+          properties:
+            submitted_by_user_id: { type: string }
+            reviewed_by_user_id: { type: [string, "null"] }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
 
     LearningQuestionOption:
       type: object
@@ -2430,12 +2558,21 @@ components:
         content: { type: string, minLength: 1, maxLength: 20000 }
         resource_type: { type: string, enum: [team_intro, manual, prevention, case_study] }
         tags: { type: array, items: { type: string } }
+        category_id: { type: [string, "null"], description: Optional enabled category. Null retains compatibility for historical and uncategorized resources. }
         source_name: { type: string, minLength: 1, maxLength: 240 }
         source_url: { type: [string, "null"], format: uri }
         previous_version_id: { type: [string, "null"], description: Set only to correct one currently published, governance-approved resource version. }
         visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
         effective_at: { type: string, format: date-time }
         permitted_use: { type: string, enum: [training, public_information] }
+        submission_reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    CreateLearningCategoryRequest:
+      type: object
+      additionalProperties: false
+      required: [name, submission_reason]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
         submission_reason: { type: string, minLength: 1, maxLength: 1000 }
 
     CreateLearningQuestionRequest:

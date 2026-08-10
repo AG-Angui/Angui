@@ -24,6 +24,24 @@ pub struct AuthenticatedUser {
 pub struct LearningResourceQuery {
     pub resource_type: Option<String>,
     pub tag: Option<String>,
+    pub category_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningCategoryResponse {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagedLearningCategoryResponse {
+    #[serde(flatten)]
+    pub category: LearningCategoryResponse,
+    pub submitted_by_user_id: String,
+    pub reviewed_by_user_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,6 +52,7 @@ pub struct LearningResourceResponse {
     pub content: String,
     pub resource_type: String,
     pub tags: Vec<String>,
+    pub category: Option<LearningCategoryResponse>,
     pub source_name: String,
     pub source_url: Option<String>,
     pub previous_version_id: Option<String>,
@@ -104,12 +123,25 @@ pub struct CreateLearningResourceRequest {
     pub content: String,
     pub resource_type: String,
     pub tags: Vec<String>,
+    pub category_id: Option<String>,
     pub source_name: String,
     pub source_url: Option<String>,
     pub previous_version_id: Option<String>,
     pub visibility: String,
     pub effective_at: String,
     pub permitted_use: String,
+    pub submission_reason: String,
+}
+
+/// A learner may submit a draft but can never self-publish it. The resource
+/// shape is intentionally shared with administrators so validation and the
+/// independent review lifecycle cannot drift.
+pub type SubmitLearningResourceDraftRequest = CreateLearningResourceRequest;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateLearningCategoryRequest {
+    pub name: String,
     pub submission_reason: String,
 }
 

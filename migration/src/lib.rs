@@ -43,6 +43,7 @@ mod m0040_enforce_learning_lifecycle_event_uniqueness;
 mod m0041_add_learning_content_version_lineage;
 mod m0042_create_ai_executions;
 mod m0043_add_intake_report_details;
+mod m0044_add_learning_category_governance;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -95,6 +96,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0041_add_learning_content_version_lineage::Migration),
             Box::new(m0042_create_ai_executions::Migration),
             Box::new(m0043_add_intake_report_details::Migration),
+            Box::new(m0044_add_learning_category_governance::Migration),
         ]
     }
 }

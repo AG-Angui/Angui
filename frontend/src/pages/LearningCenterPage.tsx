@@ -4,12 +4,17 @@ import { useCallback, useEffect, useState } from "react";
 import {
   askKnowledge,
   getPublicPreventionCard,
+  listLearningCategories,
   listLearningQuestions,
   listLearningResources,
+  submitLearningCategoryProposal,
   submitLearningAnswer,
+  submitLearningResourceDraft,
 } from "../api/learning";
 import type {
   KnowledgeAnswer,
+  CreateLearningResourceInput,
+  LearningCategory,
   LearningQuestion,
   LearningResource,
 } from "../api/learning";
@@ -32,10 +37,23 @@ function messageFrom(cause: unknown) {
 }
 
 export function LearningCenterPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const preventionCacheReady = usePreventionCacheReady();
   const [resources, setResources] = useState<LearningResource[]>([]);
   const [questions, setQuestions] = useState<LearningQuestion[]>([]);
+  const [categories, setCategories] = useState<LearningCategory[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedTag, setSelectedTag] = useState("");
+  const [draftTags, setDraftTags] = useState("");
+  const [draftError, setDraftError] = useState("");
+  const [isSubmittingDraft, setIsSubmittingDraft] = useState(false);
+  const [draft, setDraft] = useState<CreateLearningResourceInput>({
+    title: "", summary: "", content: "", resource_type: "manual", tags: [], category_id: null,
+    source_name: "", source_url: null, visibility: "learner", effective_at: new Date().toISOString(),
+    permitted_use: "training", submission_reason: "",
+  });
+  const [categoryProposal, setCategoryProposal] = useState("");
+  const [categoryProposalReason, setCategoryProposalReason] = useState("");
   const [preventionCard, setPreventionCard] = useState<LearningResource | null>(
     null,
   );
@@ -60,11 +78,18 @@ export function LearningCenterPage() {
     setError("");
     try {
       const [nextResources, nextQuestions] = await Promise.all([
-        listLearningResources(token),
+        listLearningResources(token, { category_id: selectedCategory, tag: selectedTag }),
         listLearningQuestions(token),
       ]);
       setResources(nextResources);
       setQuestions(nextQuestions);
+      // Categories are progressive enhancement for legacy deployments. A
+      // missing category endpoint must not hide already published resources.
+      setCategories(
+        typeof listLearningCategories === "function"
+          ? await listLearningCategories(token).catch(() => [])
+          : [],
+      );
       try {
         setPreventionCard(await getPublicPreventionCard());
       } catch (cause) {
@@ -77,7 +102,7 @@ export function LearningCenterPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [selectedCategory, selectedTag, token]);
 
   useEffect(() => {
     void load();
@@ -101,6 +126,44 @@ export function LearningCenterPage() {
       .catch((cause) => setError(messageFrom(cause)))
       .finally(() => setAnsweringQuestion(""));
   };
+
+  const submitDraft = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token) return;
+    setDraftError("");
+    setIsSubmittingDraft(true);
+    void submitLearningResourceDraft(token, {
+      ...draft,
+      tags: draftTags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
+      source_url: draft.source_url?.trim() || null,
+    })
+      .then(() => {
+        setDraft({
+          ...draft, title: "", summary: "", content: "", tags: [], category_id: null,
+          source_name: "", source_url: null, submission_reason: "", effective_at: new Date().toISOString(),
+        });
+        setDraftTags("");
+        setDraftError("草稿已提交，等待独立去标识、审核与发布流程。");
+      })
+      .catch((cause) => setDraftError(messageFrom(cause)))
+      .finally(() => setIsSubmittingDraft(false));
+  };
+
+  const proposeCategory = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !categoryProposal.trim() || !categoryProposalReason.trim()) return;
+    setDraftError("");
+    void submitLearningCategoryProposal(token, categoryProposal, categoryProposalReason)
+      .then(() => {
+        setCategoryProposal("");
+        setCategoryProposalReason("");
+        setDraftError("分类申请已提交，管理员启用后即可在资源草稿中选择。");
+        return load();
+      })
+      .catch((cause) => setDraftError(messageFrom(cause)));
+  };
+
+  const availableTags = Array.from(new Set(resources.flatMap((resource) => resource.tags))).sort();
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
@@ -179,6 +242,22 @@ export function LearningCenterPage() {
             <Chip.Label>{resources.length} 项</Chip.Label>
           </Chip>
         </header>
+        <div className="grid gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-2">
+          <label className="grid gap-1 text-sm text-slate-700">
+            分类筛选
+            <select className="h-10 rounded-md border border-slate-300 bg-white px-3" value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}>
+              <option value="">全部分类（含历史未分类）</option>
+              {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1 text-sm text-slate-700">
+            标签筛选
+            <select className="h-10 rounded-md border border-slate-300 bg-white px-3" value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)}>
+              <option value="">全部标签</option>
+              {availableTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
+            </select>
+          </label>
+        </div>
         {resources.length === 0 ? (
           <p className="m-0 px-5 py-8 text-sm text-slate-600">
             暂无已发布学习资源。资源需经过审核后才会出现在这里。
@@ -199,6 +278,16 @@ export function LearningCenterPage() {
                   <Chip size="sm" variant="soft">
                     <Chip.Label>v{resource.version}</Chip.Label>
                   </Chip>
+                  {resource.category && (
+                    <Chip size="sm" variant="soft">
+                      <Chip.Label>{resource.category.name}</Chip.Label>
+                    </Chip>
+                  )}
+                  {resource.tags.map((tag) => (
+                    <Chip key={tag} size="sm" variant="soft">
+                      <Chip.Label>#{tag}</Chip.Label>
+                    </Chip>
+                  ))}
                 </div>
                 <p className="mb-0 mt-1 text-sm text-slate-600">
                   {resource.summary}
@@ -230,6 +319,35 @@ export function LearningCenterPage() {
           </div>
         )}
       </section>
+      {user?.account_type === "learner" && (
+        <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="contribute-learning-title">
+          <header className="border-b border-slate-200 px-5 py-4">
+            <h2 id="contribute-learning-title" className="m-0 text-base font-bold text-slate-950">提交学习资源草稿</h2>
+            <p className="mb-0 mt-1 text-sm text-slate-600">草稿不会直接展示；它必须经过独立去标识、审核和发布。</p>
+          </header>
+          <form className="grid gap-3 p-5 lg:grid-cols-2" onSubmit={submitDraft}>
+            <label className="grid gap-1 text-sm text-slate-700">标题<Input aria-label="草稿标题" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required /></label>
+            <label className="grid gap-1 text-sm text-slate-700">来源名称<Input aria-label="草稿来源名称" value={draft.source_name} onChange={(event) => setDraft({ ...draft, source_name: event.target.value })} required /></label>
+            <label className="grid gap-1 text-sm text-slate-700">分类
+              <select className="h-10 rounded-md border border-slate-300 bg-white px-3" value={draft.category_id ?? ""} onChange={(event) => setDraft({ ...draft, category_id: event.target.value || null })}>
+                <option value="">未分类</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700">标签（逗号分隔）<Input aria-label="草稿标签" value={draftTags} onChange={(event) => setDraftTags(event.target.value)} /></label>
+            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">摘要<textarea className="min-h-20 rounded-md border border-slate-300 px-3 py-2" value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} required /></label>
+            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">正文<textarea className="min-h-32 rounded-md border border-slate-300 px-3 py-2" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} required /></label>
+            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">提交理由<textarea className="min-h-20 rounded-md border border-slate-300 px-3 py-2" value={draft.submission_reason} onChange={(event) => setDraft({ ...draft, submission_reason: event.target.value })} required /></label>
+            <div className="lg:col-span-2"><Button type="submit" isDisabled={isSubmittingDraft}>{isSubmittingDraft ? <Spinner size="sm" /> : "提交草稿"}</Button></div>
+          </form>
+          <form className="grid gap-3 border-t border-slate-100 p-5 lg:grid-cols-2" onSubmit={proposeCategory}>
+            <p className="m-0 text-sm font-semibold text-slate-950 lg:col-span-2">没有合适的分类？提交分类申请</p>
+            <Input aria-label="申请分类名称" value={categoryProposal} onChange={(event) => setCategoryProposal(event.target.value)} placeholder="分类名称" required />
+            <Input aria-label="申请分类理由" value={categoryProposalReason} onChange={(event) => setCategoryProposalReason(event.target.value)} placeholder="申请理由" required />
+            <div className="lg:col-span-2"><Button type="submit" variant="secondary">申请分类</Button></div>
+          </form>
+          {draftError && <p className="m-0 px-5 pb-5 text-sm text-slate-700" role="status">{draftError}</p>}
+        </section>
+      )}
       <div className="grid gap-7 lg:grid-cols-2">
         <section
           className="border-y border-slate-200 bg-white"

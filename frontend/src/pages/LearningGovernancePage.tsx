@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import {
   createManagedLearningQuestion,
   createManagedLearningResource,
+  listManagedLearningCategories,
   listManagedLearningQuestions,
   listManagedLearningResources,
+  transitionManagedLearningCategory,
   transitionManagedLearningQuestion,
   transitionManagedLearningResource,
 } from "../api/learning";
@@ -13,6 +15,7 @@ import type {
   CreateLearningQuestionInput,
   CreateLearningResourceInput,
   LearningContentLifecycle,
+  ManagedLearningCategory,
   ManagedLearningQuestion,
   ManagedLearningResource,
 } from "../api/learning";
@@ -156,6 +159,7 @@ function LifecycleActions({
 export function LearningGovernancePage() {
   const { token, user } = useAuth();
   const [resources, setResources] = useState<ManagedLearningResource[]>([]);
+  const [categories, setCategories] = useState<ManagedLearningCategory[]>([]);
   const [questions, setQuestions] = useState<ManagedLearningQuestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -169,6 +173,7 @@ export function LearningGovernancePage() {
       content: "",
       resource_type: "manual",
       tags: [],
+      category_id: null,
       source_name: "",
       source_url: null,
       visibility: "learner",
@@ -208,6 +213,13 @@ export function LearningGovernancePage() {
       ]);
       setResources(nextResources);
       setQuestions(nextQuestions);
+      // Keep resource governance usable while rolling out the optional
+      // category-governance endpoint to older deployments.
+      setCategories(
+        typeof listManagedLearningCategories === "function"
+          ? await listManagedLearningCategories(token).catch(() => [])
+          : [],
+      );
     } catch (cause) {
       setLoadError(errorMessage(cause));
     } finally {
@@ -258,6 +270,25 @@ export function LearningGovernancePage() {
       .catch((cause) => setOperationError(errorMessage(cause)))
       .finally(() => setBusyId(""));
   };
+  const actOnCategory = (
+    category: ManagedLearningCategory,
+    action: "enable" | "reject" | "disable",
+  ) => {
+    if (!token || !reason.trim()) {
+      setOperationError("请填写本次操作理由。");
+      return;
+    }
+    setOperationError("");
+    setBusyId(category.id);
+    void transitionManagedLearningCategory(token, category.id, action, reason)
+      .then(() => {
+        setReason("");
+        return load();
+      })
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+
   const submitResource = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!token) return;
@@ -275,6 +306,7 @@ export function LearningGovernancePage() {
           summary: "",
           content: "",
           tags: [],
+          category_id: null,
           source_name: "",
           source_url: null,
           previous_version_id: null,
@@ -354,6 +386,36 @@ export function LearningGovernancePage() {
           {operationError}
         </div>
       )}
+      <section
+        className="mb-7 border-y border-slate-200 bg-white"
+        aria-labelledby="category-governance-title"
+      >
+        <header className="border-b border-slate-200 px-5 py-4">
+          <h2 id="category-governance-title" className="m-0 text-base font-bold text-slate-950">
+            知识分类治理
+          </h2>
+        </header>
+        <div className="divide-y divide-slate-100">
+          {categories.length === 0 ? (
+            <p className="m-0 px-5 py-6 text-sm text-slate-600">暂无分类申请。</p>
+          ) : categories.map((category) => (
+            <div key={category.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+              <div>
+                <p className="m-0 text-sm font-semibold text-slate-950">{category.name}</p>
+                <p className="mb-0 mt-1 text-xs text-slate-500">状态：{category.status}</p>
+              </div>
+              {category.status === "pending" ? (
+                <div className="flex gap-2">
+                  <Button size="sm" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "enable")}>启用</Button>
+                  <Button size="sm" variant="danger" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "reject")}>驳回</Button>
+                </div>
+              ) : category.status === "enabled" ? (
+                <Button size="sm" variant="danger" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "disable")}>停用</Button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </section>
       <section className="border-y border-slate-200 bg-white">
         <header className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
           <FilePlus2 size={18} aria-hidden="true" />
@@ -470,6 +532,28 @@ export function LearningGovernancePage() {
               value={resourceTags}
               onChange={(event) => setResourceTags(event.target.value)}
             />
+          </label>
+          <label className="grid gap-1 text-sm text-slate-700">
+            分类
+            <select
+              className="h-10 rounded-md border border-slate-300 bg-white px-3"
+              value={resourceForm.category_id ?? ""}
+              onChange={(event) =>
+                setResourceForm({
+                  ...resourceForm,
+                  category_id: event.target.value || null,
+                })
+              }
+            >
+              <option value="">未分类（兼容历史资源）</option>
+              {categories
+                .filter((category) => category.status === "enabled")
+                .map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+            </select>
           </label>
           <TextareaField
             className="lg:col-span-2"
