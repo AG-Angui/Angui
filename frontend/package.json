@@ -10,7 +10,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "node ./node_modules/@playwright/test/cli.js test --config=e2e/playwright.config.ts",
+    "test:e2e:ui": "node ./node_modules/@playwright/test/cli.js test --config=e2e/playwright.config.ts --ui"
   },
   "resolutions": {
     "postcss": "^8.5.23",
@@ -27,6 +29,7 @@
     "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.58.2",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",

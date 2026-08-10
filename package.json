@@ -10,6 +10,7 @@
     "format:backend": "cargo fmt --all",
     "check:backend": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
     "test:backend": "cargo test --workspace --all-features --locked",
+    "test:e2e": "yarn --cwd frontend test:e2e",
     "migrate:up": "cargo run -p migration -- up",
     "migrate:down": "cargo run -p migration -- down",
     "migrate:status": "cargo run -p migration -- status",

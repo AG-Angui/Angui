@@ -45,9 +45,15 @@ async fn main() -> io::Result<()> {
     let database = Database::connect(database_url)
         .await
         .map_err(|error| io::Error::other(format!("database connection failed: {error}")))?;
-    let users = auth_service::bootstrap_demo_users(&database, &password)
-        .await
-        .map_err(|error| io::Error::other(error.to_string()))?;
+    let grant_reviewer_admins =
+        env::var("ANGUI_DEMO_GRANT_REVIEWER_ADMINS").is_ok_and(|value| value.trim() == "1");
+    let users = auth_service::bootstrap_demo_users_with_reviewer_admins(
+        &database,
+        &password,
+        grant_reviewer_admins,
+    )
+    .await
+    .map_err(|error| io::Error::other(error.to_string()))?;
 
     for user in users {
         println!(
