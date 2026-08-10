@@ -5,6 +5,7 @@ import {
   apiPost,
   apiSsePost,
   tokenFor,
+  uniqueTestSuffix,
 } from "./support";
 
 async function useFamilySession(page: Page, token: string) {
@@ -22,7 +23,7 @@ test("the intake confirmation workflow creates one browser-visible case only aft
 }, testInfo) => {
   test.setTimeout(120_000);
   const token = await tokenFor(request, accounts.family);
-  const displayName = `E2E intake ${testInfo.parallelIndex}`;
+  const displayName = `E2E intake ${uniqueTestSuffix(testInfo)}`;
   const profile = {
     display_name: displayName,
     age: 76,

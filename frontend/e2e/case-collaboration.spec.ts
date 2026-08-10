@@ -5,6 +5,7 @@ import {
   apiPatch,
   createCaseFixture,
   tokenFor,
+  uniqueTestSuffix,
 } from "./support";
 
 async function useAccount(page: Page, token: string, path: string) {
@@ -20,9 +21,10 @@ test("a family clue moves through commander review and returns as confirmed prog
   page,
   request,
 }, testInfo) => {
-  const fixture = await createCaseFixture(request, `collaboration-${testInfo.parallelIndex}`);
+  const suffix = uniqueTestSuffix(testInfo);
+  const fixture = await createCaseFixture(request, `collaboration-${suffix}`);
   const familyToken = await tokenFor(request, accounts.family);
-  const clueContent = `Browser clue ${testInfo.parallelIndex}: north gate observation.`;
+  const clueContent = `Browser clue ${suffix}: north gate observation.`;
 
   await useAccount(page, familyToken, "/family");
   await page.getByRole("button", { name: fixture.displayName }).click();

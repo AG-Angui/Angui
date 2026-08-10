@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { accounts, createCaseFixture, demoPassword } from "./support";
+import {
+  accounts,
+  createCaseFixture,
+  demoPassword,
+  uniqueTestSuffix,
+} from "./support";
 
 async function login(page: Page, email: string) {
   await page.goto("/");
@@ -13,7 +18,7 @@ test("a case created through the live API is visible only in its member workspac
   page,
   request,
 }, testInfo) => {
-  const fixture = await createCaseFixture(request, String(testInfo.parallelIndex));
+  const fixture = await createCaseFixture(request, uniqueTestSuffix(testInfo));
 
   await login(page, accounts.family);
   await page.goto("/family");

@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { accounts, apiGet, tokenFor } from "./support";
+import { accounts, apiGet, tokenFor, uniqueTestSuffix } from "./support";
 
 test("a profile change made in the browser persists on the server", async ({
   page,
   request,
 }, testInfo) => {
   const token = await tokenFor(request, accounts.family);
-  const displayName = `E2E family ${testInfo.parallelIndex}`;
+  const displayName = `E2E family ${uniqueTestSuffix(testInfo)}`;
 
   await page.goto("/");
   await page.evaluate((sessionToken) => {

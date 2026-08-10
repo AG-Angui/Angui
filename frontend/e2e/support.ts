@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext, type TestInfo } from "@playwright/test";
 
 export const demoPassword = "e2e-demo-password";
 export const accounts = {
@@ -8,6 +8,16 @@ export const accounts = {
   learner: "learner@demo.invalid",
   admin: "admin@demo.invalid",
 } as const;
+
+const localRunId = `local-${process.pid}-${Date.now()}`;
+
+export function uniqueTestSuffix(testInfo: TestInfo) {
+  const runId = process.env.GITHUB_RUN_ID
+    ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+    : localRunId;
+  const testId = testInfo.testId.replace(/[^a-zA-Z0-9-]/g, "-").slice(-40);
+  return `${runId}-${testId}-r${testInfo.retry}`;
+}
 
 export async function tokenFor(request: APIRequestContext, email: string) {
   const response = await request.post("/api/auth/login", {

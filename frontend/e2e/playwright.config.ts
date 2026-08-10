@@ -1,8 +1,17 @@
 import { defineConfig } from "@playwright/test";
 
-const backendPort = 8081;
-const frontendPort = 5174;
-const databaseUrl = "sqlite://.e2e/angui-e2e.db?mode=rwc";
+const runId = (
+  process.env.GITHUB_RUN_ID
+    ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+    : `local-${process.pid}-${Date.now()}`
+).replace(/[^a-zA-Z0-9-]/g, "-");
+const portOffset = (process.pid % 1000) * 2;
+const backendPort = Number(process.env.ANGUI_E2E_BACKEND_PORT ?? 8081 + portOffset);
+const frontendPort = Number(
+  process.env.ANGUI_E2E_FRONTEND_PORT ?? 5174 + portOffset,
+);
+const databaseFile = `.e2e/angui-e2e-${runId}.db`;
+const databaseUrl = `sqlite://${databaseFile}?mode=rwc`;
 const reuseExistingServer =
   !process.env.CI && process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "1";
 
@@ -31,6 +40,7 @@ export default defineConfig({
       reuseExistingServer,
       env: {
         DATABASE_URL: databaseUrl,
+        ANGUI_E2E_DATABASE_FILE: databaseFile,
         ANGUI_HOST: "127.0.0.1",
         ANGUI_PORT: String(backendPort),
         ANGUI_FRONTEND_ORIGIN: `http://127.0.0.1:${frontendPort}`,
@@ -38,7 +48,7 @@ export default defineConfig({
         ANGUI_ALLOW_DEMO_BOOTSTRAP: "1",
         ANGUI_DEMO_PASSWORD: "e2e-demo-password",
         ANGUI_DEMO_GRANT_REVIEWER_ADMINS: "1",
-        ANGUI_ATTACHMENT_STORAGE_DIRECTORY: ".e2e/attachments",
+        ANGUI_ATTACHMENT_STORAGE_DIRECTORY: `.e2e/attachments-${runId}`,
         RUST_LOG: "info,sqlx=warn",
       },
     },

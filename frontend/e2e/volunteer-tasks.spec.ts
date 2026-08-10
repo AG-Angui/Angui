@@ -5,6 +5,7 @@ import {
   createCaseFixture,
   createTaskFixture,
   tokenFor,
+  uniqueTestSuffix,
 } from "./support";
 
 async function useAccount(page: Page, token: string, path: string) {
@@ -20,8 +21,9 @@ test("a volunteer can apply for an open task and the application is persisted", 
   page,
   request,
 }, testInfo) => {
-  const fixture = await createCaseFixture(request, `volunteer-${testInfo.parallelIndex}`);
-  const task = await createTaskFixture(request, fixture.caseId, String(testInfo.parallelIndex));
+  const suffix = uniqueTestSuffix(testInfo);
+  const fixture = await createCaseFixture(request, `volunteer-${suffix}`);
+  const task = await createTaskFixture(request, fixture.caseId, suffix);
   const volunteerToken = await tokenFor(request, accounts.volunteer);
 
   await useAccount(page, volunteerToken, "/volunteer");

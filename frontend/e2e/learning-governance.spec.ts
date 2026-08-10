@@ -4,6 +4,7 @@ import {
   apiPost,
   createPublishedLearningResource,
   tokenFor,
+  uniqueTestSuffix,
 } from "./support";
 
 async function useAccount(page: Page, token: string, path: string) {
@@ -21,7 +22,7 @@ test("published learning content is visible to learners and withdrawal revokes i
 }, testInfo) => {
   const resource = await createPublishedLearningResource(
     request,
-    String(testInfo.parallelIndex),
+    uniqueTestSuffix(testInfo),
   );
   const learnerToken = await tokenFor(request, accounts.learner);
 
