@@ -32,6 +32,6 @@ ALTER TABLE learning_resources ADD COLUMN category_id VARCHAR(64) NULL;
 -- statement-break
 ALTER TABLE learning_resources ADD COLUMN category_name VARCHAR(160) NULL;
 -- statement-break
-ALTER TABLE learning_resources ADD CONSTRAINT fk_learning_resources_category FOREIGN KEY (category_id) REFERENCES learning_categories(id) ON UPDATE CASCADE ON DELETE RESTRICT;
--- statement-break
 CREATE INDEX idx_learning_resources_category ON learning_resources(category_id);
+-- statement-break
+ALTER TABLE learning_resources ADD CONSTRAINT fk_learning_resources_category FOREIGN KEY (category_id) REFERENCES learning_categories(id) ON UPDATE CASCADE ON DELETE RESTRICT;

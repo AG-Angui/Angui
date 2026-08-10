@@ -220,6 +220,18 @@ describe("LearningGovernancePage", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a retryable error instead of an empty category list when category loading fails", async () => {
+    mocked.listCategories.mockRejectedValue(
+      new ApiClientError(503, "request_failed", "分类治理服务暂时不可用"),
+    );
+    render(<LearningGovernancePage />);
+
+    expect(
+      await screen.findByText("分类治理服务暂时不可用"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+  });
+
   it("offers category lifecycle actions and sends the administrator reason", async () => {
     mocked.listCategories.mockResolvedValue([
       {

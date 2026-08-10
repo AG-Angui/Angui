@@ -290,6 +290,39 @@ describe("LearningCenterPage", () => {
     });
   });
 
+  it("shows a retryable error and re-enables the learner draft submission after failure", async () => {
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "没有卡片"),
+    );
+    mocked.submitLearningResourceDraft.mockRejectedValue(
+      new ApiClientError(503, "request_failed", "草稿服务暂时不可用"),
+    );
+    render(<LearningCenterPage />);
+
+    await screen.findByRole("heading", { name: "提交学习资源草稿" });
+    fireEvent.change(screen.getByLabelText("草稿标题"), {
+      target: { value: "失败草稿" },
+    });
+    fireEvent.change(screen.getByLabelText("草稿来源名称"), {
+      target: { value: "学习小组" },
+    });
+    fireEvent.change(screen.getByLabelText("摘要"), {
+      target: { value: "摘要" },
+    });
+    fireEvent.change(screen.getByLabelText("正文"), {
+      target: { value: "正文" },
+    });
+    fireEvent.change(screen.getByLabelText("提交理由"), {
+      target: { value: "覆盖失败后的重试路径" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交草稿" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("草稿服务暂时不可用"),
+    );
+    expect(screen.getByRole("button", { name: "提交草稿" })).toBeEnabled();
+  });
+
   it("submits a learner category proposal with a reason", async () => {
     mocked.getPublicPreventionCard.mockRejectedValue(
       new ApiClientError(404, "not_found", "没有卡片"),
@@ -313,5 +346,30 @@ describe("LearningCenterPage", () => {
       ),
     );
     expect(screen.getByRole("status")).toHaveTextContent("分类申请已提交");
+  });
+
+  it("shows a visible error when a learner category proposal fails", async () => {
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "没有卡片"),
+    );
+    mocked.submitLearningCategoryProposal.mockRejectedValue(
+      new ApiClientError(503, "request_failed", "分类申请服务暂时不可用"),
+    );
+    render(<LearningCenterPage />);
+
+    await screen.findByRole("heading", { name: "提交学习资源草稿" });
+    fireEvent.change(screen.getByLabelText("申请分类名称"), {
+      target: { value: "现场沟通" },
+    });
+    fireEvent.change(screen.getByLabelText("申请分类理由"), {
+      target: { value: "覆盖失败提示" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "申请分类" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "分类申请服务暂时不可用",
+      ),
+    );
   });
 });

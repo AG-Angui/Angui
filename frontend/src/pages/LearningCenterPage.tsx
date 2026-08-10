@@ -36,6 +36,14 @@ function messageFrom(cause: unknown) {
     : "暂时无法完成学习中心操作，请稍后重试。";
 }
 
+function isMissingCategoryEndpoint(cause: unknown) {
+  return (
+    cause instanceof ApiClientError &&
+    cause.status === 404 &&
+    cause.code === "not_found"
+  );
+}
+
 export function LearningCenterPage() {
   const { token, user } = useAuth();
   const preventionCacheReady = usePreventionCacheReady();
@@ -85,11 +93,14 @@ export function LearningCenterPage() {
       setQuestions(nextQuestions);
       // Categories are progressive enhancement for legacy deployments. A
       // missing category endpoint must not hide already published resources.
-      setCategories(
+      const nextCategories =
         typeof listLearningCategories === "function"
-          ? await listLearningCategories(token).catch(() => [])
-          : [],
-      );
+          ? await listLearningCategories(token).catch((cause) => {
+              if (isMissingCategoryEndpoint(cause)) return [];
+              throw cause;
+            })
+          : [];
+      setCategories(nextCategories);
       try {
         setPreventionCard(await getPublicPreventionCard());
       } catch (cause) {

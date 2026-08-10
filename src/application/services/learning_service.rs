@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, SecondsFormat, Utc};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, Set, TransactionTrait, TryInsertResult,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    TransactionTrait, TryInsertResult,
 };
 use serde_json::json;
 
@@ -157,11 +157,11 @@ pub async fn propose_category(
     require_learner(auth)?;
     let name = normalized_name(&request.name, "category", 160)?;
     let reason = required_text(&request.submission_reason, "submission_reason", 1_000)?;
-    let id = case_service::new_id();
+    let requested_id = case_service::new_id();
     let timestamp = now();
     let transaction = db.begin().await?;
     let inserted = learning_categories::Entity::insert(learning_categories::ActiveModel {
-        id: Set(id.clone()),
+        id: Set(requested_id.clone()),
         name: Set(name.clone()),
         normalized_name: Set(normalized_key(&name)),
         status: Set("pending".to_owned()),
@@ -178,21 +178,55 @@ pub async fn propose_category(
     .do_nothing()
     .exec(&transaction)
     .await?;
-    if !matches!(inserted, TryInsertResult::Inserted(_)) {
-        return Err(ApiError::Conflict(
-            "category already exists or is awaiting review".to_owned(),
-        ));
-    }
+    let (id, name, audit_action) = if matches!(inserted, TryInsertResult::Inserted(_)) {
+        (requested_id, name, "learning_category.submitted")
+    } else {
+        let existing = learning_categories::Entity::find()
+            .filter(learning_categories::Column::NormalizedName.eq(normalized_key(&name)))
+            .one(&transaction)
+            .await?
+            .ok_or(ApiError::Internal)?;
+        match existing.status.as_str() {
+            "pending" => {
+                return Err(ApiError::Conflict(
+                    "category is already awaiting review".to_owned(),
+                ));
+            }
+            "enabled" => {
+                return Err(ApiError::Conflict("category is already enabled".to_owned()));
+            }
+            "rejected" | "disabled" => {
+                let update = learning_categories::Entity::update_many()
+                    .col_expr(learning_categories::Column::Status, Expr::value("pending"))
+                    .col_expr(
+                        learning_categories::Column::SubmittedByUserId,
+                        Expr::value(auth.id.clone()),
+                    )
+                    .col_expr(
+                        learning_categories::Column::ReviewedByUserId,
+                        Expr::value(Option::<String>::None),
+                    )
+                    .col_expr(
+                        learning_categories::Column::UpdatedAt,
+                        Expr::value(timestamp.clone()),
+                    )
+                    .filter(learning_categories::Column::Id.eq(&existing.id))
+                    .filter(learning_categories::Column::Status.eq(&existing.status))
+                    .exec(&transaction)
+                    .await?;
+                if update.rows_affected != 1 {
+                    return Err(ApiError::Conflict(
+                        "category lifecycle changed before the proposal could be resubmitted"
+                            .to_owned(),
+                    ));
+                }
+                (existing.id, existing.name, "learning_category.resubmitted")
+            }
+            _ => return Err(ApiError::Internal),
+        }
+    };
     append_category_event(&transaction, auth, &id, "submitted", &reason).await?;
-    write_learning_audit(
-        &transaction,
-        auth,
-        "learning_category.submitted",
-        &id,
-        0,
-        "training",
-    )
-    .await?;
+    write_learning_audit(&transaction, auth, audit_action, &id, 0, "training").await?;
     transaction.commit().await?;
     Ok(LearningCategoryResponse {
         id,
@@ -210,31 +244,42 @@ pub async fn transition_category(
 ) -> Result<LearningCategoryResponse, ApiError> {
     require_admin(auth)?;
     let reason = required_text(&request.reason, "reason", 1_000)?;
+    let (expected_status, status) = match action {
+        "enable" => ("pending", "enabled"),
+        "reject" => ("pending", "rejected"),
+        "disable" => ("enabled", "disabled"),
+        _ => return Err(ApiError::Validation("unknown category action".to_owned())),
+    };
+    let transaction = db.begin().await?;
     let category = learning_categories::Entity::find_by_id(category_id)
-        .one(db)
+        .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("learning category does not exist".to_owned()))?;
-    let permitted = matches!(
-        (category.status.as_str(), action),
-        ("pending", "enable") | ("pending", "reject") | ("enabled", "disable")
-    );
-    if !permitted {
+    if category.status != expected_status {
         return Err(ApiError::Conflict(
             "category lifecycle transition is not allowed".to_owned(),
         ));
     }
-    let status = match action {
-        "enable" => "enabled",
-        "reject" => "rejected",
-        "disable" => "disabled",
-        _ => return Err(ApiError::Validation("unknown category action".to_owned())),
-    };
-    let transaction = db.begin().await?;
-    let mut update = category.into_active_model();
-    update.status = Set(status.to_owned());
-    update.reviewed_by_user_id = Set(Some(auth.id.clone()));
-    update.updated_at = Set(now());
-    let category = update.update(&transaction).await?;
+    let update = learning_categories::Entity::update_many()
+        .col_expr(learning_categories::Column::Status, Expr::value(status))
+        .col_expr(
+            learning_categories::Column::ReviewedByUserId,
+            Expr::value(Some(auth.id.clone())),
+        )
+        .col_expr(learning_categories::Column::UpdatedAt, Expr::value(now()))
+        .filter(learning_categories::Column::Id.eq(&category.id))
+        .filter(learning_categories::Column::Status.eq(expected_status))
+        .exec(&transaction)
+        .await?;
+    if update.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "category lifecycle changed before this transition could be applied".to_owned(),
+        ));
+    }
+    let category = learning_categories::Entity::find_by_id(category_id)
+        .one(&transaction)
+        .await?
+        .ok_or(ApiError::Internal)?;
     append_category_event(&transaction, auth, &category.id, status, &reason).await?;
     write_learning_audit(
         &transaction,

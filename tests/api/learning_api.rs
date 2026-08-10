@@ -916,6 +916,73 @@ async fn learner_category_proposals_gate_resource_drafts_and_keep_legacy_resourc
         test::read_body_json::<Value, _>(disabled_categories).await,
         json!([])
     );
+
+    let resubmitted_after_disable = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/categories/proposals")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "name": "safe orientation", "submission_reason": "The category is needed again for a revised newcomer curriculum." }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resubmitted_after_disable.status(), StatusCode::CREATED);
+    let resubmitted_after_disable: Value = test::read_body_json(resubmitted_after_disable).await;
+    assert_eq!(resubmitted_after_disable["id"], category_id);
+    assert_eq!(resubmitted_after_disable["status"], "pending");
+
+    let duplicate_pending = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/categories/proposals")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "name": "Safe Orientation", "submission_reason": "This duplicate must remain pending only once." }))
+            .to_request(),
+    )
+    .await;
+    assert_error(duplicate_pending, StatusCode::CONFLICT, "conflict").await;
+
+    let reject_resubmission = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/admin/learning/categories/{category_id}/reject"
+            ))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .set_json(
+                json!({ "reason": "The revised curriculum still needs a narrower category." }),
+            )
+            .to_request(),
+    )
+    .await;
+    assert_eq!(reject_resubmission.status(), StatusCode::OK);
+
+    let resubmitted_after_rejection = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/learning/categories/proposals")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "name": "SAFE ORIENTATION", "submission_reason": "A learner revised the proposal after administrator feedback." }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resubmitted_after_rejection.status(), StatusCode::CREATED);
+    let resubmitted_after_rejection: Value =
+        test::read_body_json(resubmitted_after_rejection).await;
+    assert_eq!(resubmitted_after_rejection["id"], category_id);
+    assert_eq!(resubmitted_after_rejection["status"], "pending");
 }
 
 async fn grant_admin(context: &TestContext, email: &str) {

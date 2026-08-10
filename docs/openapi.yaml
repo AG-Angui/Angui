@@ -1928,6 +1928,7 @@ paths:
       tags: [Learning]
       operationId: proposeLearningCategory
       summary: Submit a normalized category proposal for administrator review
+      description: A rejected or disabled same-name category is resubmitted to pending with a new learner reason while preserving its review history. Pending and enabled same-name categories return 409.
       security: [{ bearerAuth: [] }]
       x-account-types: [learner]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateLearningCategoryRequest" } } } }

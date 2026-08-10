@@ -129,8 +129,44 @@ test("learner category governance carries a draft through publication and filter
   await expect(publishedCard).toContainText(categoryName);
   await expect(publishedCard).toContainText("#e2e-tag");
 
+  const categoryFilterResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === "/api/learning/resources" &&
+      url.searchParams.get("category_id") === categoryId &&
+      !url.searchParams.has("tag")
+    );
+  });
   await page.getByLabel("分类筛选").selectOption(categoryId);
+  const categoryResources = (await (await categoryFilterResponse).json()) as Array<{
+    id: string;
+    category: { id: string } | null;
+  }>;
+  expect(categoryResources).toEqual([
+    expect.objectContaining({
+      id: draft.id,
+      category: expect.objectContaining({ id: categoryId }),
+    }),
+  ]);
   await expect(publishedCard).toBeVisible();
+
+  const tagFilterResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === "/api/learning/resources" &&
+      url.searchParams.get("category_id") === categoryId &&
+      url.searchParams.get("tag") === "e2e-tag"
+    );
+  });
   await page.getByLabel("标签筛选").selectOption("e2e-tag");
+  const tagResources = (await (await tagFilterResponse).json()) as Array<{
+    id: string;
+    tags: string[];
+  }>;
+  expect(tagResources).toEqual([
+    expect.objectContaining({ id: draft.id, tags: ["e2e-tag", "onboarding"] }),
+  ]);
   await expect(publishedCard).toBeVisible();
 });

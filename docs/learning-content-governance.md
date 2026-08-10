@@ -2,7 +2,7 @@
 
 ## 分类与标签治理（#193）
 
-- `learning_categories` 是分类的唯一治理来源：学习者只能通过 `POST /api/learning/categories/proposals` 提交 `pending` 申请；管理员以带理由的 `enable`、`reject`、`disable` 操作处理。分类名称会压缩内部空白并以大小写无关的规范键去重。
+- `learning_categories` 是分类的唯一治理来源：学习者只能通过 `POST /api/learning/categories/proposals` 提交 `pending` 申请；管理员以带理由的 `enable`、`reject`、`disable` 操作处理。分类名称会压缩内部空白并以大小写无关的规范键去重；被驳回或停用的同名分类可以由学习者附带新理由重新提交，原记录回到 `pending`，历史审核事件保留。
 - 学习资源保留原有 `tags_json`，以便既有数据和三数据库部署平滑兼容；服务端对标签压缩空白、按规范键去重，并限制为最多 12 个。资源列表支持 `category_id` 与 `tag` 的 AND 组合筛选。
 - `learning_resources.category_id` 和 `category_name` 均可为空。旧资源无需回填，仍可读、可搜索；新资源只能选择 `enabled` 分类。分类被停用后不会回写或隐藏历史资源，响应使用资源写入时的分类名称快照，保证版本和审计可追溯。
 - 学习者只能从学习中心调用 `POST /api/learning/resources/drafts`，且服务端强制 `visibility=learner` 与 `permitted_use=training`。该端点只写入 `submitted` 事件，之后仍必须由不同管理员完成去标识、审核和发布；它不会提供任何绕过内容治理的发布能力。

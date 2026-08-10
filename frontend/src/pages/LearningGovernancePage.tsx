@@ -63,6 +63,14 @@ function errorMessage(cause: unknown) {
     : "暂时无法完成内容治理操作，请稍后重试。";
 }
 
+function isMissingCategoryEndpoint(cause: unknown) {
+  return (
+    cause instanceof ApiClientError &&
+    cause.status === 404 &&
+    cause.code === "not_found"
+  );
+}
+
 function parseTags(value: string) {
   return value
     .split("，")
@@ -215,11 +223,14 @@ export function LearningGovernancePage() {
       setQuestions(nextQuestions);
       // Keep resource governance usable while rolling out the optional
       // category-governance endpoint to older deployments.
-      setCategories(
+      const nextCategories =
         typeof listManagedLearningCategories === "function"
-          ? await listManagedLearningCategories(token).catch(() => [])
-          : [],
-      );
+          ? await listManagedLearningCategories(token).catch((cause) => {
+              if (isMissingCategoryEndpoint(cause)) return [];
+              throw cause;
+            })
+          : [];
+      setCategories(nextCategories);
     } catch (cause) {
       setLoadError(errorMessage(cause));
     } finally {
