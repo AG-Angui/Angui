@@ -3,12 +3,15 @@ import { defineConfig } from "@playwright/test";
 const runId = (
   process.env.GITHUB_RUN_ID
     ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
-    : `local-${process.pid}-${Date.now()}`
+    : process.env.ANGUI_E2E_RUN_ID ?? "local"
 ).replace(/[^a-zA-Z0-9-]/g, "-");
-const portOffset = (process.pid % 1000) * 2;
-const backendPort = Number(process.env.ANGUI_E2E_BACKEND_PORT ?? 8081 + portOffset);
+const portSeed = [...runId].reduce(
+  (hash, character) => (hash * 31 + character.charCodeAt(0)) % 10_000,
+  0,
+);
+const backendPort = Number(process.env.ANGUI_E2E_BACKEND_PORT ?? 20_000 + portSeed);
 const frontendPort = Number(
-  process.env.ANGUI_E2E_FRONTEND_PORT ?? 5174 + portOffset,
+  process.env.ANGUI_E2E_FRONTEND_PORT ?? 40_000 + portSeed,
 );
 const databaseFile = `.e2e/angui-e2e-${runId}.db`;
 const databaseUrl = `sqlite://${databaseFile}?mode=rwc`;
@@ -29,38 +32,31 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: [
-    {
-      command: "node e2e/start-backend.mjs",
-      cwd: "..",
-      url: `http://127.0.0.1:${backendPort}/api/health`,
-      // A cold Cargo cache compiles the migration and application binaries
-      // before the health endpoint becomes available.
-      timeout: 300_000,
-      reuseExistingServer,
-      env: {
-        DATABASE_URL: databaseUrl,
-        ANGUI_E2E_DATABASE_FILE: databaseFile,
-        ANGUI_HOST: "127.0.0.1",
-        ANGUI_PORT: String(backendPort),
-        ANGUI_FRONTEND_ORIGIN: `http://127.0.0.1:${frontendPort}`,
-        ANGUI_RUNTIME_ENV: "test",
-        ANGUI_ALLOW_DEMO_BOOTSTRAP: "1",
-        ANGUI_DEMO_PASSWORD: "e2e-demo-password",
-        ANGUI_DEMO_GRANT_REVIEWER_ADMINS: "1",
-        ANGUI_ATTACHMENT_STORAGE_DIRECTORY: `.e2e/attachments-${runId}`,
-        RUST_LOG: "info,sqlx=warn",
-      },
+  webServer: {
+    command: "node e2e/start-e2e.mjs",
+    cwd: "..",
+    // Readiness goes through Vite's proxy, so both the frontend listener and
+    // the backend health endpoint must be available before tests begin.
+    url: `http://127.0.0.1:${frontendPort}/api/health`,
+    // A cold Cargo cache compiles the migration and application binaries
+    // before the health endpoint becomes available.
+    timeout: 300_000,
+    reuseExistingServer,
+    env: {
+      DATABASE_URL: databaseUrl,
+      ANGUI_E2E_DATABASE_FILE: databaseFile,
+      ANGUI_E2E_BACKEND_PORT: String(backendPort),
+      ANGUI_E2E_FRONTEND_PORT: String(frontendPort),
+      ANGUI_HOST: "127.0.0.1",
+      ANGUI_PORT: String(backendPort),
+      ANGUI_FRONTEND_ORIGIN: `http://127.0.0.1:${frontendPort}`,
+      ANGUI_RUNTIME_ENV: "test",
+      ANGUI_ALLOW_DEMO_BOOTSTRAP: "1",
+      ANGUI_DEMO_PASSWORD: "e2e-demo-password",
+      ANGUI_DEMO_GRANT_REVIEWER_ADMINS: "1",
+      ANGUI_ATTACHMENT_STORAGE_DIRECTORY: `.e2e/attachments-${runId}`,
+      VITE_API_PROXY_TARGET: `http://127.0.0.1:${backendPort}`,
+      RUST_LOG: "info,sqlx=warn",
     },
-    {
-      command: "node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174 --strictPort",
-      cwd: "..",
-      url: `http://127.0.0.1:${frontendPort}`,
-      timeout: 60_000,
-      reuseExistingServer,
-      env: {
-        VITE_API_PROXY_TARGET: `http://127.0.0.1:${backendPort}`,
-      },
-    },
-  ],
+  },
 });
