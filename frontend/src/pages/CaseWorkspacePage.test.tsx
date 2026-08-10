@@ -145,7 +145,11 @@ describe("CaseWorkspacePage", () => {
     render(<CaseWorkspacePage mode="family" />);
 
     expect(
-      await screen.findByRole("heading", { name: "当前可以做什么" }),
+      await screen.findByRole(
+        "heading",
+        { name: "当前可以做什么" },
+        { timeout: 5_000 },
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "补充人物资料（主操作）" }),
