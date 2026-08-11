@@ -13,6 +13,9 @@ import { VolunteerWorkspacePage } from "./pages/VolunteerWorkspacePage";
 import { AccessRequestPage } from "./pages/AccessRequestPage";
 import { PasswordSetupPage } from "./pages/PasswordSetupPage";
 import { AccessRequestAdminPage } from "./pages/AccessRequestAdminPage";
+import { FamilyHomePage } from "./pages/FamilyHomePage";
+import { FamilyIntakePage } from "./pages/FamilyIntakePage";
+import { FamilyCaseProgressPage } from "./pages/FamilyCaseProgressPage";
 
 function CaseRoleRoute({
   capability,
@@ -105,7 +108,23 @@ function App() {
           path="family"
           element={
             <CaseRoleRoute familyOnly>
-              <CaseWorkspacePage mode="family" />
+              <FamilyHomePage />
+            </CaseRoleRoute>
+          }
+        />
+        <Route
+          path="family/intake"
+          element={
+            <CaseRoleRoute familyOnly>
+              <FamilyIntakePage />
+            </CaseRoleRoute>
+          }
+        />
+        <Route
+          path="family/cases/:caseId"
+          element={
+            <CaseRoleRoute familyOnly>
+              <FamilyCaseProgressPage />
             </CaseRoleRoute>
           }
         />

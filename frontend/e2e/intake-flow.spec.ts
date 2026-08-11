@@ -102,6 +102,6 @@ test("the intake confirmation workflow creates one browser-visible case only aft
 
   await useFamilySession(page, token);
   await expect(
-    page.getByRole("button", { name: displayName }),
+    page.getByRole("link", { name: new RegExp(displayName) }),
   ).toBeVisible();
 });
