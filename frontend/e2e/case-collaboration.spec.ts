@@ -27,7 +27,13 @@ test("a family clue moves through commander review and returns as confirmed prog
   const clueContent = `Browser clue ${suffix}: north gate observation.`;
 
   await useAccount(page, familyToken, "/family");
-  await page.getByRole("link", { name: new RegExp(fixture.displayName) }).click();
+  const familyCaseLink = page.getByRole("link", {
+    name: fixture.displayName,
+    exact: false,
+  });
+  await expect(page.getByRole("region", { name: "案件列表" })).toBeVisible();
+  await expect(familyCaseLink).toBeVisible();
+  await familyCaseLink.click();
   await page.getByLabel("新线索内容").fill(clueContent);
   await page.getByRole("button", { name: "提交线索" }).click();
   await expect(page.getByLabel("新线索内容")).toHaveValue("");
@@ -53,7 +59,13 @@ test("a family clue moves through commander review and returns as confirmed prog
   ).toBeVisible();
 
   await useAccount(page, familyToken, "/family");
-  await page.getByRole("link", { name: new RegExp(fixture.displayName) }).click();
+  const confirmedFamilyCaseLink = page.getByRole("link", {
+    name: fixture.displayName,
+    exact: false,
+  });
+  await expect(page.getByRole("region", { name: "案件列表" })).toBeVisible();
+  await expect(confirmedFamilyCaseLink).toBeVisible();
+  await confirmedFamilyCaseLink.click();
   await expect(page.getByRole("heading", { name: "公开进展" })).toBeVisible();
   await expect(page.getByText("已审核的进展更新")).toBeVisible();
 });

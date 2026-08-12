@@ -137,7 +137,16 @@ export function LoginPage() {
               </div>
             </label>
             {passwordError && <p className="text-sm text-red-700" role="alert">{passwordError}</p>}
-            {error && <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">{error}</p>}
+            {error && (
+              <p
+                id="login-error"
+                className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+                role="alert"
+                aria-live="assertive"
+              >
+                {error}
+              </p>
+            )}
             <Button type="submit" variant="primary" fullWidth isDisabled={submitting}>
               {submitting ? <Spinner size="sm" aria-label="正在验证登录信息" /> : <LogIn size={17} aria-hidden="true" />}
               {submitting ? "正在验证" : "登录"}
