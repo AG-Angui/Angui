@@ -3,7 +3,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl libde265-0 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 angui \
     && install -d -o angui -g angui /app/data
