@@ -569,46 +569,6 @@ fn is_heic_container(bytes: &[u8]) -> bool {
     })
 }
 
-#[cfg(test)]
-mod image_normalization_tests {
-    use super::{ensure_declared_type_matches, is_heic_container, normalize_image};
-
-    const PNG: [u8; 68] = [
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
-        0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1, 5,
-        1, 1, 39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-    ];
-
-    #[test]
-    fn accepts_mobile_png_mime_variants_but_rejects_declared_mismatches() {
-        assert!(ensure_declared_type_matches("", "image/png").is_ok());
-        assert!(ensure_declared_type_matches("image/x-png", "image/png").is_ok());
-        assert!(ensure_declared_type_matches("image/png", "image/jpeg").is_err());
-        assert!(ensure_declared_type_matches("application/pdf", "image/png").is_err());
-    }
-
-    #[test]
-    fn normalizes_real_png_when_mobile_mime_is_empty_or_legacy() {
-        for declared in ["", "image/x-png"] {
-            let (content_type, extension, normalized) =
-                normalize_image(declared, &PNG, 1024).expect("valid PNG should normalize");
-            assert_eq!(content_type, "image/png");
-            assert_eq!(extension, "png");
-            assert!(!normalized.is_empty());
-        }
-    }
-
-    #[test]
-    fn detects_only_heic_compatible_iso_brands() {
-        let mut heic = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec();
-        assert!(is_heic_container(&heic));
-        heic[8..12].copy_from_slice(b"avif");
-        heic[16..20].copy_from_slice(b"avif");
-        heic[20..24].copy_from_slice(b"avif");
-        assert!(!is_heic_container(&heic));
-    }
-}
-
 async fn remove_file_best_effort(path: PathBuf) {
     let _ = web::block(move || fs::remove_file(path)).await;
 }
@@ -686,4 +646,44 @@ fn new_id() -> String {
 }
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod image_normalization_tests {
+    use super::{ensure_declared_type_matches, is_heic_container, normalize_image};
+
+    const PNG: [u8; 68] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+        0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1, 5,
+        1, 1, 39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    #[test]
+    fn accepts_mobile_png_mime_variants_but_rejects_declared_mismatches() {
+        assert!(ensure_declared_type_matches("", "image/png").is_ok());
+        assert!(ensure_declared_type_matches("image/x-png", "image/png").is_ok());
+        assert!(ensure_declared_type_matches("image/png", "image/jpeg").is_err());
+        assert!(ensure_declared_type_matches("application/pdf", "image/png").is_err());
+    }
+
+    #[test]
+    fn normalizes_real_png_when_mobile_mime_is_empty_or_legacy() {
+        for declared in ["", "image/x-png"] {
+            let (content_type, extension, normalized) =
+                normalize_image(declared, &PNG, 1024).expect("valid PNG should normalize");
+            assert_eq!(content_type, "image/png");
+            assert_eq!(extension, "png");
+            assert!(!normalized.is_empty());
+        }
+    }
+
+    #[test]
+    fn detects_only_heic_compatible_iso_brands() {
+        let mut heic = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec();
+        assert!(is_heic_container(&heic));
+        heic[8..12].copy_from_slice(b"avif");
+        heic[16..20].copy_from_slice(b"avif");
+        heic[20..24].copy_from_slice(b"avif");
+        assert!(!is_heic_container(&heic));
+    }
 }

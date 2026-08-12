@@ -29,9 +29,9 @@ pub fn decode_heic_to_jpeg(bytes: &[u8], max_image_bytes: usize) -> Result<Vec<u
     #[cfg(not(feature = "heic"))]
     {
         let _ = (bytes, max_image_bytes);
-        return Err(ApiError::Validation(
+        Err(ApiError::Validation(
             "HEIC processing is not enabled on this server".to_owned(),
-        ));
+        ))
     }
     #[cfg(feature = "heic")]
     {
