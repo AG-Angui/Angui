@@ -122,7 +122,32 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
         expected_photo_bytes.as_slice()
     );
 
-    for _ in 0..3 {
+    for (mime, filename) in [("image/x-png", "legacy.png"), ("", "blank-mime.png")] {
+        let compatible_boundary = format!("intake-photo-{filename}");
+        let mut compatible_upload = format!(
+            "--{compatible_boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n"
+        )
+        .into_bytes();
+        compatible_upload.extend_from_slice(&PNG);
+        compatible_upload
+            .extend_from_slice(format!("\r\n--{compatible_boundary}--\r\n").as_bytes());
+        let uploaded = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/intake-sessions/{session_id}/photos"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+                .insert_header((
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={compatible_boundary}"),
+                ))
+                .set_payload(compatible_upload)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(uploaded.status(), StatusCode::CREATED);
+    }
+
+    for _ in 0..1 {
         let uploaded = test::call_service(
             &app,
             test::TestRequest::post()

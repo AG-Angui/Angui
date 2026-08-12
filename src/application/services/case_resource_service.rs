@@ -62,7 +62,7 @@ pub async fn read_single_image_upload(
         let content_type = field
             .content_type()
             .map(|value| value.essence_str().to_owned())
-            .ok_or_else(|| ApiError::Validation("file content type is required".to_owned()))?;
+            .unwrap_or_default();
         let mut bytes = Vec::new();
         while let Some(chunk) = field.next().await {
             let chunk = chunk
@@ -484,6 +484,18 @@ fn normalize_image(
             "image must contain between 1 byte and {max_image_bytes} bytes"
         )));
     }
+    let declared_essence = declared_content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if is_heic_container(bytes) {
+        ensure_declared_type_matches(&declared_essence, "image/heic")?;
+        let normalized =
+            crate::services::heic_decoder::decode_heic_to_jpeg(bytes, max_image_bytes)?;
+        return Ok(("image/jpeg".to_owned(), "jpg", normalized));
+    }
     let format = image::guess_format(bytes)
         .map_err(|_| ApiError::Validation("file content is not a supported image".to_owned()))?;
     let (content_type, extension) = match format {
@@ -491,21 +503,11 @@ fn normalize_image(
         ImageFormat::Png => ("image/png", "png"),
         _ => {
             return Err(ApiError::Validation(
-                "only JPEG and PNG images are accepted".to_owned(),
+                "only JPEG, PNG, and HEIC images are accepted".to_owned(),
             ));
         }
     };
-    let declared_essence = declared_content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if declared_essence != content_type {
-        return Err(ApiError::Validation(
-            "declared content type does not match image content".to_owned(),
-        ));
-    }
+    ensure_declared_type_matches(&declared_essence, content_type)?;
     let decoded = image::load_from_memory_with_format(bytes, format)
         .map_err(|_| ApiError::Validation("image data could not be decoded".to_owned()))?;
     if decoded.width() > 8_000
@@ -527,6 +529,84 @@ fn normalize_image(
         )));
     }
     Ok((content_type.to_owned(), extension, output))
+}
+
+fn ensure_declared_type_matches(
+    declared_content_type: &str,
+    detected_content_type: &str,
+) -> Result<(), ApiError> {
+    let is_match = match detected_content_type {
+        "image/jpeg" => matches!(declared_content_type, "" | "image/jpeg" | "image/jpg"),
+        "image/png" => matches!(declared_content_type, "" | "image/png" | "image/x-png"),
+        "image/heic" => matches!(
+            declared_content_type,
+            "" | "image/heic" | "image/heif" | "image/x-heic" | "image/x-heif"
+        ),
+        _ => false,
+    };
+    if is_match {
+        Ok(())
+    } else {
+        Err(ApiError::Validation(
+            "declared content type does not match image content".to_owned(),
+        ))
+    }
+}
+
+fn is_heic_container(bytes: &[u8]) -> bool {
+    if bytes.len() < 16 || &bytes[4..8] != b"ftyp" {
+        return false;
+    }
+    let box_size = u32::from_be_bytes(bytes[..4].try_into().unwrap_or([0; 4])) as usize;
+    if box_size < 16 || box_size > bytes.len() {
+        return false;
+    }
+    bytes[8..box_size].chunks_exact(4).any(|brand| {
+        matches!(
+            brand,
+            b"heic" | b"heix" | b"hevc" | b"heim" | b"heis" | b"hevm" | b"hevs"
+        )
+    })
+}
+
+#[cfg(test)]
+mod image_normalization_tests {
+    use super::{ensure_declared_type_matches, is_heic_container, normalize_image};
+
+    const PNG: [u8; 68] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+        0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1, 5,
+        1, 1, 39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    #[test]
+    fn accepts_mobile_png_mime_variants_but_rejects_declared_mismatches() {
+        assert!(ensure_declared_type_matches("", "image/png").is_ok());
+        assert!(ensure_declared_type_matches("image/x-png", "image/png").is_ok());
+        assert!(ensure_declared_type_matches("image/png", "image/jpeg").is_err());
+        assert!(ensure_declared_type_matches("application/pdf", "image/png").is_err());
+    }
+
+    #[test]
+    fn normalizes_real_png_when_mobile_mime_is_empty_or_legacy() {
+        for declared in ["", "image/x-png"] {
+            let (content_type, extension, normalized) =
+                normalize_image(declared, &PNG, 1024).expect("valid PNG should normalize");
+            assert_eq!(content_type, "image/png");
+            assert_eq!(extension, "png");
+            assert!(!normalized.is_empty());
+        }
+    }
+
+    #[test]
+    fn detects_only_heic_compatible_iso_brands() {
+        let mut heic = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec();
+        assert!(is_heic_container(&heic));
+        heic[8..12].copy_from_slice(b"avif");
+        heic[16..20].copy_from_slice(b"avif");
+        heic[20..24].copy_from_slice(b"avif");
+        assert!(!is_heic_container(&heic));
+    }
 }
 
 async fn remove_file_best_effort(path: PathBuf) {

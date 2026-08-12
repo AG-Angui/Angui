@@ -18,7 +18,7 @@
 | `POST` | `/api/auth/logout` | `204` | 撤销当前服务端会话 |
 | `POST` | `/api/intake-sessions` | `201` | 创建成员的未确认走失信息问询会话 |
 | `GET` | `/api/intake-sessions/{session_id}/photos` | `200` | 列出创建者受控上传的走失者照片元数据 |
-| `POST` | `/api/intake-sessions/{session_id}/photos` | `201` | 上传一张受控处理的 JPEG/PNG 走失者照片 |
+| `POST` | `/api/intake-sessions/{session_id}/photos` | `201` | 上传一张受控处理的 JPEG/PNG/HEIC/HEIF 走失者照片 |
 | `GET` | `/api/intake-sessions/{session_id}/photos/{photo_id}` | `200` | 读取创建者受控照片，不返回公共 URL |
 | `POST` | `/api/intake-sessions/{session_id}/answers` | `201` | 追加一个未确认答案并获取下一问 |
 | `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
@@ -197,7 +197,7 @@ AI 或其他自动化能力未来只能生成草稿或待审核输入，不得�
 
 For v3, `basic_information` must explicitly contain a name (or appellation), height from 30 to 250 cm, and an appearance description. The initial AI review and its deterministic safeguard flag placeholders, pure numbers, repeated characters, `123`, `456`, and similarly low-information descriptions for family confirmation; they never replace or invent a reported fact.
 
-Before the second confirmation creates a v3 case, the family must upload at least one JPEG or PNG portrait through `POST /api/intake-sessions/{session_id}/photos`. The service decodes and re-encodes the image before encrypted-at-rest storage, limits each session to four photos, and exposes no public URL. Only the creating family member can list or retrieve a pre-confirmation image. After confirmation, the same controlled record becomes a pending-review family case attachment available to authorized commanders, but not volunteers. The system does not implement EXIF location extraction, face recognition, similarity search, or an automated conclusion from a photograph. Phone numbers and photographs are omitted from ordinary audit metadata and every AI request, execution event, and audit record.
+Before the second confirmation creates a v3 case, the family must upload at least one JPEG, PNG, HEIC, or HEIF portrait through `POST /api/intake-sessions/{session_id}/photos`. The service validates actual bytes, decodes and re-encodes the image before encrypted-at-rest storage, limits each session to four photos, and exposes no public URL. Only the creating family member can list or retrieve a pre-confirmation image. After confirmation, the same controlled record becomes a pending-review family case attachment available to authorized commanders, but not volunteers. The system does not implement EXIF location extraction, face recognition, similarity search, or an automated conclusion from a photograph. Phone numbers, original HEIC bytes, and photographs are omitted from ordinary audit metadata and every AI request, execution event, and audit record.
 
 The server creates a `collecting` session and records the selected `question_set_version`. It always returns `guidance_mode: "rule_based"`, `missing_fields`, and the next ordered question from the active database definition. This is the required AI-unavailable fallback; no external model is called. The values remain unconfirmed drafts, never case facts. Raw answers are not included in audit metadata or ordinary logs. The session is owned by its creator; when a later confirmation associates it with a case, only an authorized commander of that case may additionally read it. The database's unique case association protects the later confirmation flow from linking a session to multiple cases.
 
@@ -268,6 +268,8 @@ Example:
 `POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available only after a case reaches `resolved` or `closed`. The server creates an internal placeholder `draft` plus a separately protected, administrator-reviewable material version scoped to confirmed clue and completed-task review material, then marks `deidentification_status` as `manual_review_required`. The placeholder contains no raw material and nothing is sent to AI at this stage. This endpoint does not publish, index, export, or print material; a separate authorized de-identification, review, and withdrawal workflow is required before any later reuse.
 
 `POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
+
+HEIC/HEIF 支持由 `heic` feature 提供；生产构建应使用 `cargo build --features heic`。Linux CI 与容器构建会编译依赖锁定的嵌入式 libheif，并安装 libde265 作为 HEVC 解码器；Windows 构建必须安装与 `Cargo.toml` 中 vcpkg metadata 对应的 libheif 开发包。未启用 feature 的兼容构建仍安全拒绝 HEIC，而不会把原始文件落盘。部署检查应确认服务启动时能加载 libheif，不能用桌面应用目录中的 DLL 代替。
 
 `POST /api/clues/{clue_id}/attachments` uses the same single-file JPEG/PNG validation, normalization, EXIF/GPS removal, byte limit, and protected storage policy. The attachment row, the clue-to-attachment link, and the audit event are committed together. A commander may add evidence to any clue in the case; family and volunteer members may only add evidence to clues they submitted. The new image remains `pending_review`, and ordinary attachment download rules still prevent family or volunteers from reading another member's internal evidence.
 

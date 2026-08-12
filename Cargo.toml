@@ -21,6 +21,7 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 http = "0.2.12"
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png"] }
+libheif-rs = { version = "2.7.0", default-features = false, features = ["v1_19", "embedded-libheif"], optional = true }
 lettre = { version = "0.11.15", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls", "hostname", "pool"] }
 log = "0.4.29"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
@@ -31,6 +32,10 @@ sha2 = "0.10.9"
 thiserror = "2.0.18"
 tokio = { version = "1.52.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
+
+[features]
+default = []
+heic = ["dep:libheif-rs"]
 
 [dev-dependencies]
 migration = { path = "migration" }
@@ -43,3 +48,8 @@ incremental = false
 [profile.test]
 debug = 0
 incremental = false
+
+[package.metadata.vcpkg]
+git = "https://github.com/microsoft/vcpkg"
+tag = "2026.05.25"
+dependencies = ["libheif[hevc,aom,x264,h264-decoder,jpeg]"]

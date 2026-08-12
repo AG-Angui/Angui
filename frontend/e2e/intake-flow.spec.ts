@@ -64,6 +64,18 @@ test("the intake confirmation workflow creates one browser-visible case only aft
     },
   );
   await expect(photoResponse).toBeOK();
+  const uploadedPhoto = (await photoResponse.json()) as {
+    id: string;
+    content_type: string;
+  };
+  expect(uploadedPhoto.content_type).toBe("image/png");
+  const privatePreview = await request.get(
+    `/api/intake-sessions/${session.id}/photos/${uploadedPhoto.id}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  await expect(privatePreview).toBeOK();
+  expect(privatePreview.headers()["cache-control"]).toContain("private");
+  expect(privatePreview.headers()["x-content-type-options"]).toBe("nosniff");
 
   const initialReview = await apiSsePost<{
     issues: Array<{ id: string }>;

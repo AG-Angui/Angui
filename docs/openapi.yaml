@@ -327,7 +327,7 @@ paths:
       tags: [Intake sessions]
       operationId: uploadIntakeSessionPhoto
       summary: Upload a controlled missing-person portrait
-      description: Only the session creator can upload one JPEG or PNG image. The server validates, decodes, and re-encodes it; it does not process EXIF location or run face recognition.
+      description: Only the session creator can upload one JPEG, PNG, HEIC, or HEIF image. The server validates actual bytes (client MIME may be empty or a mobile compatibility value), applies resource limits, decodes HEIC/HEIF when enabled, and re-encodes only JPEG/PNG with non-essential metadata removed. It does not process EXIF location or run face recognition, and never creates a public URL.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-data-classification: sensitive
@@ -343,7 +343,7 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: JPEG or PNG image.
+                  description: JPEG, PNG, HEIC, or HEIF image. The declared MIME is advisory; the server validates actual file content.
       responses:
         "201": { description: Controlled photo metadata, content: { application/json: { schema: { $ref: "#/components/schemas/IntakePhoto" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }

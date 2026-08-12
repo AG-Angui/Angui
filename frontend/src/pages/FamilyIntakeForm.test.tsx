@@ -17,6 +17,7 @@ const mocked = vi.hoisted(() => ({
   listIntakeAnswerRevisions: vi.fn(),
   listIntakeDraftVersions: vi.fn(),
   listIntakePhotos: vi.fn(),
+  downloadIntakePhoto: vi.fn(),
   acknowledgeIntakeAiInitialReview: vi.fn(),
   startIntakeAiInitialReview: vi.fn(),
   submitIntakeAnswer: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("../api/intake", () => ({
   listIntakeDraftVersions: (...args: unknown[]) =>
     mocked.listIntakeDraftVersions(...args),
   listIntakePhotos: (...args: unknown[]) => mocked.listIntakePhotos(...args),
+  downloadIntakePhoto: (...args: unknown[]) => mocked.downloadIntakePhoto(...args),
   acknowledgeIntakeAiInitialReview: (...args: unknown[]) =>
     mocked.acknowledgeIntakeAiInitialReview(...args),
   startIntakeAiInitialReview: (...args: unknown[]) =>
@@ -226,6 +228,7 @@ describe("FamilyIntakeForm", () => {
     mocked.listIntakeAnswerRevisions.mockResolvedValue([]);
     mocked.listIntakeDraftVersions.mockResolvedValue({ items: [] });
     mocked.listIntakePhotos.mockResolvedValue([]);
+    mocked.downloadIntakePhoto.mockResolvedValue(new Blob(["preview"], { type: "image/png" }));
     window.sessionStorage.clear();
   });
 
@@ -392,7 +395,7 @@ describe("FamilyIntakeForm", () => {
     expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
   });
 
-  it("uploads only a controlled JPEG or PNG portrait", async () => {
+  it("uploads a mobile-compatible PNG portrait and loads a private preview", async () => {
     window.sessionStorage.setItem(
       "angui:intake-tab-draft:family-1",
       JSON.stringify({ session: reportDetailsSession, answer: "" }),
@@ -413,8 +416,18 @@ describe("FamilyIntakeForm", () => {
     );
 
     const input = await screen.findByLabelText("上传走失者照片");
-    expect(input).toHaveAttribute("accept", "image/jpeg,image/png");
-    const file = new File(["portrait"], "portrait.png", { type: "image/png" });
+    expect(input).toHaveAttribute("accept", "image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif");
+    const createObjectUrl = vi.fn(() => "blob:controlled-preview");
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectUrl,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectUrl,
+    });
+    const file = new File(["portrait"], "portrait.png", { type: "image/x-png" });
     fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() =>
@@ -425,6 +438,43 @@ describe("FamilyIntakeForm", () => {
       ),
     );
     expect(await screen.findByText(/已上传：portrait\.png/)).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "已上传照片：portrait.png" })).toHaveAttribute("src", "blob:controlled-preview");
+    expect(mocked.downloadIntakePhoto).toHaveBeenCalledWith("family-session", "intake-1", "photo-1");
+  });
+
+  it.each([
+    new File(["portrait"], "portrait.png", { type: "" }),
+    new File(["portrait"], "portrait.heic", { type: "image/heic" }),
+  ])("accepts compatible mobile photo selection", async (file) => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: reportDetailsSession, answer: "" }),
+    );
+    mocked.uploadIntakePhoto.mockResolvedValue({
+      id: "photo-compatible",
+      original_filename: file.name,
+      content_type: "image/jpeg",
+      byte_size: 1024,
+      created_at: "2026-08-05T08:00:00Z",
+    });
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("上传走失者照片"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() =>
+      expect(mocked.uploadIntakePhoto).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        file,
+      ),
+    );
   });
 
   it("persists the v3 question-set version after submitting an answer", async () => {
@@ -617,7 +667,7 @@ describe("FamilyIntakeForm", () => {
     });
 
     expect(mocked.uploadIntakePhoto).not.toHaveBeenCalled();
-    expect(await screen.findByText("请上传 JPEG 或 PNG 格式的走失者照片。")).toBeInTheDocument();
+    expect(await screen.findByText("请上传 JPG、PNG 或 HEIC 格式的走失者照片。手机相册导出的照片可直接选择。")).toBeInTheDocument();
   });
 
   it("omits a blank age from the structured basic-information answer", async () => {
