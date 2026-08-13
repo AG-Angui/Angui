@@ -66,15 +66,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt, clippy
-
-      # Build the pinned embedded libheif and its HEVC decoder before Clippy,
-      # tests, and release packaging. Do not rely on the runner's libheif
-      # package, which can be older than the SecurityLimits API we use.
-      - name: Install HEIC decoder build prerequisites
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends cmake libde265-dev pkg-config
-
+          
       - name: Run release Rust checks and build
         run: |
           cargo fmt --all -- --check
