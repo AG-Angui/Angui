@@ -630,6 +630,38 @@ describe("FamilyIntakeForm", () => {
     );
   });
 
+  it("keeps the saved rule-based question when AI follow-up is unavailable", async () => {
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: phaseTwoSession, answer: "" }),
+    );
+    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(phaseTwoSession));
+    mocked.getIntakeAiFollowUp.mockRejectedValue(new Error("AI guidance unavailable"));
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    fireEvent.change(await screen.findByRole("textbox"), {
+      target: { value: "社区公园" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+
+    await waitFor(() =>
+      expect(mocked.getIntakeAiFollowUp).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "常去地点" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("keeps v2 sessions free of the v3 photo requirement", async () => {
     window.sessionStorage.setItem(
       "angui:intake-tab-draft:family-1",

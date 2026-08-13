@@ -759,18 +759,22 @@ pub async fn get_ai_follow_up(
         .await?
         .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
     require_session_creator(&session, auth)?;
+    if !can_request_ai_follow_up(&session.status) {
+        return Ok(IntakeAiFollowUpResponse {
+            question: None,
+            degradation_status: "not_applicable".to_owned(),
+            generated_at: now(),
+        });
+    }
     let questions = questions_for_version(db, session.question_set_version).await?;
     let answers = parse_answers(&session)?;
     let missing = missing_fields(&answers, &questions);
-    let fallback = next_question_for_phase(
-        &questions,
-        &missing,
-        &IntakePhaseProgress::for_answers(&answers, session.question_set_version),
-    );
+    let phase = IntakePhaseProgress::for_answers(&answers, session.question_set_version);
+    let fallback = next_optional_follow_up_question(&questions, &missing, &phase);
     let Some(fallback) = fallback else {
         return Ok(IntakeAiFollowUpResponse {
             question: None,
-            degradation_status: "rule_based_complete".to_owned(),
+            degradation_status: "not_applicable".to_owned(),
             generated_at: now(),
         });
     };
@@ -799,11 +803,20 @@ pub async fn get_ai_follow_up(
     let (question, degradation_status, _audit_status) = match execution {
         AiExecutionResult::Completed { output, .. } => {
             match gateway.decode_json::<IntakeAiFollowUp>(&output) {
-                Ok(question) if valid_follow_up(&question, &missing, &questions) => (
-                    Some(normalize_follow_up(question)),
-                    "available".to_owned(),
-                    AiTaskStatus::Completed,
-                ),
+                Ok(question)
+                    if valid_follow_up(
+                        &question,
+                        &missing,
+                        &questions,
+                        session.question_set_version,
+                    ) =>
+                {
+                    (
+                        Some(normalize_follow_up(question)),
+                        "available".to_owned(),
+                        AiTaskStatus::Completed,
+                    )
+                }
                 _ => (
                     Some(static_follow_up(fallback, missing.clone())),
                     "rule_based_fallback".to_owned(),
@@ -905,16 +918,20 @@ fn valid_follow_up(
     question: &IntakeAiFollowUp,
     missing: &[String],
     questions: &[intake_question_definitions::Model],
+    question_set_version: i32,
 ) -> bool {
     question.skippable
         && missing.contains(&question.field)
-        && questions
-            .iter()
-            .any(|definition| definition.field_code == question.field)
+        && questions.iter().any(|definition| {
+            definition.field_code == question.field
+                && !definition.is_required
+                && question_phase(&definition.field_code, question_set_version) == "phase_two"
+        })
         && !question.prompt.trim().is_empty()
         && question.prompt.chars().count() <= 500
         && !question.purpose.trim().is_empty()
         && question.purpose.chars().count() <= 300
+        && question.missing_fields.contains(&question.field)
         && question
             .missing_fields
             .iter()
@@ -1843,6 +1860,10 @@ fn require_session_creator(
     Ok(())
 }
 
+fn can_request_ai_follow_up(status: &str) -> bool {
+    matches!(status, "collecting" | "ready_for_confirmation")
+}
+
 fn parse_answers(session: &intake_sessions::Model) -> Result<IntakeInitialAnswers, ApiError> {
     serde_json::from_str(&session.answers_json).map_err(|_| ApiError::Internal)
 }
@@ -2208,6 +2229,31 @@ fn next_question_for_phase(
         })
 }
 
+/// AI follow-up is deliberately limited to optional phase-two intake fields.
+/// Required collection remains deterministic so an unavailable provider never
+/// changes the path to first human confirmation.
+fn next_optional_follow_up_question(
+    questions: &[intake_question_definitions::Model],
+    missing_fields: &[String],
+    phase: &IntakePhaseProgress,
+) -> Option<IntakeQuestion> {
+    if !phase.phase_transition_ready {
+        return None;
+    }
+    questions
+        .iter()
+        .find(|question| {
+            !question.is_required
+                && question_phase(&question.field_code, question.version) == "phase_two"
+                && missing_fields.contains(&question.field_code)
+        })
+        .map(|question| IntakeQuestion {
+            field: question.field_code.clone(),
+            prompt: question.prompt.clone(),
+            required: false,
+        })
+}
+
 fn missing_fields(
     answers: &IntakeInitialAnswers,
     questions: &[intake_question_definitions::Model],
@@ -2441,11 +2487,13 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        InitialReviewModelIssue, InitialReviewModelOutput, IntakeInitialAnswers, answers_for_ai,
-        append_content_quality_issues, decode_profile_extraction_output, profile_extraction_schema,
-        profile_extraction_system_instruction, validate_basic_information_details,
+        InitialReviewModelIssue, InitialReviewModelOutput, IntakeAiFollowUp, IntakeInitialAnswers,
+        answers_for_ai, append_content_quality_issues, can_request_ai_follow_up,
+        decode_profile_extraction_output, profile_extraction_schema,
+        profile_extraction_system_instruction, valid_follow_up, validate_basic_information_details,
         validate_initial_review_output, validate_profile_extraction,
     };
+    use crate::entities::intake_question_definitions;
 
     fn answers() -> IntakeInitialAnswers {
         IntakeInitialAnswers {
@@ -2627,5 +2675,49 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].field, "basic_information");
         assert!(issues[0].evidence_summary.contains("信息不足"));
+    }
+
+    #[test]
+    fn follow_up_rejects_required_or_unknown_fields_from_a_provider() {
+        let questions = vec![intake_question_definitions::Model {
+            id: "intake-q-test".to_owned(),
+            version: 2,
+            field_code: "frequent_locations".to_owned(),
+            prompt: "Which places are frequently visited?".to_owned(),
+            display_order: 1,
+            is_required: false,
+            max_answer_chars: 800,
+            status: "active".to_owned(),
+            created_at: "2026-08-14T00:00:00Z".to_owned(),
+            updated_at: "2026-08-14T00:00:00Z".to_owned(),
+        }];
+        let missing = vec!["frequent_locations".to_owned()];
+        let valid = IntakeAiFollowUp {
+            field: "frequent_locations".to_owned(),
+            prompt: "Which places are frequently visited?".to_owned(),
+            purpose: "Collect an optional location for human review.".to_owned(),
+            missing_fields: missing.clone(),
+            skippable: true,
+        };
+
+        assert!(valid_follow_up(&valid, &missing, &questions, 2));
+
+        let mut required = valid.clone();
+        required.skippable = false;
+        assert!(!valid_follow_up(&required, &missing, &questions, 2));
+
+        let mut unknown = valid;
+        unknown.field = "family_phone".to_owned();
+        assert!(!valid_follow_up(&unknown, &missing, &questions, 2));
+    }
+
+    #[test]
+    fn follow_up_is_available_only_while_collecting_or_ready_for_confirmation() {
+        assert!(can_request_ai_follow_up("collecting"));
+        assert!(can_request_ai_follow_up("ready_for_confirmation"));
+        assert!(!can_request_ai_follow_up("awaiting_family_review"));
+        assert!(!can_request_ai_follow_up("ready_for_second_confirmation"));
+        assert!(!can_request_ai_follow_up("confirmed"));
+        assert!(!can_request_ai_follow_up("closed"));
     }
 }
