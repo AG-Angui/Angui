@@ -34,6 +34,7 @@ test("a family clue moves through commander review and returns as confirmed prog
   await expect(page.getByRole("region", { name: "案件列表" })).toBeVisible();
   await expect(familyCaseLink).toBeVisible();
   await familyCaseLink.click();
+  await page.getByRole("button", { name: /提交一条新线索/ }).click();
   await page.getByLabel("新线索内容").fill(clueContent);
   await page.getByRole("button", { name: "提交线索" }).click();
   await expect(page.getByLabel("新线索内容")).toHaveValue("");

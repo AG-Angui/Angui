@@ -1,5 +1,6 @@
 import {
   ApiClientError,
+  apiBlobRequest,
   apiRequest,
   apiSseRequest,
   type SseEventListener,
@@ -1034,6 +1035,19 @@ export function uploadCaseAttachment(
   return apiRequest<CaseAttachment>(
     `/cases/${caseId}/attachments`,
     { method: "POST", body },
+    token,
+  );
+}
+
+/** Downloads a private case image using the active bearer session. */
+export function downloadCaseAttachment(
+  token: string,
+  caseId: string,
+  attachmentId: string,
+): Promise<Blob> {
+  return apiBlobRequest(
+    `/cases/${caseId}/attachments/${attachmentId}`,
+    {},
     token,
   );
 }
