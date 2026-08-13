@@ -121,13 +121,9 @@ pub async fn verify(db: &DatabaseConnection, raw: &str) -> Result<AccessRequestR
         .filter(auth_email_tokens::Column::ConsumedAt.is_null())
         .one(db)
         .await?
-        .ok_or_else(|| {
-            ApiError::Unauthorized("verification link is invalid or expired".to_owned())
-        })?;
+        .ok_or_else(|| ApiError::Unauthorized("验证链接无效或已过期".to_owned()))?;
     if token.expires_at <= now() {
-        return Err(ApiError::Unauthorized(
-            "verification link is invalid or expired".to_owned(),
-        ));
+        return Err(ApiError::Unauthorized("验证链接无效或已过期".to_owned()));
     }
     let request_id = token.access_request_id.clone().ok_or(ApiError::Internal)?;
     let transaction = db.begin().await?;
@@ -185,21 +181,21 @@ pub async fn review(
     let action = input.action.trim().to_lowercase();
     if !["approve", "reject"].contains(&action.as_str()) {
         return Err(ApiError::Validation(
-            "action must be approve or reject".to_owned(),
+            "action 必须为 approve 或 reject".to_owned(),
         ));
     }
     if action == "reject" && input.reason.as_deref().unwrap_or("").trim().is_empty() {
         return Err(ApiError::Validation(
-            "rejection reason is required".to_owned(),
+            "拒绝申请时必须提供审核理由".to_owned(),
         ));
     }
     let request = access_requests::Entity::find_by_id(id)
         .one(db)
         .await?
-        .ok_or_else(|| ApiError::NotFound("access request was not found".to_owned()))?;
+        .ok_or_else(|| ApiError::NotFound("未找到账号访问申请".to_owned()))?;
     if request.status != "pending_review" {
         return Err(ApiError::Conflict(
-            "access request is not awaiting review".to_owned(),
+            "账号访问申请当前不处于待审核状态".to_owned(),
         ));
     }
     let transaction = db.begin().await?;
@@ -304,7 +300,7 @@ pub async fn set_password(
 ) -> Result<(), ApiError> {
     if !(12..=256).contains(&input.password.chars().count()) {
         return Err(ApiError::Validation(
-            "password must contain between 12 and 256 characters".to_owned(),
+            "密码长度必须为 12 至 256 个字符".to_owned(),
         ));
     }
     let token = auth_email_tokens::Entity::find()
@@ -313,12 +309,10 @@ pub async fn set_password(
         .filter(auth_email_tokens::Column::ConsumedAt.is_null())
         .one(db)
         .await?
-        .ok_or_else(|| {
-            ApiError::Unauthorized("password setup link is invalid or expired".to_owned())
-        })?;
+        .ok_or_else(|| ApiError::Unauthorized("密码设置链接无效或已过期".to_owned()))?;
     if token.expires_at <= now() {
         return Err(ApiError::Unauthorized(
-            "password setup link is invalid or expired".to_owned(),
+            "密码设置链接无效或已过期".to_owned(),
         ));
     }
     let user_id = token.user_id.clone().ok_or(ApiError::Internal)?;
@@ -345,29 +339,27 @@ fn role_mapping(role: &str) -> Result<(AccountType, Vec<GlobalCapability>), ApiE
         "family" => Ok((AccountType::Member, vec![])),
         "volunteer" => Ok((AccountType::Member, vec![GlobalCapability::Volunteer])),
         "commander" => Ok((AccountType::Member, vec![GlobalCapability::Commander])),
-        _ => Err(ApiError::Validation("role is unsupported".to_owned())),
+        _ => Err(ApiError::Validation("不支持该角色".to_owned())),
     }
 }
 fn require_admin(auth: &AuthenticatedUser) -> Result<(), ApiError> {
     if auth.global_capabilities.contains(&GlobalCapability::Admin) {
         Ok(())
     } else {
-        Err(ApiError::Forbidden(
-            "administrator capability is required".to_owned(),
-        ))
+        Err(ApiError::Forbidden("需要管理员能力".to_owned()))
     }
 }
 fn normalize_email(v: &str) -> Result<String, ApiError> {
     let v = v.trim().to_lowercase();
     if v.is_empty() || v.len() > 320 || !v.contains('@') {
-        Err(ApiError::Validation("email is invalid".to_owned()))
+        Err(ApiError::Validation("邮箱格式无效".to_owned()))
     } else {
         Ok(v)
     }
 }
 fn validate_name(v: &str) -> Result<(), ApiError> {
     if v.trim().is_empty() || v.chars().count() > 120 {
-        Err(ApiError::Validation("display_name is invalid".to_owned()))
+        Err(ApiError::Validation("显示名称无效".to_owned()))
     } else {
         Ok(())
     }
@@ -376,7 +368,7 @@ fn validate_role(v: &str) -> Result<(), ApiError> {
     if ["family", "volunteer", "commander"].contains(&v.trim().to_lowercase().as_str()) {
         Ok(())
     } else {
-        Err(ApiError::Validation("role is unsupported".to_owned()))
+        Err(ApiError::Validation("不支持该角色".to_owned()))
     }
 }
 fn token() -> String {

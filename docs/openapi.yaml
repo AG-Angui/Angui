@@ -38,6 +38,8 @@ tags:
     description: 服务健康检查
   - name: Authentication
     description: 服务端会话登录、查询和撤销
+  - name: Access requests
+    description: 账号访问申请、邮箱验证、管理员审核和密码设置
   - name: Cases
     description: 案件、老人资料、案件成员和案件内线索；必须先通过案件成员关系授权
   - name: Clues
@@ -189,6 +191,65 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /api/auth/access-requests:
+    post:
+      tags: [Access requests]
+      operationId: createAccessRequest
+      summary: 提交账号访问申请
+      description: 无需认证。服务端对邮箱地址返回一致的受理消息，并发送有效期为 24 小时的邮箱验证链接；原始验证令牌只会出现在邮件中，数据库只保存其哈希值。
+      security: []
+      x-account-types: []
+      x-data-classification: account-private
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAccessRequest" }
+      responses:
+        "200": { description: 申请已受理，等待邮箱验证, content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequestReceipt" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/auth/access-requests/verify:
+    post:
+      tags: [Access requests]
+      operationId: verifyAccessRequest
+      summary: 验证账号访问申请邮箱
+      description: 无需认证。验证令牌仅可使用一次，且在签发 24 小时后失效；验证成功后，申请进入管理员人工审核队列。
+      security: []
+      x-account-types: []
+      x-data-classification: account-private
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyAccessRequest" }
+      responses:
+        "200": { description: 邮箱已验证，申请等待人工审核, content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequestReceipt" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/auth/password-setup:
+    post:
+      tags: [Access requests]
+      operationId: setPassword
+      summary: 使用审核通过后的链接设置密码
+      description: 无需认证。仅接受管理员批准后签发的一次性密码设置令牌；密码长度必须为 12 至 256 个字符。成功后账户激活，令牌立即失效。
+      security: []
+      x-account-types: []
+      x-data-classification: account-private
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordSetupRequest" }
+      responses:
+        "204": { description: 密码已设置，账户已激活 }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /api/users/me/profile:
     get:
@@ -1689,6 +1750,52 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/admin/access-requests:
+    get:
+      tags: [Access requests]
+      operationId: listAccessRequests
+      summary: 列出账号访问申请
+      description: 仅平台管理员可调用。返回申请审核所需的账号信息和邮箱验证状态，不返回验证令牌、审核理由或密码相关数据。
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: 按创建时间倒序的账号访问申请列表, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AdminAccessRequest" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/admin/access-requests/{request_id}/review:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        description: 账号访问申请 UUID。
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Access requests]
+      operationId: reviewAccessRequest
+      summary: 审核账号访问申请
+      description: 仅平台管理员可调用，且申请必须已完成邮箱验证并处于 `pending_review`。批准时服务端创建停用账户并发送一次性密码设置链接；拒绝时必须提供审核理由。管理员不能通过该接口授予管理员能力。
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewAccessRequest" }
+      responses:
+        "200": { description: 已审核的账号访问申请, content: { application/json: { schema: { $ref: "#/components/schemas/AdminAccessRequest" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/admin/users:
     get:
       tags: [Admin]
@@ -2448,6 +2555,98 @@ components:
                   message: database operation failed
 
   schemas:
+    CreateAccessRequest:
+      type: object
+      additionalProperties: false
+      required: [email, display_name, requested_role]
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 320
+          format: email
+          description: 申请人的邮箱地址；服务端会去除首尾空白并转换为小写。
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: 申请人的显示名称。
+        requested_role:
+          type: string
+          enum: [family, volunteer, commander]
+          description: 申请的业务角色；不支持通过申请授予管理员能力。
+
+    VerifyAccessRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          description: 邮件中的一次性邮箱验证令牌。
+
+    PasswordSetupRequest:
+      type: object
+      additionalProperties: false
+      required: [token, password]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          description: 管理员批准后邮件中的一次性密码设置令牌。
+        password:
+          type: string
+          minLength: 12
+          maxLength: 256
+          format: password
+          description: 新密码；服务端仅校验长度，不会在响应或审计元数据中返回该值。
+
+    AccessRequestReceipt:
+      type: object
+      additionalProperties: false
+      required: [id, status, message]
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [pending_verification, pending_review]
+        message:
+          type: string
+          description: 面向申请人的中文状态提示；不用于判定邮箱或账号是否存在。
+
+    ReviewAccessRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+        role:
+          type: string
+          enum: [family, volunteer, commander]
+          description: 批准时可替代申请角色；省略时使用申请的角色。
+        reason:
+          type: [string, "null"]
+          minLength: 1
+          description: 拒绝时必填的人工审核理由；批准时可选。
+
+    AdminAccessRequest:
+      type: object
+      additionalProperties: false
+      required: [id, email, display_name, requested_role, status, email_verified_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        requested_role: { type: string, enum: [family, volunteer, commander] }
+        status:
+          type: string
+          enum: [pending_verification, pending_review, approved, rejected]
+        email_verified_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+
     LearningResource:
       type: object
       additionalProperties: false
