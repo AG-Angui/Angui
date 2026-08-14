@@ -149,7 +149,8 @@ fn intake_openapi_contract_covers_runtime_requests_and_responses() {
         &[
             "required: [field, prompt, purpose, missing_fields, skippable]",
             "maxLength: 500",
-            "skippable: { type: boolean, const: true }",
+            "skippable:",
+            "与当前题目的必填性一致；必填题为 false，可选题为 true。",
         ],
     );
     assert_schema_contains(
@@ -166,7 +167,7 @@ fn intake_openapi_contract_covers_runtime_requests_and_responses() {
         "operationId: getIntakeAiFollowUp",
         "x-data-classification: sensitive",
         "IntakeAiFollowUpResponse",
-        "Required phase-one collection always remains rule-based.",
+        "AI 只能改写该题的提问方式，不能改变字段、必填性或阶段顺序",
     ] {
         assert!(
             follow_up.contains(expected),

@@ -436,14 +436,14 @@ paths:
     get:
       tags: [Intake sessions]
       operationId: getIntakeAiFollowUp
-      summary: Get one optional AI-guided intake follow-up
-      description: Only the session creator can request an optional phase-two follow-up. Required phase-one collection always remains rule-based. The service returns an AI-generated question only when its JSON passes the configured field, length, and skippability checks; unavailable providers, timeouts, policy failures, and invalid output return the deterministic static question. The response is advisory only and does not create, confirm, publish, or modify any intake data.
+      summary: 获取一条 AI 引导的下一项问询
+      description: 仅会话创建者可请求。服务端始终先确定当前阶段的下一题，AI 只能改写该题的提问方式，不能改变字段、必填性或阶段顺序；不可用、超时、策略拒绝或输出无效时返回同一题目的确定性静态版本。响应仅作问询引导，不会创建、确认、发布或修改任何问询数据。
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-data-classification: sensitive
       responses:
         "200":
-          description: Optional AI follow-up, a deterministic fallback, or no question when optional follow-up is not applicable
+          description: AI 引导的下一题、确定性降级题，或当前没有下一题时的空结果
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IntakeAiFollowUpResponse" }
@@ -3228,7 +3228,9 @@ components:
           type: array
           uniqueItems: true
           items: { type: string }
-        skippable: { type: boolean, const: true }
+        skippable:
+          type: boolean
+          description: 与当前题目的必填性一致；必填题为 false，可选题为 true。
 
     IntakeAiFollowUpResponse:
       type: object

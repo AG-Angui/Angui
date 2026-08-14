@@ -239,23 +239,14 @@ const blankBasicInformation: BasicInformationDraft = {
   appearance: "",
 };
 
-function isPhaseOneIntakeField(field: string, questionSetVersion: number) {
-  const phaseOneFields =
-    questionSetVersion >= 3
-      ? [
-          "basic_information",
-          "last_seen",
-          "suspicious_motive",
-          "police_report_status",
-          "family_phone",
-        ]
-      : [
-          "basic_information",
-          "health_status",
-          "behavior_habits",
-          "last_seen",
-        ];
-  return phaseOneFields.includes(field);
+const aiFollowUpExcludedFields = new Set([
+  "basic_information",
+  "police_report_status",
+  "family_phone",
+]);
+
+function shouldRequestAiFollowUp(field: string, next: IntakeSession) {
+  return !aiFollowUpExcludedFields.has(field) && next.next_question !== null;
 }
 
 export function FamilyIntakeForm({
@@ -612,7 +603,7 @@ export function FamilyIntakeForm({
       });
       const next = sessionFromAnswerResponse(response);
       let guidedSession = next;
-      if (!isPhaseOneIntakeField(field, session.question_set_version)) {
+      if (shouldRequestAiFollowUp(field, next)) {
         setIsFetchingAiFollowUp(true);
         try {
           const guidance: IntakeAiFollowUpResponse = await getIntakeAiFollowUp(token, next.id);
@@ -622,7 +613,7 @@ export function FamilyIntakeForm({
                 next_question: {
                   field: guidance.question.field,
                   prompt: guidance.question.prompt,
-                  required: false,
+                  required: !guidance.question.skippable,
                 },
                 guidance_mode:
                   guidance.degradation_status === "available"
@@ -632,7 +623,7 @@ export function FamilyIntakeForm({
             : next;
         } catch {
           // The answer has already been accepted. Keep the server's rule-based
-          // next question when optional AI guidance cannot be fetched.
+          // next question when AI guidance cannot be fetched.
         } finally {
           setIsFetchingAiFollowUp(false);
         }

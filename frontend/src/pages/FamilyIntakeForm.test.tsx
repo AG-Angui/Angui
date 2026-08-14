@@ -572,7 +572,12 @@ describe("FamilyIntakeForm", () => {
         expect.objectContaining({ field: "last_seen" }),
       ),
     );
-    expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mocked.getIntakeAiFollowUp).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+      ),
+    );
     await waitFor(() => {
       const stored = window.sessionStorage.getItem("angui:intake-tab-draft:family-1");
       expect(stored).not.toBeNull();
