@@ -202,6 +202,8 @@ fn intake_openapi_contract_covers_draft_provenance_assessments_and_confirmation(
     assert_schema_contains(
         "IntakeProfileDraft",
         &[
+            "enum: [draft, confirmed, superseded]",
+            "requires_human_confirmation:",
             "field_metadata:",
             "assessments:",
             "confirmation_blocked_reasons:",
@@ -219,6 +221,14 @@ fn intake_openapi_contract_covers_draft_provenance_assessments_and_confirmation(
         ],
     );
     assert_schema_contains("IntakeProfileDraftFields", &["suspicious_motive:"]);
+    assert_schema_contains(
+        "ReviewIntakeProfileDraftRequest",
+        &[
+            "required: [action, reason]",
+            "enum: [confirm, reject]",
+            "maxLength: 1000",
+        ],
+    );
     assert_schema_contains(
         "IntakeDirectionHypothesis",
         &["source_fields:", "uncertainty_notice:", "description:"],
@@ -265,6 +275,19 @@ fn intake_openapi_contract_covers_draft_provenance_assessments_and_confirmation(
         operation("/api/intake-sessions/{session_id}/ai-initial-review/acknowledge")
             .contains("operationId: acknowledgeIntakeAiInitialReview")
     );
+    let profile_review =
+        operation("/api/intake-sessions/{session_id}/profile-draft/{draft_id}/review");
+    for expected in [
+        "operationId: reviewIntakeProfileDraft",
+        "#/components/schemas/ReviewIntakeProfileDraftRequest",
+        "#/components/schemas/IntakeProfileDraft",
+        "requires_human_confirmation false",
+    ] {
+        assert!(
+            profile_review.contains(expected),
+            "profile draft review API must declare {expected:?}"
+        );
+    }
 }
 
 #[test]
@@ -304,10 +327,10 @@ fn clue_timeline_openapi_contract_covers_pagination_and_visibility() {
 
 #[test]
 fn case_places_openapi_contract_covers_role_filtered_reads() {
-    let (_, operation) = OPENAPI
+    let (_, places_path) = OPENAPI
         .split_once("  /api/cases/{case_id}/places:\n")
         .expect("OpenAPI places path must exist");
-    let get_operation = operation
+    let get_operation = places_path
         .split_once("    get:\n")
         .and_then(|(_, after_get)| after_get.split_once("    post:\n").map(|(get, _)| get))
         .expect("OpenAPI places path must declare GET before POST");
@@ -322,6 +345,28 @@ fn case_places_openapi_contract_covers_role_filtered_reads() {
             "OpenAPI places operation must declare {expected:?}"
         );
     }
+
+    let review = operation("/api/cases/{case_id}/places/{place_id}/review:\n");
+    for expected in [
+        "operationId: reviewCasePlace",
+        "x-case-roles: [commander]",
+        "#/components/schemas/ReviewCasePlaceRequest",
+        "#/components/schemas/CasePlace",
+        "\"409\": { $ref: \"#/components/responses/Conflict\" }",
+    ] {
+        assert!(
+            review.contains(expected),
+            "OpenAPI place review operation must declare {expected:?}"
+        );
+    }
+    assert_schema_contains(
+        "ReviewCasePlaceRequest",
+        &[
+            "required: [status, reason]",
+            "enum: [confirmed, rejected]",
+            "maxLength: 1000",
+        ],
+    );
 }
 
 #[test]

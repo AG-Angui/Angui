@@ -12,8 +12,8 @@ use crate::{
         AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse, CasePoiQuery,
         CaseResourceConfigurationResponse, CreateCasePlaceRequest, CreateCaseRequest,
         CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
-        CreateSummaryDraftRequest, CreateTaskRequest, ReviewClueDraftRequest,
-        ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
+        CreateSummaryDraftRequest, CreateTaskRequest, ReviewCasePlaceRequest,
+        ReviewClueDraftRequest, ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
         UpdateElderProfileRequest,
     },
     roles::CaseRole,
@@ -84,6 +84,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
             )
             .route("/{case_id}/places", web::get().to(list_places))
             .route("/{case_id}/places", web::post().to(create_place))
+            .route(
+                "/{case_id}/places/{place_id}/review",
+                web::patch().to(review_place),
+            )
             .route(
                 "/{case_id}/resource-configuration",
                 web::get().to(get_resource_configuration),
@@ -174,6 +178,24 @@ async fn list_places(
         crate::services::case_resource_service::visible_places(&state.db, &case_id, &auth.id, role)
             .await?;
     Ok(HttpResponse::Ok().json(places))
+}
+
+async fn review_place(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    request: web::Json<ReviewCasePlaceRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, place_id) = path.into_inner();
+    let place = crate::services::case_resource_service::review_place(
+        &state.db,
+        &auth,
+        &case_id,
+        &place_id,
+        request.into_inner(),
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(place))
 }
 
 async fn create_attachment(
