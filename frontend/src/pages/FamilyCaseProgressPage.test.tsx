@@ -131,6 +131,8 @@ describe("FamilyCaseProgressPage", () => {
     mocked.createCasePlace.mockResolvedValue({});
     renderPage();
     await screen.findByRole("heading", { name: "常去地点" });
+    expect(screen.getByLabelText("经度")).toHaveAttribute("step", "any");
+    expect(screen.getByLabelText("纬度")).toHaveAttribute("step", "any");
     fireEvent.change(screen.getByLabelText("地点名称"), { target: { value: "社区花园" } });
     fireEvent.change(screen.getByLabelText("文字地址"), { target: { value: "虹桥路 100 号" } });
     fireEvent.change(screen.getByLabelText("经度"), { target: { value: "121.41" } });

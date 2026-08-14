@@ -1694,6 +1694,7 @@ function CaseDetailView({
                       type="number"
                       min={-180}
                       max={180}
+                      step="any"
                       value={place.longitude ?? ""}
                       onChange={(event) =>
                         setPlace({
@@ -1712,6 +1713,7 @@ function CaseDetailView({
                       type="number"
                       min={-90}
                       max={90}
+                      step="any"
                       value={place.latitude ?? ""}
                       onChange={(event) =>
                         setPlace({
