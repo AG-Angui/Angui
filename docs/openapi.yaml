@@ -462,6 +462,28 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/intake-sessions/{session_id}/ai-follow-up:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    get:
+      tags: [Intake sessions]
+      operationId: getIntakeAiFollowUp
+      summary: Get one optional AI-guided intake follow-up
+      description: Only the session creator can request an optional phase-two follow-up. Required phase-one collection always remains rule-based. The service returns an AI-generated question only when its JSON passes the configured field, length, and skippability checks; unavailable providers, timeouts, policy failures, and invalid output return the deterministic static question. The response is advisory only and does not create, confirm, publish, or modify any intake data.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200":
+          description: Optional AI follow-up, a deterministic fallback, or no question when optional follow-up is not applicable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntakeAiFollowUpResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/intake-sessions/{session_id}/confirm:
     parameters:
       - $ref: "#/components/parameters/IntakeSessionId"
@@ -3313,6 +3335,34 @@ components:
         generated_at: { type: string, format: date-time }
         requires_family_acknowledgement: { type: boolean }
         ready_for_second_confirmation: { type: boolean }
+
+    IntakeAiFollowUp:
+      type: object
+      additionalProperties: false
+      required: [field, prompt, purpose, missing_fields, skippable]
+      properties:
+        field: { type: string, minLength: 1 }
+        prompt: { type: string, minLength: 1, maxLength: 500 }
+        purpose: { type: string, minLength: 1, maxLength: 300 }
+        missing_fields:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+        skippable: { type: boolean, const: true }
+
+    IntakeAiFollowUpResponse:
+      type: object
+      additionalProperties: false
+      required: [question, degradation_status, generated_at]
+      properties:
+        question:
+          oneOf:
+            - { $ref: "#/components/schemas/IntakeAiFollowUp" }
+            - { type: "null" }
+        degradation_status:
+          type: string
+          enum: [available, rule_based_fallback, not_applicable]
+        generated_at: { type: string, format: date-time }
 
     ConfirmedIntakeProfile:
       type: object

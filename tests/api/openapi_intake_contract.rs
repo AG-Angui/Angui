@@ -194,6 +194,35 @@ fn intake_openapi_contract_covers_runtime_requests_and_responses() {
             "ai_initial_review_status:",
         ],
     );
+    assert_schema_contains(
+        "IntakeAiFollowUp",
+        &[
+            "required: [field, prompt, purpose, missing_fields, skippable]",
+            "maxLength: 500",
+            "skippable: { type: boolean, const: true }",
+        ],
+    );
+    assert_schema_contains(
+        "IntakeAiFollowUpResponse",
+        &[
+            "question:",
+            "rule_based_fallback",
+            "not_applicable",
+            "generated_at:",
+        ],
+    );
+    let follow_up = operation("/api/intake-sessions/{session_id}/ai-follow-up");
+    for expected in [
+        "operationId: getIntakeAiFollowUp",
+        "x-data-classification: sensitive",
+        "IntakeAiFollowUpResponse",
+        "Required phase-one collection always remains rule-based.",
+    ] {
+        assert!(
+            follow_up.contains(expected),
+            "AI follow-up API must declare {expected:?}"
+        );
+    }
 }
 
 #[test]

@@ -608,26 +608,28 @@ export function FamilyIntakeForm({
       let guidedSession = next;
       if (!isPhaseOneIntakeField(field, session.question_set_version)) {
         setIsFetchingAiFollowUp(true);
-        let guidance: IntakeAiFollowUpResponse;
         try {
-          guidance = await getIntakeAiFollowUp(token, next.id);
+          const guidance: IntakeAiFollowUpResponse = await getIntakeAiFollowUp(token, next.id);
+          guidedSession = guidance.question
+            ? {
+                ...next,
+                next_question: {
+                  field: guidance.question.field,
+                  prompt: guidance.question.prompt,
+                  required: false,
+                },
+                guidance_mode:
+                  guidance.degradation_status === "available"
+                    ? ("ai_assisted" as const)
+                    : ("rule_based" as const),
+              }
+            : next;
+        } catch {
+          // The answer has already been accepted. Keep the server's rule-based
+          // next question when optional AI guidance cannot be fetched.
         } finally {
           setIsFetchingAiFollowUp(false);
         }
-        guidedSession = guidance.question
-          ? {
-              ...next,
-              next_question: {
-                field: guidance.question.field,
-                prompt: guidance.question.prompt,
-                required: false,
-              },
-              guidance_mode:
-                guidance.degradation_status === "available"
-                  ? ("ai_assisted" as const)
-                  : ("rule_based" as const),
-            }
-          : next;
       }
       setSession(guidedSession);
       setInitialReview(null);

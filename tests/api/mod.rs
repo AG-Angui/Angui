@@ -21,6 +21,7 @@ mod cases_list_get;
 mod clue_review_patch;
 mod health_get;
 mod intake_report_details_post;
+mod intake_session_ai_follow_up_get;
 mod intake_session_answers_post;
 mod intake_session_confirm_post;
 mod intake_session_profile_draft_get;
