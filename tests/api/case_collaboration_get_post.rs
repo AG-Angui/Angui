@@ -368,6 +368,46 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     )
     .await;
 
+    let volunteer_summaries = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/summary-drafts/published"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(VOLUNTEER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(volunteer_summaries.status(), StatusCode::OK);
+    let volunteer_summaries: Value = test::read_body_json(volunteer_summaries).await;
+    assert_eq!(
+        volunteer_summaries["items"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(volunteer_summaries["items"][0]["version"], 2);
+    assert_eq!(volunteer_summaries["items"][1]["version"], 1);
+    assert!(
+        volunteer_summaries["items"]
+            .as_array()
+            .expect("published summary versions")
+            .iter()
+            .all(|summary| summary.get("review_reason").is_none())
+    );
+
+    let family_summaries = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/summary-drafts/published"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(FAMILY).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_error(family_summaries, StatusCode::FORBIDDEN, "forbidden").await;
+
     let hidden = test::call_service(
         &app,
         test::TestRequest::post()

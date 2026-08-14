@@ -36,6 +36,7 @@
 | `POST` | `/api/cases/{case_id}/clues` | `201` | 提交待审核线索 |
 | `GET` | `/api/cases/{case_id}/map-view` | `200` | 获取含文字地点回退的角色裁剪地图态势 |
 | `GET` | `/api/cases/{case_id}/summary` | `200` | 获取含来源范围与生成时间的角色裁剪确定性案件摘要 |
+| `GET` | `/api/cases/{case_id}/summary-drafts/published` | `200` | 志愿者获取已人工发布的案件摘要版本 |
 | `GET` | `/api/cases/{case_id}/public-progress` | `200` | 家属查看仅含已确认信息和本人待补充事项的公开进展 |
 | `POST` | `/api/cases/{case_id}/clue-drafts` | `201` | 将受控文本持久化为不可直接确认的线索草稿 |
 | `PATCH` | `/api/cases/{case_id}/clue-drafts/{draft_id}/review` | `200` | 指挥人工接受或拒绝线索字段候选 |
@@ -243,7 +244,7 @@ Example:
 ## 志愿者任务协作
 
 志愿者只要已作为案件 `volunteer` 成员加入案件，即可通过 `GET /api/cases`、`GET /api/cases/{case_id}`、`GET /api/cases/{case_id}/summary` 与 `GET /api/cases/{case_id}/tasks` 进入协作工作区；不再以“是否已有个人任务”为案件可见性的前提。工作区包含经该角色授权的案件摘要、线索、健康备注与家属联系邮箱；后两者仅在请求者已被显式授予该案件 `volunteer` 角色时一并返回。它不包含其他志愿者的精确位置。
-志愿者可看到已确认线索和自己提交但仍待人工审核的线索；其他成员的待审核线索不会暴露。志愿者调用 `GET /api/cases/{case_id}/pois` 时，服务端仅从该角色可见的任务坐标或已确认的公开地点选择中心，客户端不能提供或覆盖中心坐标。
+志愿者可看到已确认线索和自己提交但仍待人工审核的线索；其他成员的待审核线索不会暴露。经人工审核为 `confirmed` 且可见性为 `public` 或 `confirmed` 的关键地点（包括家属提交的地点）会返回给志愿者；`internal` 地点始终不可见。志愿者调用 `GET /api/cases/{case_id}/pois` 时，服务端仅从该角色可见的任务坐标或已确认的公开地点选择中心，客户端不能提供或覆盖中心坐标。
 
 任务不再是单人独占：`POST /api/cases/{case_id}/tasks` 可以使用 `volunteer_user_ids` 指定一个或多个已授权的案件志愿者（旧 `volunteer_user_id` 保持兼容）。每位受领者都是同一任务协作空间的成员；成员可以独立推进允许的任务状态、提交反馈和位置报告，任一成员完成任务会更新该共享任务状态。指挥仍可取消未结束任务，但不会因取消而需要成为任务成员。如果两个志愿者字段都未提供（或 `volunteer_user_ids` 为空），则会创建 `pending_claim` 的开放/常驻任务；案件志愿者可申请加入，指挥批准首位申请者后任务转为 `assigned`。
 
@@ -265,7 +266,7 @@ Example:
 
 `GET /api/cases/{case_id}/pois` 只允许 `commander` 和 `volunteer`，且客户端只能选择医院、派出所、公交站、市场或社区服务中心等白名单类别。中心坐标只能由服务端从当前角色可见的任务点或指挥已确认地点选取；单次查询固定为 3 km、单页、最多 10 项。高德 Web 服务的 key 仅保存在服务端；HTTP 或业务状态失败时，响应将标记为 `degraded` 并给出固定的虚构非坐标回退结果，绝不泄露 key、上游 URL 或案件中心坐标。
 
-`GET /api/cases/{case_id}/summary-drafts`、`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。指挥完成一条线索的人工审核后，服务端会自动创建一份 `pending_review` 摘要草稿；指挥也可以基于同一服务端来源范围编辑内容并创建新的待审核版本。生命周期包含 `pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次审核、发布或撤回都记录操作者、理由和时间；发布会将该案件既有的已发布版本标为 `superseded`。Gateway 会在合规路由后执行 Provider 请求，且摘要输出必须经过长度与来源范围校验；提供方失效、超时或输出无效时使用同一受控来源范围的确定性降级草稿。降级不会阻塞线索审核，草稿仍必须人工审核后才能发布，且不会被标记为某个 AI 模型的输出。
+`GET /api/cases/{case_id}/summary-drafts`、`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。指挥完成一条线索的人工审核后，服务端会自动创建一份 `pending_review` 摘要草稿；指挥也可以基于同一服务端来源范围编辑内容并创建新的待审核版本。生命周期包含 `pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次审核、发布或撤回都记录操作者、理由和时间；发布会将该案件既有的已发布版本标为 `superseded`。Gateway 会在合规路由后执行 Provider 请求，且摘要输出必须经过长度与来源范围校验；提供方失效、超时或输出无效时使用同一受控来源范围的确定性降级草稿。降级不会阻塞线索审核，草稿仍必须人工审核后才能发布，且不会被标记为某个 AI 模型的输出。`GET /api/cases/{case_id}/summary-drafts/published` 仅对该案件的 `volunteer` 开放，只返回已人工发布且 `publication_eligible` 的当前与历史版本的版本号、内容和发布时间；不会返回待审核草稿、内部手写草稿、审核理由、来源范围或版本比较元数据。
 
 `POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available only after a case reaches `resolved` or `closed`. The server creates an internal placeholder `draft` plus a separately protected, administrator-reviewable material version scoped to confirmed clue and completed-task review material, then marks `deidentification_status` as `manual_review_required`. The placeholder contains no raw material and nothing is sent to AI at this stage. This endpoint does not publish, index, export, or print material; a separate authorized de-identification, review, and withdrawal workflow is required before any later reuse.
 
@@ -352,4 +353,4 @@ The intake profile-generation and initial-review POST endpoints respond as SSE. 
 
 - `GET /api/intake-sessions/{session_id}/ai-follow-up` 返回当前下一题的 AI 引导版本或其静态降级版本。响应始终保持服务端选定的字段与必填性：必填题的 `skippable` 为 `false`，可选题为 `true`。`GET /api/intake-sessions/{session_id}/answer-revisions` 为会话创建者列出不可变的答案修订记录；`POST /api/intake-sessions/{session_id}/answers/{field}/restore` 通过新建一条修订记录恢复所选答案。
 - `PATCH /api/cases/{case_id}/clue-drafts/{draft_id}/review` accepts `field_decisions` for `content_summary`, `occurred_at`, `location_text`, `source_text`, and `action_candidates`. Decisions are `accept`, `edit`, or `clear`; only an accepted draft is promoted to a normal pending-review clue.
-- `GET /api/cases/{case_id}/summary-drafts/versions` lists immutable summary versions. `GET /api/cases/{case_id}/summary-drafts/{from_id}/diff/{to_id}` returns the readable line-level added/removed difference for two versions.
+- `GET /api/cases/{case_id}/summary-drafts/versions` lists immutable summary versions for commanders. `GET /api/cases/{case_id}/summary-drafts/{from_id}/diff/{to_id}` returns the readable line-level added/removed difference for two versions. `GET /api/cases/{case_id}/summary-drafts/published` is the volunteer-safe published-history view.

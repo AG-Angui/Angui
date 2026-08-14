@@ -342,7 +342,7 @@ pub async fn visible_places(
                 ),
         ),
         CaseRole::Volunteer => query
-            .filter(case_places::Column::Visibility.eq("public"))
+            .filter(case_places::Column::Visibility.is_in(["public", "confirmed"]))
             .filter(case_places::Column::ReviewStatus.eq("confirmed")),
     };
     let records = query

@@ -71,6 +71,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 web::get().to(list_summary_draft_versions),
             )
             .route(
+                "/{case_id}/summary-drafts/published",
+                web::get().to(list_published_summary_versions_for_volunteer),
+            )
+            .route(
                 "/{case_id}/summary-drafts/{from_id}/diff/{to_id}",
                 web::get().to(diff_summary_draft_versions),
             )
@@ -753,6 +757,19 @@ async fn list_summary_draft_versions(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(
         crate::services::case_collaboration_service::list_summary_draft_versions(
+            &state.db, &auth, &case_id,
+        )
+        .await?,
+    ))
+}
+
+async fn list_published_summary_versions_for_volunteer(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::list_published_summary_versions_for_volunteer(
             &state.db, &auth, &case_id,
         )
         .await?,

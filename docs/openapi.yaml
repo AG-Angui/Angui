@@ -1427,6 +1427,23 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/cases/{case_id}/summary-drafts/published:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: listVolunteerPublishedSummaryVersions
+      summary: List published case-summary versions for a volunteer
+      description: Returns only human-published, publication-eligible summary versions for a volunteer who is a member of the case. Pending drafts, free-form internal drafts, review reasons, and comparison metadata are excluded.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [volunteer]
+      x-data-classification: case-restricted
+      responses:
+        "200": { description: Published summary history, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { type: object, required: [version, content, published_at], properties: { version: { type: integer }, content: { type: string }, published_at: { type: string, format: date-time } } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/cases/{case_id}/summary-drafts/{from_id}/diff/{to_id}:
     parameters:
       - $ref: "#/components/parameters/CaseId"

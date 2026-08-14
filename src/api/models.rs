@@ -1444,6 +1444,18 @@ pub struct SummaryDraftVersionResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct PublishedSummaryVersionResponse {
+    pub items: Vec<PublishedSummaryVersion>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublishedSummaryVersion {
+    pub version: i32,
+    pub content: String,
+    pub published_at: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SummaryDraftDiffResponse {
     pub from_version: i32,
     pub to_version: i32,

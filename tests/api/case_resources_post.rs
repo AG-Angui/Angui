@@ -233,7 +233,7 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
     .expect("fixture place should be created");
     let confirmed_visible = case_resource_service::create_place(
         &context.database,
-        &commander,
+        &family,
         &case_id,
         CreateCasePlaceRequest {
             name: "Confirmed non-public meeting point".to_owned(),
@@ -325,8 +325,22 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
         test::call_service(&app, request_for(context.token(VOLUNTEER).await)).await,
     )
     .await;
-    assert_eq!(volunteer_places.len(), 1);
-    assert_eq!(volunteer_places[0]["id"], public_confirmed.id);
+    assert_eq!(volunteer_places.len(), 2);
+    assert!(
+        volunteer_places
+            .iter()
+            .any(|place| place["id"] == public_confirmed.id)
+    );
+    assert!(
+        volunteer_places
+            .iter()
+            .any(|place| place["id"] == confirmed_visible.id)
+    );
+    assert!(
+        !volunteer_places
+            .iter()
+            .any(|place| place["id"] == internal_confirmed.id)
+    );
 
     let commander_places: Vec<serde_json::Value> = test::read_body_json(
         test::call_service(&app, request_for(context.token(COMMANDER).await)).await,
