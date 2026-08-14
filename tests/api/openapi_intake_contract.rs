@@ -52,6 +52,56 @@ fn assert_schema_contains(name: &str, expected_fragments: &[&str]) {
 }
 
 #[test]
+fn access_request_openapi_contract_covers_registered_auth_and_admin_routes() {
+    for (path, operation_id) in [
+        (
+            "/api/auth/access-requests",
+            "operationId: createAccessRequest",
+        ),
+        (
+            "/api/auth/access-requests/verify",
+            "operationId: verifyAccessRequest",
+        ),
+        ("/api/auth/password-setup", "operationId: setPassword"),
+        (
+            "/api/admin/access-requests",
+            "operationId: listAccessRequests",
+        ),
+        (
+            "/api/admin/access-requests/{request_id}/review",
+            "operationId: reviewAccessRequest",
+        ),
+    ] {
+        assert!(
+            operation(path).contains(operation_id),
+            "access-request API must declare {operation_id:?}"
+        );
+    }
+    for schema_name in [
+        "CreateAccessRequest",
+        "VerifyAccessRequest",
+        "PasswordSetupRequest",
+        "AccessRequestReceipt",
+        "ReviewAccessRequest",
+        "AdminAccessRequest",
+    ] {
+        assert!(
+            !schema(schema_name).is_empty(),
+            "access-request API must declare {schema_name}"
+        );
+    }
+    let review = operation("/api/admin/access-requests/{request_id}/review");
+    for expected in [
+        "x-global-capabilities: [admin]",
+        "批准时服务端创建停用账户",
+        "#/components/schemas/ReviewAccessRequest",
+    ] {
+        assert!(review.contains(expected));
+    }
+    assert_schema_contains("ReviewAccessRequest", &["enum: [approve, reject]"]);
+}
+
+#[test]
 fn intake_openapi_contract_covers_runtime_requests_and_responses() {
     assert_schema_contains(
         "IntakeInitialAnswers",

@@ -87,6 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           docker build --pull --file - --tag "${PREVIEW_RUNTIME_IMAGE}" "${GITHUB_WORKSPACE}/deploy/preview" <<'EOF'
+
           FROM ubuntu:24.04
 
           RUN apt-get update \

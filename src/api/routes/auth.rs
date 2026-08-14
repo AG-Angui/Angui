@@ -3,7 +3,11 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use crate::{
     app_state::AppState,
     error::ApiError,
-    models::{AuthenticatedUser, LoginRequest, UserResponse},
+    models::{
+        AuthenticatedUser, CreateAccessRequest, LoginRequest, PasswordSetupRequest, UserResponse,
+        VerifyAccessRequest,
+    },
+    services::access_request_service,
     services::auth_service,
 };
 
@@ -12,8 +16,42 @@ pub fn configure(config: &mut web::ServiceConfig) {
         web::scope("/auth")
             .route("/login", web::post().to(login))
             .route("/logout", web::post().to(logout))
-            .route("/me", web::get().to(current_user)),
+            .route("/me", web::get().to(current_user))
+            .route("/access-requests", web::post().to(create_access_request))
+            .route(
+                "/access-requests/verify",
+                web::post().to(verify_access_request),
+            )
+            .route("/password-setup", web::post().to(password_setup)),
     );
+}
+
+async fn create_access_request(
+    state: web::Data<AppState>,
+    request: web::Json<CreateAccessRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        access_request_service::create(
+            &state.db,
+            &state.message_delivery,
+            request.into_inner(),
+            &state.frontend_origin,
+        )
+        .await?,
+    ))
+}
+async fn verify_access_request(
+    state: web::Data<AppState>,
+    request: web::Json<VerifyAccessRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(access_request_service::verify(&state.db, &request.token).await?))
+}
+async fn password_setup(
+    state: web::Data<AppState>,
+    request: web::Json<PasswordSetupRequest>,
+) -> Result<HttpResponse, ApiError> {
+    access_request_service::set_password(&state.db, request.into_inner()).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 async fn login(

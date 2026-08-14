@@ -84,4 +84,14 @@ describe("LoginPage", () => {
       ).not.toBeInTheDocument(),
     );
   });
+
+  it("shows the unified role guide and access request entry", () => {
+    setAuth();
+    render(<LoginPage />);
+    expect(screen.getByText("面向失智老人走失搜救的协同入口")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /家属/ })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: /志愿者/ }));
+    expect(screen.getByRole("button", { name: /志愿者/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("link", { name: "申请访问" })).toHaveAttribute("href", "/access-request");
+  });
 });

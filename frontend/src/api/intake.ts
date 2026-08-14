@@ -1,4 +1,5 @@
 import {
+  apiBlobRequest,
   apiRequest,
   apiSseRequest,
   type SseEventListener,
@@ -182,6 +183,14 @@ export function uploadIntakePhoto(
   const body = new FormData();
   body.append("file", file);
   return apiRequest(`/intake-sessions/${sessionId}/photos`, { method: "POST", body }, token);
+}
+
+export function downloadIntakePhoto(
+  token: string,
+  sessionId: string,
+  photoId: string,
+): Promise<Blob> {
+  return apiBlobRequest(`/intake-sessions/${sessionId}/photos/${photoId}`, {}, token);
 }
 
 export function submitIntakeAnswer(

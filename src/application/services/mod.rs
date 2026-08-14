@@ -1,3 +1,4 @@
+pub mod access_request_service;
 pub mod admin_service;
 pub mod ai_execution_service;
 pub mod auth_service;
@@ -5,6 +6,7 @@ pub mod case_collaboration_service;
 pub mod case_resource_service;
 pub mod case_service;
 pub mod case_summary_service;
+pub mod heic_decoder;
 pub mod intake_photo_service;
 pub mod intake_session_service;
 pub mod learning_service;

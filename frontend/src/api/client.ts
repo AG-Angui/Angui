@@ -114,6 +114,52 @@ export async function apiRequest<T>(
   return (await response.json()) as T;
 }
 
+/** Fetches a protected binary response without exposing the token in a URL. */
+export async function apiBlobRequest(
+  path: string,
+  options: RequestInit = {},
+  token?: string | null,
+): Promise<Blob> {
+  const headers = new Headers(options.headers);
+  headers.set("Accept", "image/jpeg,image/png");
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch {
+    throw new ApiClientError(
+      0,
+      "network_error",
+      userMessageFor(0, "network_error"),
+    );
+  }
+
+  if (!response.ok) {
+    let payload: ApiErrorPayload = {};
+    try {
+      payload = (await response.json()) as ApiErrorPayload;
+    } catch {
+      // A proxy may return HTML; preserve the safe HTTP-status message.
+    }
+    const code = payload.error?.code ?? "request_failed";
+    if (response.status === 401 && token) notifySessionExpired();
+    throw new ApiClientError(
+      response.status,
+      code,
+      userMessageFor(response.status, code, Boolean(token)),
+      payload.error?.message,
+    );
+  }
+
+  return response.blob();
+}
+
 /**
  * Reads a server-sent event response that carries its final JSON value in a
  * `completed` event. Heartbeats intentionally have no data and are ignored.

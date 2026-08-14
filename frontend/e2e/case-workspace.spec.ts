@@ -23,7 +23,7 @@ test("a case created through the live API is visible only in its member workspac
   await login(page, accounts.family);
   await page.goto("/family");
   await expect(
-    page.getByRole("button", { name: fixture.displayName }),
+    page.getByRole("link", { name: new RegExp(fixture.displayName) }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "指挥端" })).toHaveCount(0);
 

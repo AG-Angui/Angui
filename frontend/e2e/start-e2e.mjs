@@ -10,7 +10,6 @@ const databaseFiles = [databaseFile, `${databaseFile}-shm`, `${databaseFile}-wal
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const debugExecutable = (name) =>
   resolve(workspaceRoot, "target", "debug", `${name}${executableSuffix}`);
-const backendPort = process.env.ANGUI_E2E_BACKEND_PORT ?? "8081";
 const frontendPort = process.env.ANGUI_E2E_FRONTEND_PORT ?? "5174";
 
 function run(program, args, cwd = workspaceRoot) {
@@ -75,7 +74,11 @@ function stop(signal = "SIGTERM") {
   setTimeout(() => {
     backend.kill("SIGKILL");
     frontend.kill("SIGKILL");
-  }, 10_000).unref();
+    // Child stdout handles can otherwise keep the launcher alive on Windows
+    // after Playwright has finished. The children above are direct processes,
+    // so this is only a bounded cleanup for this isolated E2E server pair.
+    process.exit(process.exitCode ?? 0);
+  }, 5_000).unref();
 }
 
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => stop(signal));

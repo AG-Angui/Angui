@@ -210,6 +210,53 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateAccessRequest {
+    pub email: String,
+    pub display_name: String,
+    pub requested_role: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyAccessRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewAccessRequest {
+    pub action: String,
+    pub role: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasswordSetupRequest {
+    pub token: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccessRequestResponse {
+    pub id: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminAccessRequestResponse {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub requested_role: String,
+    pub status: String,
+    pub email_verified_at: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct UserResponse {
     pub id: String,

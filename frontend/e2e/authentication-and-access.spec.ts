@@ -29,7 +29,21 @@ test("invalid credentials never establish a browser session", async ({ page }) =
 
   await expect(page.getByRole("alert")).toContainText("邮箱或密码错误");
   await page.reload();
-  await expect(page.getByRole("heading", { name: "账号登录" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "安归｜身份登录" })).toBeVisible();
+});
+
+test("the redesigned login keeps role guidance and submits an access request", async ({ page }, testInfo) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "面向失智老人走失搜救的协同入口" })).toBeVisible();
+  await page.getByRole("button", { name: /志愿者/ }).click();
+  await expect(page.getByRole("button", { name: /志愿者/ })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("link", { name: "申请访问" }).click();
+  await expect(page).toHaveURL(/\/access-request$/);
+  await expect(page.getByRole("heading", { name: "申请访问安归" })).toBeVisible();
+  await page.getByRole("textbox", { name: "姓名" }).fill("E2E access applicant");
+  await page.getByRole("textbox", { name: "邮箱" }).fill(`access-${testInfo.testId.replace(/[^a-z0-9]/gi, "-")}@example.invalid`);
+  await page.getByRole("button", { name: "发送验证邮件" }).click();
+  await expect(page.getByRole("status")).toContainText("如果邮箱可以申请访问");
 });
 
 test("a family member can log in and logout, but cannot open the commander workspace", async ({
@@ -46,7 +60,7 @@ test("a family member can log in and logout, but cannot open the commander works
   await expect(page.getByRole("heading", { name: "行动总览" })).toBeVisible();
 
   await page.getByRole("button", { name: "退出登录" }).first().click();
-  await expect(page.getByRole("heading", { name: "账号登录" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "安归｜身份登录" })).toBeVisible();
 });
 
 test("a commander can open command work but is redirected away from family-only work", async ({

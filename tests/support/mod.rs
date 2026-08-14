@@ -63,6 +63,7 @@ impl TestContext {
     pub fn app_state(&self) -> AppState {
         AppState {
             db: self.database.clone(),
+            frontend_origin: "http://localhost:5173".to_owned(),
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
             attachment_storage_directory: std::env::temp_dir().join("angui-api-test-attachments"),
@@ -80,6 +81,7 @@ impl TestContext {
             ai_gateway: AiGateway::from_configurations(Vec::new())
                 .expect("empty AI provider configuration should be valid"),
             login_limiter: LoginRateLimiter::default(),
+            message_delivery: angui::message_delivery::MessageDelivery::disabled(),
         }
     }
 

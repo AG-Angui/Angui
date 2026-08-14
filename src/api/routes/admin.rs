@@ -5,7 +5,7 @@ use crate::{
     error::ApiError,
     models::{
         AdminAuditEventQuery, AdminUserQuery, AuthenticatedUser, DeidentifyArchiveDraftRequest,
-        ReviewArchiveDraftRequest, UpdateAdminUserStatusRequest,
+        ReviewAccessRequest, ReviewArchiveDraftRequest, UpdateAdminUserStatusRequest,
     },
     services::admin_service,
 };
@@ -15,6 +15,11 @@ pub fn configure(config: &mut web::ServiceConfig) {
         web::scope("/admin")
             .route("/audit-events", web::get().to(list_audit_events))
             .route("/users", web::get().to(list_users))
+            .route("/access-requests", web::get().to(list_access_requests))
+            .route(
+                "/access-requests/{request_id}/review",
+                web::patch().to(review_access_request),
+            )
             .route("/archive-drafts", web::get().to(list_archive_drafts))
             .route(
                 "/users/{user_id}/status",
@@ -41,6 +46,33 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 web::post().to(restore_archive_review_material),
             ),
     );
+}
+
+async fn list_access_requests(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(crate::services::access_request_service::list(&state.db, &auth).await?))
+}
+
+async fn review_access_request(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    request_id: web::Path<String>,
+    request: web::Json<ReviewAccessRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::access_request_service::review(
+            &state.db,
+            &state.message_delivery,
+            &auth,
+            &request_id,
+            request.into_inner(),
+            &state.frontend_origin,
+        )
+        .await?,
+    ))
 }
 
 async fn list_audit_events(

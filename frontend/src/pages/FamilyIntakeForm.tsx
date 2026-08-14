@@ -25,6 +25,7 @@ import {
   listIntakeAnswerRevisions,
   restoreIntakeAnswerRevision,
   listIntakePhotos,
+  downloadIntakePhoto,
   startIntakeAiInitialReview,
   submitIntakeAnswer,
   uploadIntakePhoto,
@@ -73,6 +74,78 @@ const questionReasons: Record<string, string> = {
   transport_ability: "帮助评估可能的行动范围。",
   follow_up_clues: "记录家属尚待核实的补充信息。",
 };
+
+const acceptedPhotoMimeTypes = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/x-png",
+  "image/heic",
+  "image/heif",
+  "image/x-heic",
+  "image/x-heif",
+]);
+
+const acceptedPhotoExtensions = new Set(["jpg", "jpeg", "png", "heic", "heif"]);
+
+function isSupportedPhotoFile(file: File) {
+  const mimeType = file.type.trim().toLowerCase();
+  if (acceptedPhotoMimeTypes.has(mimeType)) return true;
+  if (mimeType && mimeType !== "application/octet-stream") return false;
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  return Boolean(extension && acceptedPhotoExtensions.has(extension));
+}
+
+function IntakePhotoPreview({
+  token,
+  sessionId,
+  photo,
+}: {
+  token: string;
+  sessionId: string;
+  photo: IntakePhoto;
+}) {
+  const [source, setSource] = useState<string | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setSource(null);
+    setStatus("loading");
+    void downloadIntakePhoto(token, sessionId, photo.id)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        setSource(objectUrl);
+        setStatus("ready");
+      })
+      .catch(() => {
+        if (active) setStatus("failed");
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [photo.id, sessionId, token]);
+
+  if (status === "loading") {
+    return <span className="text-xs text-slate-500" role="status">正在加载照片预览…</span>;
+  }
+  if (status === "failed") {
+    return <span className="text-xs text-amber-800" role="status">照片预览暂时无法加载，请稍后重试。</span>;
+  }
+  return source ? (
+    <img
+      src={source}
+      alt={`已上传照片：${photo.original_filename}`}
+      className="h-16 w-16 shrink-0 rounded border border-slate-200 bg-slate-100 object-cover"
+    />
+  ) : null;
+}
 
 const defaultQuestionPrompts: Record<string, string> = {
   basic_information: "请填写可供家属核对的基本信息。",
@@ -668,8 +741,8 @@ export function FamilyIntakeForm({
 
   async function uploadPhoto(file: File | undefined) {
     if (!token || !session || !file) return;
-    if (!["image/jpeg", "image/png"].includes(file.type)) {
-      setError("请上传 JPEG 或 PNG 格式的走失者照片。");
+    if (!isSupportedPhotoFile(file)) {
+      setError("请上传 JPG、PNG 或 HEIC 格式的走失者照片。手机相册导出的照片可直接选择。");
       return;
     }
     setBusyAction("photo");
@@ -1521,11 +1594,11 @@ export function FamilyIntakeForm({
           走失者照片 <span aria-hidden="true">*</span>
         </h3>
         <p id="intake-photo-help" className="mb-3 mt-1 text-xs leading-5 text-slate-700">
-          请上传至少一张近期 JPEG 或 PNG 照片。照片仅用于受控案件处理，不会公开展示、用于人脸识别或写入 AI 审核日志。
+          请上传至少一张近期 JPG、PNG 或 HEIC 照片。手机相册导出的照片可直接选择；服务端会安全转换并移除非必要元数据。照片仅用于受控案件处理，不会公开展示、用于人脸识别或写入 AI 审核日志。
         </p>
         <input
           type="file"
-          accept="image/jpeg,image/png"
+          accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif"
           aria-describedby="intake-photo-help"
           aria-label="上传走失者照片"
           disabled={isBusy || photos.length >= 4}
@@ -1537,14 +1610,15 @@ export function FamilyIntakeForm({
         />
         {busyAction === "photo" && (
           <p className="mb-0 mt-2 text-xs text-slate-700" role="status">
-            正在安全处理照片…
+            正在安全转换照片，请稍候…
           </p>
         )}
         {photos.length > 0 ? (
-          <ul className="mb-0 mt-3 space-y-1 p-0 text-xs text-slate-700" aria-live="polite">
+          <ul className="mb-0 mt-3 space-y-2 p-0 text-xs text-slate-700" aria-live="polite">
             {photos.map((photo) => (
-              <li key={photo.id} className="list-none rounded bg-white px-2 py-1">
-                已上传：{photo.original_filename}（{Math.ceil(photo.byte_size / 1024)} KB）
+              <li key={photo.id} className="flex items-center gap-3 rounded border border-slate-200 bg-white p-2">
+                <IntakePhotoPreview token={token ?? ""} sessionId={session.id} photo={photo} />
+                <span className="min-w-0 break-all">已上传：{photo.original_filename}（{Math.ceil(photo.byte_size / 1024)} KB）</span>
               </li>
             ))}
           </ul>

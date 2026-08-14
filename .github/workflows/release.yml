@@ -66,7 +66,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt, clippy
-
+          
       - name: Run release Rust checks and build
         run: |
           cargo fmt --all -- --check
@@ -177,6 +177,7 @@ jobs:
           path: .preview
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true
 
   deploy-tag-preview:
     needs: build-and-publish

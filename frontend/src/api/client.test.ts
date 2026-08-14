@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { SESSION_EXPIRED_EVENT, apiRequest, apiSseRequest } from "./client";
+import {
+  SESSION_EXPIRED_EVENT,
+  apiBlobRequest,
+  apiRequest,
+  apiSseRequest,
+} from "./client";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -85,6 +90,30 @@ describe("apiRequest", () => {
       code: "network_error",
       message: "网络连接失败，请检查服务连接后重试。",
     });
+  });
+});
+
+describe("apiBlobRequest", () => {
+  it("uses bearer authentication for protected image bytes without a tokenized URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Blob(["controlled-image"], { type: "image/png" }), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      apiBlobRequest("/intake-sessions/intake-1/photos/photo-1", {}, "test-session"),
+    ).resolves.toMatchObject({ type: "image/png" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/intake-sessions/intake-1/photos/photo-1",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer test-session");
+    expect(headers.get("Accept")).toBe("image/jpeg,image/png");
   });
 });
 

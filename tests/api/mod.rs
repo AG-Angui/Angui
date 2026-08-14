@@ -1,3 +1,4 @@
+mod access_requests;
 mod admin_api;
 mod archive_drafts_review;
 mod auth_login_post;

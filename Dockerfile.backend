@@ -3,6 +3,10 @@
 FROM rust:1.97-bookworm AS builder
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake libde265-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY Cargo.toml Cargo.lock ./
 COPY migration/Cargo.toml migration/Cargo.toml
 COPY migration/src migration/src
@@ -11,13 +15,13 @@ COPY src src
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --locked --release --package angui --bin angui \
-    && cargo build --locked --release --package angui --bin angui-admin \
+    cargo build --locked --release --features heic --package angui --bin angui \
+    && cargo build --locked --release --features heic --package angui --bin angui-admin \
     && cargo build --locked --release --package migration --bin migration
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl libde265-0 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 angui \
     && install -d -o angui -g angui /app/data

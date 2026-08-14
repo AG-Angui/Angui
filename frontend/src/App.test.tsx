@@ -95,7 +95,14 @@ describe("application role routing", () => {
   it("shows the login page without a session", () => {
     setAuth(null);
     renderApp();
-    expect(screen.getByText("账号登录")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "安归｜身份登录" })).toBeInTheDocument();
+  });
+
+  it("exposes the public access request page without a session", () => {
+    setAuth(null);
+    renderApp("/access-request");
+    expect(screen.getByRole("heading", { name: "申请访问安归" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /发送验证邮件/ })).toBeInTheDocument();
   });
 
   it("shows only operational workspaces that match the account capabilities", async () => {

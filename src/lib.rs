@@ -11,5 +11,5 @@ pub mod persistence;
 pub use api::{auth, error, models, rate_limit, routes};
 pub use application::{app_state, services};
 pub use domain::{intake_assessment, roles};
-pub use integrations::{ai_gateway, amap_service};
+pub use integrations::{ai_gateway, amap_service, message_delivery};
 pub use persistence::entities;

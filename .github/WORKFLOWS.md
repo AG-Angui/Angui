@@ -12,7 +12,11 @@ Rust formatting, Clippy, tests, and the release build run in parallel with the
 frontend lint/build and live PostgreSQL/MySQL migration checks. The database job
 applies every migration, reports status, performs a full refresh, and checks
 status again for both server databases. Cargo and Yarn caches are enabled, and
-successful binaries/bundles are retained for seven days.
+successful binaries/bundles are retained for seven days. The Rust job installs
+`cmake`, `libde265-dev`, and `pkg-config` before its `--all-features` commands.
+The `heic` feature uses the version-pinned embedded libheif source rather than
+the runner image's potentially older `libheif-dev`, so CI compiles and tests the
+controlled HEIC/HEIF decoder rather than silently excluding it.
 
 ## Pull request quality
 
