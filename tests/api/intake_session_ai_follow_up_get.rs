@@ -66,7 +66,7 @@ async fn get_ai_follow_up_returns_a_static_optional_phase_two_question_when_ai_i
 }
 
 #[actix_web::test]
-async fn get_ai_follow_up_is_not_available_until_required_phase_one_answers_are_complete() {
+async fn get_ai_follow_up_returns_a_static_current_phase_question_before_phase_two() {
     let context = TestContext::new().await;
     let session_id = create_session(
         &context,
@@ -90,8 +90,9 @@ async fn get_ai_follow_up_is_not_available_until_required_phase_one_answers_are_
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = test::read_body_json(response).await;
-    assert_eq!(body["question"], Value::Null);
-    assert_eq!(body["degradation_status"], "not_applicable");
+    assert_eq!(body["degradation_status"], "rule_based_fallback");
+    assert_eq!(body["question"]["field"], "health_status");
+    assert_eq!(body["question"]["skippable"], true);
 }
 
 #[actix_web::test]

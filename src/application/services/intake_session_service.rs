@@ -770,7 +770,7 @@ pub async fn get_ai_follow_up(
     let answers = parse_answers(&session)?;
     let missing = missing_fields(&answers, &questions);
     let phase = IntakePhaseProgress::for_answers(&answers, session.question_set_version);
-    let fallback = next_optional_follow_up_question(&questions, &missing, &phase);
+    let fallback = next_follow_up_question(&questions, &missing, &phase);
     let Some(fallback) = fallback else {
         return Ok(IntakeAiFollowUpResponse {
             question: None,
@@ -782,6 +782,7 @@ pub async fn get_ai_follow_up(
         "answers": answers_for_ai(&answers),
         "missing_fields": missing,
         "fallback_field": fallback.field.clone(),
+        "fallback_required": fallback.required,
     }))
     .map_err(|_| ApiError::Internal)?;
     let ai_request = AiRequest {
@@ -789,7 +790,7 @@ pub async fn get_ai_follow_up(
         data_level: DataLevel::Sensitive,
         purpose: AiPurpose::IntakeDraft,
         data_region: "CN".to_owned(),
-        system_instruction: Some("Return JSON only: {field,prompt,purpose,missing_fields,skippable}. Ask one optional factual follow-up for a listed missing field. Do not infer a location, diagnosis, action, or emergency conclusion.".to_owned()),
+        system_instruction: Some("Return JSON only: {field,prompt,purpose,missing_fields,skippable}. Ask one factual question for fallback_field only. Set skippable to false when fallback_required is true and true otherwise. Do not infer a location, diagnosis, action, or emergency conclusion.".to_owned()),
         output_schema: Some(follow_up_schema()),
         output_schema_name: Some("intake_follow_up".to_owned()),
         input,
@@ -803,20 +804,11 @@ pub async fn get_ai_follow_up(
     let (question, degradation_status, _audit_status) = match execution {
         AiExecutionResult::Completed { output, .. } => {
             match gateway.decode_json::<IntakeAiFollowUp>(&output) {
-                Ok(question)
-                    if valid_follow_up(
-                        &question,
-                        &missing,
-                        &questions,
-                        session.question_set_version,
-                    ) =>
-                {
-                    (
-                        Some(normalize_follow_up(question)),
-                        "available".to_owned(),
-                        AiTaskStatus::Completed,
-                    )
-                }
+                Ok(question) if valid_follow_up(&question, &fallback, &missing) => (
+                    Some(normalize_follow_up(question)),
+                    "available".to_owned(),
+                    AiTaskStatus::Completed,
+                ),
                 _ => (
                     Some(static_follow_up(fallback, missing.clone())),
                     "rule_based_fallback".to_owned(),
@@ -910,23 +902,18 @@ fn static_follow_up(question: IntakeQuestion, missing_fields: Vec<String>) -> In
         prompt: question.prompt,
         purpose: "Collect a missing factual field for human review.".to_owned(),
         missing_fields,
-        skippable: true,
+        skippable: !question.required,
     }
 }
 
 fn valid_follow_up(
     question: &IntakeAiFollowUp,
+    fallback: &IntakeQuestion,
     missing: &[String],
-    questions: &[intake_question_definitions::Model],
-    question_set_version: i32,
 ) -> bool {
-    question.skippable
+    question.field == fallback.field
+        && question.skippable == !fallback.required
         && missing.contains(&question.field)
-        && questions.iter().any(|definition| {
-            definition.field_code == question.field
-                && !definition.is_required
-                && question_phase(&definition.field_code, question_set_version) == "phase_two"
-        })
         && !question.prompt.trim().is_empty()
         && question.prompt.chars().count() <= 500
         && !question.purpose.trim().is_empty()
@@ -1178,6 +1165,7 @@ fn validate_review_reason(reason: String) -> Result<(), ApiError> {
 fn profile_draft_from_model(
     model: intake_profile_drafts::Model,
 ) -> Result<IntakeProfileDraft, ApiError> {
+    let requires_human_confirmation = model.status == "draft";
     Ok(IntakeProfileDraft {
         id: model.id,
         status: model.status,
@@ -1187,7 +1175,7 @@ fn profile_draft_from_model(
         template_version: model.template_version,
         degradation_status: model.degradation_status,
         version: model.version,
-        requires_human_confirmation: true,
+        requires_human_confirmation,
         profile: serde_json::from_str(&model.profile_json).map_err(|_| ApiError::Internal)?,
         field_metadata: serde_json::from_str(&model.field_metadata_json)
             .map_err(|_| ApiError::Internal)?,
@@ -2229,29 +2217,14 @@ fn next_question_for_phase(
         })
 }
 
-/// AI follow-up is deliberately limited to optional phase-two intake fields.
-/// Required collection remains deterministic so an unavailable provider never
-/// changes the path to first human confirmation.
-fn next_optional_follow_up_question(
+/// AI may phrase the current next intake question, but it cannot change the
+/// deterministic question order, requiredness, or phase transition rules.
+fn next_follow_up_question(
     questions: &[intake_question_definitions::Model],
     missing_fields: &[String],
     phase: &IntakePhaseProgress,
 ) -> Option<IntakeQuestion> {
-    if !phase.phase_transition_ready {
-        return None;
-    }
-    questions
-        .iter()
-        .find(|question| {
-            !question.is_required
-                && question_phase(&question.field_code, question.version) == "phase_two"
-                && missing_fields.contains(&question.field_code)
-        })
-        .map(|question| IntakeQuestion {
-            field: question.field_code.clone(),
-            prompt: question.prompt.clone(),
-            required: false,
-        })
+    next_question_for_phase(questions, missing_fields, phase)
 }
 
 fn missing_fields(
@@ -2488,13 +2461,11 @@ fn now() -> String {
 mod tests {
     use super::{
         InitialReviewModelIssue, InitialReviewModelOutput, IntakeAiFollowUp, IntakeInitialAnswers,
-        answers_for_ai, append_content_quality_issues, can_request_ai_follow_up,
+        IntakeQuestion, answers_for_ai, append_content_quality_issues, can_request_ai_follow_up,
         decode_profile_extraction_output, profile_extraction_schema,
         profile_extraction_system_instruction, valid_follow_up, validate_basic_information_details,
         validate_initial_review_output, validate_profile_extraction,
     };
-    use crate::entities::intake_question_definitions;
-
     fn answers() -> IntakeInitialAnswers {
         IntakeInitialAnswers {
             basic_information: Some(
@@ -2678,19 +2649,12 @@ mod tests {
     }
 
     #[test]
-    fn follow_up_rejects_required_or_unknown_fields_from_a_provider() {
-        let questions = vec![intake_question_definitions::Model {
-            id: "intake-q-test".to_owned(),
-            version: 2,
-            field_code: "frequent_locations".to_owned(),
+    fn follow_up_must_preserve_the_current_question_and_requiredness() {
+        let fallback = IntakeQuestion {
+            field: "frequent_locations".to_owned(),
             prompt: "Which places are frequently visited?".to_owned(),
-            display_order: 1,
-            is_required: false,
-            max_answer_chars: 800,
-            status: "active".to_owned(),
-            created_at: "2026-08-14T00:00:00Z".to_owned(),
-            updated_at: "2026-08-14T00:00:00Z".to_owned(),
-        }];
+            required: false,
+        };
         let missing = vec!["frequent_locations".to_owned()];
         let valid = IntakeAiFollowUp {
             field: "frequent_locations".to_owned(),
@@ -2700,15 +2664,34 @@ mod tests {
             skippable: true,
         };
 
-        assert!(valid_follow_up(&valid, &missing, &questions, 2));
+        assert!(valid_follow_up(&valid, &fallback, &missing));
 
-        let mut required = valid.clone();
-        required.skippable = false;
-        assert!(!valid_follow_up(&required, &missing, &questions, 2));
+        let mut wrong_requiredness = valid.clone();
+        wrong_requiredness.skippable = false;
+        assert!(!valid_follow_up(&wrong_requiredness, &fallback, &missing));
 
         let mut unknown = valid;
         unknown.field = "family_phone".to_owned();
-        assert!(!valid_follow_up(&unknown, &missing, &questions, 2));
+        assert!(!valid_follow_up(&unknown, &fallback, &missing));
+
+        let required_fallback = IntakeQuestion {
+            field: "last_seen".to_owned(),
+            prompt: "When was the person last seen?".to_owned(),
+            required: true,
+        };
+        let required_missing = vec!["last_seen".to_owned()];
+        let required = IntakeAiFollowUp {
+            field: "last_seen".to_owned(),
+            prompt: "When and where was the person last seen?".to_owned(),
+            purpose: "Collect the required last-seen information.".to_owned(),
+            missing_fields: required_missing.clone(),
+            skippable: false,
+        };
+        assert!(valid_follow_up(
+            &required,
+            &required_fallback,
+            &required_missing
+        ));
     }
 
     #[test]

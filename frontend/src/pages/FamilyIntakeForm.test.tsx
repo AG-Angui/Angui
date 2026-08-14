@@ -14,12 +14,16 @@ const mocked = vi.hoisted(() => ({
   getIntakeAiInitialReview: vi.fn(),
   getIntakeAiFollowUp: vi.fn(),
   getIntakeDraft: vi.fn(),
+  generateIntakeDraft: vi.fn(),
+  diffIntakeDraftVersions: vi.fn(),
   listIntakeAnswerRevisions: vi.fn(),
   listIntakeDraftVersions: vi.fn(),
   listIntakePhotos: vi.fn(),
   downloadIntakePhoto: vi.fn(),
   acknowledgeIntakeAiInitialReview: vi.fn(),
   startIntakeAiInitialReview: vi.fn(),
+  reviewIntakeDraft: vi.fn(),
+  restoreIntakeDraft: vi.fn(),
   submitIntakeAnswer: vi.fn(),
   uploadIntakePhoto: vi.fn(),
 }));
@@ -38,6 +42,10 @@ vi.mock("../api/intake", () => ({
   getIntakeAiFollowUp: (...args: unknown[]) =>
     mocked.getIntakeAiFollowUp(...args),
   getIntakeDraft: (...args: unknown[]) => mocked.getIntakeDraft(...args),
+  generateIntakeDraft: (...args: unknown[]) =>
+    mocked.generateIntakeDraft(...args),
+  diffIntakeDraftVersions: (...args: unknown[]) =>
+    mocked.diffIntakeDraftVersions(...args),
   listIntakeAnswerRevisions: (...args: unknown[]) =>
     mocked.listIntakeAnswerRevisions(...args),
   listIntakeDraftVersions: (...args: unknown[]) =>
@@ -48,6 +56,10 @@ vi.mock("../api/intake", () => ({
     mocked.acknowledgeIntakeAiInitialReview(...args),
   startIntakeAiInitialReview: (...args: unknown[]) =>
     mocked.startIntakeAiInitialReview(...args),
+  reviewIntakeDraft: (...args: unknown[]) =>
+    mocked.reviewIntakeDraft(...args),
+  restoreIntakeDraft: (...args: unknown[]) =>
+    mocked.restoreIntakeDraft(...args),
   submitIntakeAnswer: (...args: unknown[]) =>
     mocked.submitIntakeAnswer(...args),
   uploadIntakePhoto: (...args: unknown[]) => mocked.uploadIntakePhoto(...args),
@@ -230,6 +242,53 @@ describe("FamilyIntakeForm", () => {
     mocked.listIntakePhotos.mockResolvedValue([]);
     mocked.downloadIntakePhoto.mockResolvedValue(new Blob(["preview"], { type: "image/png" }));
     window.sessionStorage.clear();
+  });
+
+  it("shows a confirmed AI profile version as confirmed on every field card", async () => {
+    const confirmedDraft: IntakeDraft = {
+      ...profileDraft,
+      status: "confirmed",
+      requires_human_confirmation: false,
+    };
+    window.sessionStorage.setItem(
+      "angui:intake-tab-draft:family-1",
+      JSON.stringify({ session: readySession, answer: "" }),
+    );
+    mocked.getIntakeDraft.mockResolvedValue(profileDraft);
+    mocked.listIntakeDraftVersions.mockResolvedValue({
+      items: [profileDraft],
+    });
+    mocked.reviewIntakeDraft.mockResolvedValue(confirmedDraft);
+
+    render(
+      <FamilyIntakeForm
+        onCancel={vi.fn()}
+        onConfirmed={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await screen.findByText("AI 画像草稿版本");
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+
+    await waitFor(() =>
+      expect(mocked.reviewIntakeDraft).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+        "profile-draft-test-1",
+        "confirm",
+        "family confirmed profile candidate",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText(/状态：需人工确认/)).not.toBeInTheDocument(),
+    );
+    expect(screen.getAllByText(/状态：已确认/)).toHaveLength(3);
+    expect(
+      screen.getByText(
+        "当前画像版本已经家属确认，但正式案件尚未创建；请继续完成建案前的最终确认。",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
   });
 
   it("restores the current-tab draft and does not create a second intake session", async () => {
@@ -513,7 +572,12 @@ describe("FamilyIntakeForm", () => {
         expect.objectContaining({ field: "last_seen" }),
       ),
     );
-    expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mocked.getIntakeAiFollowUp).toHaveBeenCalledWith(
+        "family-session",
+        "intake-1",
+      ),
+    );
     await waitFor(() => {
       const stored = window.sessionStorage.getItem("angui:intake-tab-draft:family-1");
       expect(stored).not.toBeNull();

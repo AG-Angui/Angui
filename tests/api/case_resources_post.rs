@@ -79,6 +79,114 @@ async fn post_case_places_requires_family_or_commander_and_returns_pending_revie
 }
 
 #[actix_web::test]
+async fn patch_case_place_review_requires_commander_and_records_audited_transition() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    let family_token = context.token(FAMILY).await;
+    let commander_token = context.token(COMMANDER).await;
+    let app = crate::init_api_app!(&context);
+
+    let created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/places"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(json!({
+                "name": "Fictional clinic",
+                "place_type": "medical",
+                "address": "Fictional clinic entrance",
+                "visibility": "confirmed"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: serde_json::Value = test::read_body_json(created).await;
+    let place_id = created["id"].as_str().expect("place id");
+    let review_uri = format!("/api/cases/{case_id}/places/{place_id}/review");
+
+    let family_denied = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&review_uri)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(json!({
+                "status": "confirmed",
+                "reason": "family cannot review its own submission"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_error(family_denied, StatusCode::FORBIDDEN, "forbidden").await;
+
+    let invalid = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&review_uri)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({ "status": "pending_review", "reason": "invalid transition" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(invalid, StatusCode::BAD_REQUEST, "validation_error").await;
+
+    let confirmed = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&review_uri)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({
+                "status": "confirmed",
+                "reason": "verified against the fictional family report"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    let confirmed: serde_json::Value = test::read_body_json(confirmed).await;
+    assert_eq!(confirmed["review_status"], "confirmed");
+
+    let audit = audit_events::Entity::find()
+        .filter(audit_events::Column::CaseId.eq(&case_id))
+        .filter(audit_events::Column::Action.eq("case.place_reviewed"))
+        .filter(audit_events::Column::EntityId.eq(place_id))
+        .one(&context.database)
+        .await
+        .expect("audit query should succeed")
+        .expect("place review audit should exist");
+    let metadata: serde_json::Value = serde_json::from_str(
+        audit
+            .metadata_json
+            .as_deref()
+            .expect("place review audit should have metadata"),
+    )
+    .expect("place review metadata should be JSON");
+    assert_eq!(metadata["from"], "pending_review");
+    assert_eq!(metadata["to"], "confirmed");
+    assert_eq!(
+        metadata["reason"],
+        "verified against the fictional family report"
+    );
+
+    let repeated = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&review_uri)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({
+                "status": "rejected",
+                "reason": "a completed review cannot be overwritten"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_error(repeated, StatusCode::CONFLICT, "conflict").await;
+}
+
+#[actix_web::test]
 async fn get_case_places_applies_role_visibility_and_hides_non_members() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;

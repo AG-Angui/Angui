@@ -121,10 +121,10 @@ export interface IntakeDirectionHypothesis {
 
 export interface IntakeDraft {
   id: string;
-  status: "draft";
+  status: "draft" | "confirmed" | "superseded";
   source_scope: string;
   generated_at: string;
-  requires_human_confirmation: true;
+  requires_human_confirmation: boolean;
   profile: IntakeDraftProfile;
   field_metadata: IntakeProfileDraftFieldMetadata[];
   missing_fields: string[];

@@ -144,6 +144,11 @@ export interface CreateCasePlacePayload {
   visibility: PlaceVisibility;
 }
 
+export interface ReviewCasePlacePayload {
+  status: "confirmed" | "rejected";
+  reason: string;
+}
+
 export interface CaseResourceConfiguration {
   attachment_max_image_bytes: number;
   attachment_max_per_case: number;
@@ -1006,6 +1011,19 @@ export function createCasePlace(
   return apiRequest<CasePlace>(
     `/cases/${caseId}/places`,
     { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export function reviewCasePlace(
+  token: string,
+  caseId: string,
+  placeId: string,
+  payload: ReviewCasePlacePayload,
+): Promise<CasePlace> {
+  return apiRequest<CasePlace>(
+    `/cases/${caseId}/places/${placeId}/review`,
+    { method: "PATCH", body: JSON.stringify(payload) },
     token,
   );
 }

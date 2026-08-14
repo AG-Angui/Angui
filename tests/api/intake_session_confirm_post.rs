@@ -47,6 +47,77 @@ async fn ready_session(context: &TestContext) -> String {
 }
 
 #[actix_web::test]
+async fn confirmed_profile_draft_reports_that_version_review_is_complete() {
+    let context = TestContext::new().await;
+    let session_id = ready_session(&context).await;
+    let token = context.token(FAMILY).await;
+    let app = crate::init_api_app!(&context);
+
+    let generated = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!(
+                "/api/intake-sessions/{session_id}/profile-draft/generate"
+            ))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(generated.status(), StatusCode::CREATED);
+    let generated = read_sse_completed_json(generated).await;
+    assert_eq!(generated["status"], "draft");
+    assert_eq!(generated["requires_human_confirmation"], true);
+    let draft_id = generated["id"]
+        .as_str()
+        .expect("generated profile draft should include an id");
+    let review_uri = format!("/api/intake-sessions/{session_id}/profile-draft/{draft_id}/review");
+
+    let confirmed = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&review_uri)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({
+                "action": "confirm",
+                "reason": "family confirmed the generated profile version"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    let confirmed: Value = test::read_body_json(confirmed).await;
+    assert_eq!(confirmed["status"], "confirmed");
+    assert_eq!(confirmed["requires_human_confirmation"], false);
+
+    let refreshed = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/intake-sessions/{session_id}/profile-draft"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(refreshed.status(), StatusCode::OK);
+    let refreshed: Value = test::read_body_json(refreshed).await;
+    assert_eq!(refreshed["status"], "confirmed");
+    assert_eq!(refreshed["requires_human_confirmation"], false);
+
+    let repeated = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&review_uri)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({
+                "action": "confirm",
+                "reason": "a completed version review cannot be repeated"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_error(repeated, StatusCode::CONFLICT, "conflict").await;
+}
+
+#[actix_web::test]
 async fn post_confirm_rejects_blocking_intake_assessments_without_creating_a_case() {
     let context = TestContext::new().await;
     let family = context.authenticated(FAMILY).await;
