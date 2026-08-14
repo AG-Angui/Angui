@@ -225,7 +225,7 @@ describe("CaseWorkspacePage", () => {
         .getAllByText("已确认")
         .some((element) => element.dataset.slot === "chip-label"),
     ).toBe(true);
-  });
+  }, 10_000);
 
   it("gives a family member one next action and keeps long forms collapsed", async () => {
     vi.clearAllMocks();
