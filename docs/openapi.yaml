@@ -379,8 +379,8 @@ paths:
     get:
       tags: [Intake sessions]
       operationId: getIntakeSessionProfileDraft
-      summary: Get the unconfirmed profile draft for an intake session
-      description: Only the session creator can read this sensitive draft. It is assembled only from that session's family-provided answers, is explicitly marked `draft`, and is never a formal case fact. Each non-empty display field has field-level provenance and a generation time so it can be reviewed before confirmation.
+      summary: Get the latest profile draft version for an intake session
+      description: Only the session creator can read this sensitive version. It is assembled only from that session's family-provided answers and never becomes a formal case fact merely because the version is reviewed. Each non-empty display field has field-level provenance and a generation time; status and requires_human_confirmation report the persisted version-review state.
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -400,6 +400,35 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /api/intake-sessions/{session_id}/profile-draft/{draft_id}/review:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+      - name: draft_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Intake sessions]
+      operationId: reviewIntakeProfileDraft
+      summary: Confirm or reject one generated profile draft version
+      description: Only the session creator can review a persisted draft version. A successful confirmation returns status confirmed and requires_human_confirmation false; rejection returns status superseded. The reviewed version remains separate from the final case-creation confirmation.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewIntakeProfileDraftRequest" }
+      responses:
+        "200": { description: Reviewed profile draft version, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeProfileDraft" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /api/intake-sessions/{session_id}/ai-follow-up:
     parameters:
@@ -1445,6 +1474,41 @@ paths:
       responses:
         "201":
           description: 待审核地点已创建
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CasePlace" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/cases/{case_id}/places/{place_id}/review:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+      - name: place_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Cases]
+      operationId: reviewCasePlace
+      summary: 审核家属或案件成员提交的地点
+      description: 仅当前案件的 commander 可操作。地点必须仍为 pending_review，审核理由必填；确认或驳回会原子更新状态并写入审计事件。
+      security:
+        - bearerAuth: []
+      x-account-types: [member]
+      x-case-roles: [commander]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewCasePlaceRequest" }
+      responses:
+        "200":
+          description: 已审核的地点
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CasePlace" }
@@ -3014,12 +3078,19 @@ components:
     IntakeProfileDraft:
       type: object
       additionalProperties: false
-      required: [status, source_scope, generated_at, requires_human_confirmation, profile, field_metadata, missing_fields, assessments, confirmation_blocked_reasons, direction_hypotheses]
+      required: [id, status, source_scope, generated_at, provider_model, template_version, degradation_status, version, requires_human_confirmation, profile, field_metadata, missing_fields, assessments, confirmation_blocked_reasons, direction_hypotheses]
       properties:
-        status: { type: string, const: draft }
+        id: { type: string }
+        status: { type: string, enum: [draft, confirmed, superseded] }
         source_scope: { type: string }
         generated_at: { type: string, format: date-time }
-        requires_human_confirmation: { type: boolean, const: true }
+        provider_model: { type: [string, "null"] }
+        template_version: { type: string }
+        degradation_status: { type: string }
+        version: { type: integer, minimum: 0 }
+        requires_human_confirmation:
+          type: boolean
+          description: True only while this version remains in draft status awaiting version review.
         profile: { $ref: "#/components/schemas/IntakeProfileDraftFields" }
         field_metadata:
           type: array
@@ -3039,6 +3110,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/IntakeDirectionHypothesis"
+
+    ReviewIntakeProfileDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason]
+      properties:
+        action: { type: string, enum: [confirm, reject] }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
 
     IntakeProfileDraftFieldMetadata:
       type: object
@@ -3863,6 +3942,14 @@ components:
         longitude: { type: [number, "null"], minimum: -180, maximum: 180 }
         latitude: { type: [number, "null"], minimum: -90, maximum: 90 }
         visibility: { type: string, enum: [public, confirmed, internal] }
+
+    ReviewCasePlaceRequest:
+      type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status: { type: string, enum: [confirmed, rejected] }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
 
     CaseMapView:
       type: object

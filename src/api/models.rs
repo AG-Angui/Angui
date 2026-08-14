@@ -897,6 +897,13 @@ pub struct CreateCasePlaceRequest {
     pub visibility: PlaceVisibility,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewCasePlaceRequest {
+    pub status: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaceVisibility {

@@ -1178,6 +1178,7 @@ fn validate_review_reason(reason: String) -> Result<(), ApiError> {
 fn profile_draft_from_model(
     model: intake_profile_drafts::Model,
 ) -> Result<IntakeProfileDraft, ApiError> {
+    let requires_human_confirmation = model.status == "draft";
     Ok(IntakeProfileDraft {
         id: model.id,
         status: model.status,
@@ -1187,7 +1188,7 @@ fn profile_draft_from_model(
         template_version: model.template_version,
         degradation_status: model.degradation_status,
         version: model.version,
-        requires_human_confirmation: true,
+        requires_human_confirmation,
         profile: serde_json::from_str(&model.profile_json).map_err(|_| ApiError::Internal)?,
         field_metadata: serde_json::from_str(&model.field_metadata_json)
             .map_err(|_| ApiError::Internal)?,

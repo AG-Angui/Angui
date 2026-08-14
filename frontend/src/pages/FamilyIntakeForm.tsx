@@ -75,6 +75,12 @@ const questionReasons: Record<string, string> = {
   follow_up_clues: "记录家属尚待核实的补充信息。",
 };
 
+const intakeDraftStatusLabels: Record<IntakeDraft["status"], string> = {
+  draft: "待确认",
+  confirmed: "已确认",
+  superseded: "已拒绝",
+};
+
 const acceptedPhotoMimeTypes = new Set([
   "image/jpeg",
   "image/jpg",
@@ -957,11 +963,11 @@ export function FamilyIntakeForm({
               核对老人画像草稿
             </h2>
             <p className="mb-0 mt-1 text-sm leading-6 text-slate-600">
-              每项内容均保持为草稿，只有您完成确认后才会创建正式案件。
+              请先核对当前画像版本；版本确认后仍需完成建案前的最终确认。
             </p>
           </div>
           <Chip size="sm" variant="soft">
-            <Chip.Label>需要人工确认</Chip.Label>
+            <Chip.Label>{intakeDraftStatusLabels[draft.status]}</Chip.Label>
           </Chip>
         </header>
 
@@ -976,7 +982,9 @@ export function FamilyIntakeForm({
               aria-hidden="true"
             />
             <span>
-              以下信息仅来自本次家属问询。请核对来源、时间与内容；未确认前，它们不是正式案件事实。
+              {draft.requires_human_confirmation
+                ? "以下信息仅来自本次家属问询。请核对来源、时间与内容；未确认前，它们不是正式案件事实。"
+                : "当前画像版本已经家属确认，但正式案件尚未创建；请继续完成建案前的最终确认。"}
             </span>
           </div>
         </div>
@@ -1022,7 +1030,8 @@ export function FamilyIntakeForm({
                     className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white p-3"
                   >
                     <span className="text-xs text-slate-700">
-                      v{version.version} · {version.status} ·{" "}
+                      v{version.version} ·{" "}
+                      {intakeDraftStatusLabels[version.status]} ·{" "}
                       {version.degradation_status}
                     </span>
                     <div className="flex gap-2">
@@ -1134,6 +1143,9 @@ export function FamilyIntakeForm({
                             version.id,
                             "reject",
                             "family rejected profile candidate",
+                          );
+                          setDraft((current) =>
+                            current?.id === updated.id ? updated : current,
                           );
                           setProfileVersions((items) =>
                             items.map((item) =>
@@ -1937,7 +1949,9 @@ function DraftProfileReview({
                   {label}
                 </h4>
                 <Chip size="sm" variant="soft">
-                  <Chip.Label>草稿</Chip.Label>
+                  <Chip.Label>
+                    {intakeDraftStatusLabels[draft.status]}
+                  </Chip.Label>
                 </Chip>
               </div>
               <p className="mb-3 mt-3 min-h-12 whitespace-pre-wrap text-sm leading-6 text-slate-700">
@@ -1954,7 +1968,8 @@ function DraftProfileReview({
                     {questionLabels[source.source_field] ?? source.source_field}
                   </span>
                   <span className="block">
-                    生成于：{formatDate(source.generated_at)} · 状态：需人工确认
+                    生成于：{formatDate(source.generated_at)} · 状态：
+                    {intakeDraftStatusLabels[draft.status]}
                   </span>
                   <Button
                     className="mt-2"

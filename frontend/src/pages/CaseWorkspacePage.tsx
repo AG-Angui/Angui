@@ -2,6 +2,7 @@ import { AlertDialog, Button, Chip, Input, TextArea } from "@heroui/react";
 import {
   CheckCircle2,
   ChevronRight,
+  CircleX,
   CirclePlus,
   FileSearch,
   MapPin,
@@ -40,6 +41,7 @@ import {
   listCommandIntake,
   reviewClue,
   reviewClueDraft,
+  reviewCasePlace,
   reviewSummaryDraft,
   updateCaseStatus,
   updateElderProfile,
@@ -538,6 +540,9 @@ function CaseDetailView({
     latitude: null,
     visibility: "confirmed",
   });
+  const [placeReviewReasons, setPlaceReviewReasons] = useState<
+    Record<string, string>
+  >({});
   const [attachment, setAttachment] = useState<File | null>(null);
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status);
   const [memberEmail, setMemberEmail] = useState("");
@@ -643,6 +648,26 @@ function CaseDetailView({
       return false;
     } finally {
       setBusy("");
+    }
+  }
+
+  async function submitPlaceReview(
+    placeId: string,
+    status: "confirmed" | "rejected",
+  ) {
+    const reason = placeReviewReasons[placeId]?.trim() ?? "";
+    if (!token || !reason) return;
+    const succeeded = await run(
+      `place-review-${placeId}`,
+      () => reviewCasePlace(token, detail.id, placeId, { status, reason }),
+      status === "confirmed" ? "地点已确认" : "地点已驳回",
+    );
+    if (succeeded) {
+      setPlaceReviewReasons((current) => {
+        const next = { ...current };
+        delete next[placeId];
+        return next;
+      });
     }
   }
 
@@ -1483,7 +1508,9 @@ function CaseDetailView({
               <h3 className="m-0 text-base font-bold text-slate-950">
                 补充地点
               </h3>
-              <span className="text-xs text-slate-500">提交后待人工审核</span>
+              <span className="text-xs text-slate-500">
+                {isCommander ? "地点审核" : "提交后待人工审核"}
+              </span>
             </div>
             <div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
               {detail.places.length === 0 ? (
@@ -1491,19 +1518,71 @@ function CaseDetailView({
                   暂无可查看的补充地点
                 </p>
               ) : (
-                detail.places.map((item) => (
-                  <div key={item.id} className="px-3 py-3 text-sm">
-                    <strong className="text-slate-900">{item.name}</strong>
-                    <span className="ml-2 text-xs text-slate-500">
-                      {item.review_status === "pending_review"
-                        ? "待人工审核"
-                        : item.review_status}
-                    </span>
-                    <p className="m-0 mt-1 text-xs text-slate-600">
-                      {item.address}
-                    </p>
-                  </div>
-                ))
+                detail.places.map((item) => {
+                  const reviewBusy = busy === `place-review-${item.id}`;
+                  const reviewReason = placeReviewReasons[item.id] ?? "";
+                  return (
+                    <div key={item.id} className="px-3 py-3 text-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <strong className="text-slate-900">{item.name}</strong>
+                        <Chip size="sm" variant="soft">
+                          <Chip.Label>
+                            {statusLabels[item.review_status] ??
+                              item.review_status}
+                          </Chip.Label>
+                        </Chip>
+                      </div>
+                      <p className="m-0 mt-1 text-xs text-slate-600">
+                        {item.address}
+                      </p>
+                      {isCommander &&
+                        item.review_status === "pending_review" &&
+                        detail.status !== "closed" && (
+                          <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3">
+                            <Input
+                              aria-label={`审核地点“${item.name}”的理由`}
+                              placeholder="审核理由"
+                              value={reviewReason}
+                              maxLength={1000}
+                              onChange={(event) =>
+                                setPlaceReviewReasons((current) => ({
+                                  ...current,
+                                  [item.id]: event.target.value,
+                                }))
+                              }
+                              fullWidth
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                isDisabled={!reviewReason.trim() || reviewBusy}
+                                onPress={() =>
+                                  void submitPlaceReview(item.id, "confirmed")
+                                }
+                              >
+                                <CheckCircle2 size={15} aria-hidden="true" />
+                                {reviewBusy ? "正在审核" : "确认地点"}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                isDisabled={!reviewReason.trim() || reviewBusy}
+                                onPress={() =>
+                                  void submitPlaceReview(item.id, "rejected")
+                                }
+                              >
+                                <CircleX size={15} aria-hidden="true" />
+                                驳回地点
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                  );
+                })
               )}
             </div>
             {detail.status !== "closed" && (

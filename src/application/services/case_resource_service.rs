@@ -11,7 +11,7 @@ use futures_util::StreamExt;
 use image::ImageFormat;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait, sea_query::Expr,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -24,6 +24,7 @@ use crate::{
     error::ApiError,
     models::{
         AuthenticatedUser, CaseAttachmentResponse, CasePlaceResponse, CreateCasePlaceRequest,
+        ReviewCasePlaceRequest,
     },
     roles::CaseRole,
     services::case_service::{require_case_role, write_audit},
@@ -117,6 +118,83 @@ pub async fn create_place(
     write_audit(&transaction, Some(case_id.to_owned()), auth, "case.place_submitted", "case_place", model.id.clone(), Some(json!({ "review_status": "pending_review", "visibility": model.visibility, "actor_case_role": role }))).await?;
     transaction.commit().await?;
     Ok(place_response(model, &auth.id))
+}
+
+pub async fn review_place(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    place_id: &str,
+    request: ReviewCasePlaceRequest,
+) -> Result<CasePlaceResponse, ApiError> {
+    let next_status = request.status.trim().to_lowercase();
+    if !matches!(next_status.as_str(), "confirmed" | "rejected") {
+        return Err(ApiError::Validation(
+            "place review status must be confirmed or rejected".to_owned(),
+        ));
+    }
+    let reason = request.reason.trim();
+    if !(1..=1_000).contains(&reason.chars().count()) {
+        return Err(ApiError::Validation(
+            "reason must contain 1 to 1000 characters".to_owned(),
+        ));
+    }
+
+    let transaction = db.begin().await?;
+    require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    ensure_case_is_open(&transaction, case_id).await?;
+    let existing = case_places::Entity::find_by_id(place_id)
+        .one(&transaction)
+        .await?
+        .filter(|place| place.case_id == case_id)
+        .ok_or_else(|| ApiError::NotFound("case place was not found".to_owned()))?;
+    if existing.review_status != "pending_review" {
+        return Err(ApiError::Conflict(
+            "case place has already been reviewed".to_owned(),
+        ));
+    }
+
+    let updated_at = now();
+    let update = case_places::Entity::update_many()
+        .col_expr(
+            case_places::Column::ReviewStatus,
+            Expr::value(next_status.clone()),
+        )
+        .col_expr(
+            case_places::Column::UpdatedAt,
+            Expr::value(updated_at.clone()),
+        )
+        .filter(case_places::Column::Id.eq(place_id))
+        .filter(case_places::Column::CaseId.eq(case_id))
+        .filter(case_places::Column::ReviewStatus.eq("pending_review"))
+        .exec(&transaction)
+        .await?;
+    if update.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "case place changed during review; reload and try again".to_owned(),
+        ));
+    }
+
+    let updated = case_places::Entity::find_by_id(place_id)
+        .one(&transaction)
+        .await?
+        .ok_or(ApiError::Internal)?;
+    write_audit(
+        &transaction,
+        Some(case_id.to_owned()),
+        auth,
+        "case.place_reviewed",
+        "case_place",
+        place_id.to_owned(),
+        Some(json!({
+            "from": existing.review_status,
+            "to": next_status,
+            "reason": reason,
+        })),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(place_response(updated, &auth.id))
 }
 
 pub async fn store_image_attachment(

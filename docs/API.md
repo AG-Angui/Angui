@@ -22,6 +22,7 @@
 | `GET` | `/api/intake-sessions/{session_id}/photos/{photo_id}` | `200` | 读取创建者受控照片，不返回公共 URL |
 | `POST` | `/api/intake-sessions/{session_id}/answers` | `201` | 追加一个未确认答案并获取下一问 |
 | `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
+| `PATCH` | `/api/intake-sessions/{session_id}/profile-draft/{draft_id}/review` | `200` | 家属确认或拒绝一个画像草稿版本并返回真实审核状态 |
 | `POST` | `/api/intake-sessions/{session_id}/confirm` | `201` | 家属确认画像并创建正式案件 |
 | `GET` | `/api/ai/executions/{execution_id}` | `200` | 查询当前用户的受控 AI 执行阶段与安全终态 |
 | `GET` | `/api/ai/executions/{execution_id}/events` | `200` | 按事件 ID 恢复读取有序、可去重的安全 SSE 生命周期事件 |
@@ -44,6 +45,7 @@
 | `POST` | `/api/cases/{case_id}/archive-drafts` | `201` | 指挥为已结束案件创建受控内部归档草稿 |
 | `GET` | `/api/cases/{case_id}/places` | `200` | 获取按案件角色、审核状态和可见级别裁剪的地点 |
 | `POST` | `/api/cases/{case_id}/places` | `201` | 家属或指挥提交常去/关键地点，始终待人工审核 |
+| `PATCH` | `/api/cases/{case_id}/places/{place_id}/review` | `200` | 案件指挥确认或驳回待审核地点并记录理由 |
 | `GET` | `/api/cases/{case_id}/resource-configuration` | `200` | 获取当前案件可用的地点类型和图片限制 |
 | `POST` | `/api/cases/{case_id}/attachments` | `201` | 上传受控 JPEG/PNG 案件图片，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/attachments/{attachment_id}` | `200` | 按案件权限下载本人上传的图片，指挥可下载案件全部图片 |
