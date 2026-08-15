@@ -1059,7 +1059,7 @@ describe("CaseWorkspacePage", () => {
       ),
     );
 
-    fireEvent.change(screen.getByLabelText("审核理由"), {
+    fireEvent.change(await screen.findByLabelText("审核理由"), {
       target: { value: "Reviewed against the fictional record." },
     });
     fireEvent.change(screen.getByLabelText("搜索线索"), {
