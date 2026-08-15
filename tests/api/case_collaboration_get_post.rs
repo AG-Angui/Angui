@@ -381,12 +381,13 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     .await;
     assert_eq!(volunteer_summaries.status(), StatusCode::OK);
     let volunteer_summaries: Value = test::read_body_json(volunteer_summaries).await;
-    assert_eq!(
-        volunteer_summaries["items"].as_array().map(Vec::len),
-        Some(2)
-    );
-    assert_eq!(volunteer_summaries["items"][0]["version"], 2);
-    assert_eq!(volunteer_summaries["items"][1]["version"], 1);
+    let published_summary_versions = volunteer_summaries["items"]
+        .as_array()
+        .expect("published summary versions")
+        .iter()
+        .map(|summary| summary["version"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(published_summary_versions, vec![json!(3), json!(2)]);
     assert!(
         volunteer_summaries["items"]
             .as_array()
