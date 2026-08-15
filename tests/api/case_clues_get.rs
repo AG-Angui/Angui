@@ -34,6 +34,30 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     )
     .await
     .expect("fixture clue should be confirmed");
+    let volunteer = context.authenticated(VOLUNTEER).await;
+    angui::services::task_service::create_task(
+        &context.database,
+        &commander,
+        &case_id,
+        angui::models::CreateTaskRequest {
+            source_clue_id: confirmed_clue.clone(),
+            volunteer_user_id: Some(volunteer.id),
+            volunteer_user_ids: Vec::new(),
+            title: "核查测试公园北门".to_owned(),
+            objective: "核实已确认线索中的地点信息。".to_owned(),
+            area_text: "测试公园北门".to_owned(),
+            latitude: None,
+            longitude: None,
+            due_at: "2099-07-27T12:00:00Z".to_owned(),
+            background: "仅供指挥端使用的内部背景。".to_owned(),
+            risk_level: "low".to_owned(),
+            risk_notes: "保持在公共区域。".to_owned(),
+            safety_briefing: "与指挥保持联络。".to_owned(),
+            expected_feedback: "提交事实性反馈。".to_owned(),
+        },
+    )
+    .await
+    .expect("fixture task should be created");
     context.create_clue(&case_id, COMMANDER).await;
     context.create_clue(&case_id, FAMILY).await;
     angui::services::case_service::create_clue(
@@ -90,7 +114,12 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     .await;
     let volunteer_body: Value = test::read_body_json(volunteer).await;
     assert_eq!(volunteer_body["total"], 1);
-    assert_eq!(volunteer_body["items"][0]["status"], "confirmed");
+    assert_eq!(volunteer_body["items"][0]["id"], confirmed_clue);
+    assert_eq!(
+        volunteer_body["items"][0]["content"],
+        "测试线索：曾向测试市场方向步行"
+    );
+    assert_eq!(volunteer_body["items"][0]["location_text"], "测试公园北门");
     assert_eq!(volunteer_body["items"][0]["review_reason"], Value::Null);
     assert_eq!(
         volunteer_body["items"][0]["attachment_ids"],

@@ -71,8 +71,11 @@ async fn get_case_applies_membership_and_role_based_field_and_clue_cuts() {
     .await;
     let volunteer_body: Value = test::read_body_json(volunteer).await;
     assert_eq!(volunteer_body["access_role"], "volunteer");
-    assert!(volunteer_body["elder_profile"]["health_notes"].is_string());
-    assert!(volunteer_body["family_contact_emails"].is_array());
+    assert!(volunteer_body["elder_profile"]["health_notes"].is_null());
+    assert_eq!(
+        volunteer_body["family_contact_emails"],
+        serde_json::json!([])
+    );
     assert_eq!(volunteer_body["clues"].as_array().map(Vec::len), Some(1));
     assert_eq!(volunteer_body["clues"][0]["is_own_submission"], true);
 }

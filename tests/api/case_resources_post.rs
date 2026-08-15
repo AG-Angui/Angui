@@ -523,7 +523,7 @@ async fn post_case_attachments_normalizes_images_and_protects_downloads() {
     )
     .await;
     let volunteer_timeline: serde_json::Value = test::read_body_json(volunteer_timeline).await;
-    assert_eq!(volunteer_timeline["items"][0]["attachment_ids"], json!([]));
+    assert_eq!(volunteer_timeline["items"], json!([]));
 
     let volunteer_download = test::call_service(
         &app,

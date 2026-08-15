@@ -89,6 +89,17 @@ function localNow() {
   return new Date().toISOString();
 }
 
+function summaryVersionLabel(summary: PublishedSummaryVersion) {
+  const updatedAt = new Date(summary.published_at);
+  const timestamp = Number.isNaN(updatedAt.getTime())
+    ? summary.published_at
+    : new Intl.DateTimeFormat("zh-CN", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(updatedAt);
+  return `v${summary.version} · 更新于 ${timestamp}`;
+}
+
 function poiSourceLabel(source: string) {
   const labels: Record<string, string> = {
     amap: "高德地图",
@@ -644,46 +655,38 @@ export function VolunteerWorkspacePage() {
                     </Chip.Label>
                   </Chip>
                 </div>
-                <div className="mt-4 grid gap-4 text-sm text-slate-700 lg:grid-cols-3">
-                  <div>
-                    <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      家属联系方式
-                    </h3>
-                    <p className="mb-0 mt-1">
-                      {workspace.detail.family_contact_emails?.join(", ") ||
-                        "暂未提供家属联系方式。"}
-                    </p>
-                  </div>
-                  <div>
-                    <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      健康注意事项
-                    </h3>
-                    <p className="mb-0 mt-1">
-                      {workspace.detail.elder_profile.health_notes ||
-                        "暂无健康注意事项。"}
-                    </p>
-                  </div>
-                  <div>
-                    <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      案件摘要
-                    </h3>
-                    <p className="mb-0 mt-1">
-                      {workspace.publishedSummaries[0]?.content ||
-                        workspace.summary.last_confirmed_information?.content ||
-                        "暂无已确认的摘要信息。"}
-                    </p>
-                  </div>
-                </div>
-                {workspace.publishedSummaries[1] && (
-                  <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
-                    <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      上一版本摘要（v{workspace.publishedSummaries[1].version}）
-                    </h3>
-                    <p className="mb-0 mt-1 whitespace-pre-wrap">
-                      {workspace.publishedSummaries[1].content}
-                    </p>
-                  </section>
-                )}
+                <section className="mt-4 text-sm text-slate-700">
+                  <h3 className="m-0 text-sm font-semibold text-slate-950">
+                    当前案件摘要
+                    {workspace.publishedSummaries[0] && (
+                      <span className="ml-2 font-normal text-slate-500">
+                        （{summaryVersionLabel(workspace.publishedSummaries[0])}）
+                      </span>
+                    )}
+                  </h3>
+                  <p className="mb-0 mt-1 whitespace-pre-wrap">
+                    {workspace.publishedSummaries[0]?.content ||
+                      workspace.summary.last_confirmed_information?.content ||
+                      "暂无已确认的摘要信息。"}
+                  </p>
+                </section>
+                <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
+                  <h3 className="m-0 text-sm font-semibold text-slate-950">
+                    上一版本摘要
+                  </h3>
+                  {workspace.publishedSummaries[1] ? (
+                    <>
+                      <p className="mb-0 mt-1 text-xs text-slate-500">
+                        {summaryVersionLabel(workspace.publishedSummaries[1])}
+                      </p>
+                      <p className="mb-0 mt-1 whitespace-pre-wrap">
+                        {workspace.publishedSummaries[1].content}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mb-0 mt-1">暂无可查看的上一版本摘要。</p>
+                  )}
+                </section>
                 <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
                   <h3 className="m-0 text-sm font-semibold text-slate-950">
                     已审核关键地点（含家属提供）
@@ -712,11 +715,11 @@ export function VolunteerWorkspacePage() {
                 <div className="mt-5 grid gap-5 lg:grid-cols-2">
                   <section>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">
-                      已确认线索与我的上报
+                      与本人任务关联的线索与我的上报
                     </h3>
                     <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
                       {workspace.detail.clues.length === 0 ? (
-                        <li>暂无可查看的线索。</li>
+                        <li>暂无与本人任务关联或由本人上报的线索。</li>
                       ) : (
                         workspace.detail.clues.slice(0, 8).map((clue) => (
                           <li key={clue.id}>

@@ -150,9 +150,47 @@ describe("VolunteerWorkspacePage", () => {
 
     expect(await screen.findByText("Published v2 summary")).toBeVisible();
     expect(screen.getByText("Published v1 summary")).toBeVisible();
+    expect(screen.getByText(/当前案件摘要/)).toHaveTextContent("v2 · 更新于");
+    expect(screen.getByText("上一版本摘要").parentElement).toHaveTextContent("v1 · 更新于");
     expect(screen.getByText("Confirmed clue content")).toBeVisible();
     expect(screen.getByText(/Confirmed clue location/)).toBeVisible();
     expect(screen.getByText("Family-approved meeting point")).toBeVisible();
     expect(screen.getByText("Family-approved location text")).toBeVisible();
+    expect(screen.queryByText("家属联系方式")).not.toBeInTheDocument();
+    expect(screen.queryByText("健康注意事项")).not.toBeInTheDocument();
+  });
+
+  it("shows an explicit empty state when no published summary history is available", async () => {
+    vi.clearAllMocks();
+    mocked.listCases.mockResolvedValue([
+      {
+        id: "case-volunteer",
+        case_code: "AG-VOLUNTEER",
+        status: "active",
+        access_role: "volunteer",
+        display_name: "Test volunteer case",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-08-14T08:00:00Z",
+        updated_at: "2026-08-14T09:00:00Z",
+      },
+    ]);
+    mocked.listMyTasks.mockResolvedValue([]);
+    mocked.getCase.mockResolvedValue(detail);
+    mocked.getCaseSummary.mockResolvedValue(summary);
+    mocked.listVolunteerPublishedSummaryVersions.mockResolvedValue({ items: [] });
+    mocked.listCaseTasks.mockResolvedValue({
+      items: [],
+      page: 1,
+      page_size: 25,
+      total: 0,
+    });
+
+    render(<VolunteerWorkspacePage />);
+
+    const previousSummaryHeading = await screen.findByText("上一版本摘要");
+    expect(previousSummaryHeading.parentElement).toHaveTextContent(
+      "暂无可查看的上一版本摘要。",
+    );
   });
 });

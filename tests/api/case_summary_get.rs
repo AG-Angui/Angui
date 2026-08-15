@@ -152,7 +152,11 @@ async fn get_case_summary_classifies_review_states_and_crops_each_role() {
     );
     assert_eq!(
         volunteer["confirmed_clues"].as_array().map(Vec::len),
-        Some(2)
+        Some(1)
+    );
+    assert_eq!(
+        volunteer["confirmed_clues"][0]["clue_id"],
+        latest_confirmed_id
     );
     assert_eq!(volunteer["pending_verification"], json!([]));
     assert_eq!(volunteer["excluded_directions"], json!([]));

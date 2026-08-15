@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     entities::{
         audit_events, case_attachments, case_memberships, cases, clue_attachment_links,
-        clue_attributions, clues, elder_profile_revisions, elder_profiles,
+        clue_attributions, clues, elder_profile_revisions, elder_profiles, task_assignments, tasks,
         user_global_capabilities, users,
     },
     error::ApiError,
@@ -555,6 +555,7 @@ pub async fn list_clues(
     let query = ValidatedClueTimelineQuery::try_from(query)?;
     let membership = membership_for_case(db, &auth.id, case_id).await?;
     let case_role = case_role_from_database(&membership.role)?;
+    let task_source_clue_ids = volunteer_task_source_clue_ids(db, case_id, auth, case_role).await?;
     let mut clue_query = clues::Entity::find().filter(clues::Column::CaseId.eq(case_id));
 
     if let Some(status) = &query.status {
@@ -589,6 +590,7 @@ pub async fn list_clues(
                 attachment_links.get(&clue_id).cloned().unwrap_or_default(),
                 auth,
                 case_role,
+                task_source_clue_ids.as_ref(),
             )
         })
         .collect();
@@ -1002,6 +1004,8 @@ async fn load_case_detail(
     let attachment_links =
         clue_attachment_ids_for_clues(db, clue_models.iter().map(|clue| clue.id.clone()).collect())
             .await?;
+    let task_source_clue_ids =
+        volunteer_task_source_clue_ids(db, &membership.case_id, auth, case_role).await?;
     let visible_clues = clue_models
         .into_iter()
         .filter_map(|clue| {
@@ -1012,20 +1016,28 @@ async fn load_case_detail(
                 attachment_links.get(&clue_id).cloned().unwrap_or_default(),
                 auth,
                 case_role,
+                task_source_clue_ids.as_ref(),
             )
         })
         .collect();
 
-    let profile_response: ElderProfileResponse = profile.into();
+    let mut profile_response: ElderProfileResponse = profile.into();
+    if case_role == CaseRole::Volunteer {
+        // Health notes and family contact details are sensitive. Task-specific
+        // safety instructions remain available through the task endpoints.
+        profile_response.health_notes = None;
+    }
     let family_members = case_memberships::Entity::find()
         .filter(case_memberships::Column::CaseId.eq(&membership.case_id))
         .filter(case_memberships::Column::Role.eq(CaseRole::Family.to_string()))
         .all(db)
         .await?;
     let mut family_contact_emails = Vec::with_capacity(family_members.len());
-    for member in family_members {
-        if let Some(user) = users::Entity::find_by_id(member.user_id).one(db).await? {
-            family_contact_emails.push(user.email);
+    if case_role != CaseRole::Volunteer {
+        for member in family_members {
+            if let Some(user) = users::Entity::find_by_id(member.user_id).one(db).await? {
+                family_contact_emails.push(user.email);
+            }
         }
     }
 
@@ -1097,6 +1109,7 @@ fn visible_clue_response(
     attachment_ids: Vec<String>,
     auth: &AuthenticatedUser,
     case_role: CaseRole,
+    task_source_clue_ids: Option<&HashSet<String>>,
 ) -> Option<ClueResponse> {
     let own = attribution
         .as_ref()
@@ -1105,7 +1118,10 @@ fn visible_clue_response(
     let visible = match case_role {
         CaseRole::Commander => true,
         CaseRole::Family => clue.status == "confirmed" || own,
-        CaseRole::Volunteer => clue.status == "confirmed" || own,
+        CaseRole::Volunteer => {
+            own || (clue.status == "confirmed"
+                && task_source_clue_ids.is_some_and(|ids| ids.contains(&clue.id)))
+        }
     };
     let can_see_attachment_references = case_role == CaseRole::Commander || own;
     visible.then(|| {
@@ -1132,6 +1148,38 @@ fn visible_clue_response(
         }
         response
     })
+}
+
+async fn volunteer_task_source_clue_ids(
+    db: &DatabaseConnection,
+    case_id: &str,
+    auth: &AuthenticatedUser,
+    case_role: CaseRole,
+) -> Result<Option<HashSet<String>>, ApiError> {
+    if case_role != CaseRole::Volunteer {
+        return Ok(None);
+    }
+
+    let task_ids = task_assignments::Entity::find()
+        .filter(task_assignments::Column::VolunteerUserId.eq(&auth.id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|assignment| assignment.task_id)
+        .collect::<Vec<_>>();
+    if task_ids.is_empty() {
+        return Ok(Some(HashSet::new()));
+    }
+
+    let clue_ids = tasks::Entity::find()
+        .filter(tasks::Column::CaseId.eq(case_id))
+        .filter(tasks::Column::Id.is_in(task_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|task| task.source_clue_id)
+        .collect();
+    Ok(Some(clue_ids))
 }
 
 async fn membership_for_case<C: ConnectionTrait>(
