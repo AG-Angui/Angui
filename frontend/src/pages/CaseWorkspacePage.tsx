@@ -89,6 +89,7 @@ import {
   LoadingState,
 } from "../components/ContentState";
 import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
+import { parseOptionalCoordinatePair } from "../coordinateInput";
 import { FamilyIntakeForm } from "./FamilyIntakeForm";
 
 type WorkspaceMode = "family" | "commander" | "volunteer";
@@ -96,6 +97,10 @@ type ReviewDraft = {
   reason: string;
   relatedClueId: string;
   relatedClueQuery: string;
+};
+type PlaceDraft = Omit<CreateCasePlacePayload, "longitude" | "latitude"> & {
+  longitude: string;
+  latitude: string;
 };
 type ClueQueueFilters = {
   status: ClueStatus | "";
@@ -532,12 +537,12 @@ function CaseDetailView({
   const [isQueueLoading, setIsQueueLoading] = useState(false);
   const [queueError, setQueueError] = useState("");
   const queueRequestVersion = useRef(0);
-  const [place, setPlace] = useState<CreateCasePlacePayload>({
+  const [place, setPlace] = useState<PlaceDraft>({
     name: "",
     place_type: "",
     address: "",
-    longitude: null,
-    latitude: null,
+    longitude: "",
+    latitude: "",
     visibility: "confirmed",
   });
   const [placeReviewReasons, setPlaceReviewReasons] = useState<
@@ -1599,11 +1604,12 @@ function CaseDetailView({
                     setError("请填写地点名称、类型和文字地址后再提交。");
                     return;
                   }
-                  if (
-                    (place.longitude === null) !==
-                    (place.latitude === null)
-                  ) {
-                    setError("经度和纬度必须同时填写或同时留空。");
+                  const coordinates = parseOptionalCoordinatePair(
+                    place.longitude,
+                    place.latitude,
+                  );
+                  if (!coordinates.ok) {
+                    setError(coordinates.message);
                     return;
                   }
                   void run(
@@ -1613,6 +1619,8 @@ function CaseDetailView({
                         ...place,
                         name: place.name.trim(),
                         address: place.address.trim(),
+                        longitude: coordinates.longitude,
+                        latitude: coordinates.latitude,
                       }),
                     "地点已提交，正在等待人工审核",
                   ).then((ok) => {
@@ -1621,8 +1629,8 @@ function CaseDetailView({
                         name: "",
                         place_type: placeTypes[0] ?? "",
                         address: "",
-                        longitude: null,
-                        latitude: null,
+                        longitude: "",
+                        latitude: "",
                         visibility: "confirmed",
                       });
                   });
@@ -1675,33 +1683,29 @@ function CaseDetailView({
                     setPlace({
                       ...place,
                       address: location.address,
-                      longitude: location.longitude,
-                      latitude: location.latitude,
+                      longitude: String(location.longitude),
+                      latitude: String(location.latitude),
                     })
                   }
                   onClear={() =>
                     setPlace({
                       ...place,
                       address: "",
-                      longitude: null,
-                      latitude: null,
+                      longitude: "",
+                      latitude: "",
                     })
                   }
                 />
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Field label="经度（可选）">
                     <Input
-                      type="number"
-                      min={-180}
-                      max={180}
-                      value={place.longitude ?? ""}
+                      type="text"
+                      inputMode="decimal"
+                      value={place.longitude}
                       onChange={(event) =>
                         setPlace({
                           ...place,
-                          longitude:
-                            event.target.value === ""
-                              ? null
-                              : Number(event.target.value),
+                          longitude: event.target.value,
                         })
                       }
                       fullWidth
@@ -1709,17 +1713,13 @@ function CaseDetailView({
                   </Field>
                   <Field label="纬度（可选）">
                     <Input
-                      type="number"
-                      min={-90}
-                      max={90}
-                      value={place.latitude ?? ""}
+                      type="text"
+                      inputMode="decimal"
+                      value={place.latitude}
                       onChange={(event) =>
                         setPlace({
                           ...place,
-                          latitude:
-                            event.target.value === ""
-                              ? null
-                              : Number(event.target.value),
+                          latitude: event.target.value,
                         })
                       }
                       fullWidth

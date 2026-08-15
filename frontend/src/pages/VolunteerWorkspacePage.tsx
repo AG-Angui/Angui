@@ -22,6 +22,7 @@ import {
   listCases,
   listCaseTasks,
   listMyTasks,
+  listVolunteerPublishedSummaryVersions,
   listTaskCollaborationLocations,
   submitTaskFeedback,
   submitTaskLocationReport,
@@ -32,6 +33,7 @@ import type {
   CasePois,
   CaseSummary,
   CaseTask,
+  PublishedSummaryVersion,
   TaskCollaborationLocation,
   TaskNavigation,
   TaskSafetyBriefing,
@@ -65,6 +67,7 @@ type Failure = { message: string; retry: (() => void) | null };
 type WorkspaceCase = {
   detail: CaseDetail;
   summary: CaseSummary;
+  publishedSummaries: PublishedSummaryVersion[];
   tasks: CaseTask[];
 };
 type ClueDraft = {
@@ -132,12 +135,18 @@ export function VolunteerWorkspacePage() {
       );
       const workspaces = await Promise.all(
         volunteerCases.map(async (item) => {
-          const [detail, summary, taskPage] = await Promise.all([
+          const [detail, summary, publishedSummaryVersions, taskPage] = await Promise.all([
             getCase(token, item.id),
             getCaseSummary(token, item.id),
+            listVolunteerPublishedSummaryVersions(token, item.id),
             listCaseTasks(token, item.id),
           ]);
-          return { detail, summary, tasks: taskPage.items };
+          return {
+            detail,
+            summary,
+            publishedSummaries: publishedSummaryVersions.items,
+            tasks: taskPage.items,
+          };
         }),
       );
       setCases(workspaces);
@@ -659,11 +668,47 @@ export function VolunteerWorkspacePage() {
                       案件摘要
                     </h3>
                     <p className="mb-0 mt-1">
-                      {workspace.summary.last_confirmed_information?.content ||
+                      {workspace.publishedSummaries[0]?.content ||
+                        workspace.summary.last_confirmed_information?.content ||
                         "暂无已确认的摘要信息。"}
                     </p>
                   </div>
                 </div>
+                {workspace.publishedSummaries[1] && (
+                  <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
+                    <h3 className="m-0 text-sm font-semibold text-slate-950">
+                      上一版本摘要（v{workspace.publishedSummaries[1].version}）
+                    </h3>
+                    <p className="mb-0 mt-1 whitespace-pre-wrap">
+                      {workspace.publishedSummaries[1].content}
+                    </p>
+                  </section>
+                )}
+                <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
+                  <h3 className="m-0 text-sm font-semibold text-slate-950">
+                    已审核关键地点（含家属提供）
+                  </h3>
+                  {workspace.detail.places.length === 0 ? (
+                    <p className="mb-0 mt-1">暂无已审核可查看的关键地点。</p>
+                  ) : (
+                    <ul className="mt-2 grid gap-2 p-0 sm:grid-cols-2">
+                      {workspace.detail.places.map((place) => (
+                        <li
+                          key={place.id}
+                          className="list-none border-l-2 border-emerald-500 pl-3"
+                        >
+                          <p className="m-0 font-medium text-slate-900">
+                            {place.name}
+                          </p>
+                          <p className="mb-0 mt-1 text-xs text-slate-600">
+                            <MapPin aria-hidden="true" className="mr-1 inline" size={14} />
+                            {place.address}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
                 <div className="mt-5 grid gap-5 lg:grid-cols-2">
                   <section>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">
@@ -675,7 +720,15 @@ export function VolunteerWorkspacePage() {
                       ) : (
                         workspace.detail.clues.slice(0, 8).map((clue) => (
                           <li key={clue.id}>
-                            {clue.content}
+                            <span>{clue.content}</span>
+                            {clue.location_text && (
+                              <span className="mt-1 flex items-center gap-1 text-xs text-slate-600">
+                                <MapPin aria-hidden="true" size={14} />
+                                {clue.location_text}
+                                {clue.location_precision &&
+                                  `（${clue.location_precision === "exact" ? "精确地点" : "约略地点"}）`}
+                              </span>
+                            )}
                             {clue.is_own_submission && (
                               <span className="ml-1 text-xs text-slate-500">
                                 （由我上报）

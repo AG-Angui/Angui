@@ -20,9 +20,10 @@ use crate::{
         CasePublicProgressResponse, CaseSourceRecordResponse, ClueDraftCandidate,
         ClueDraftFieldDecision, ClueDraftResponse, CreateCaseSourceRecordRequest,
         CreateClueDraftRequest, CreateClueRequest, CreateSummaryDraftRequest,
-        DeidentifyArchiveDraftRequest, RestoreArchiveReviewMaterialRequest,
-        ReviewArchiveDraftRequest, ReviewClueDraftRequest, ReviewSummaryDraftRequest,
-        SummaryDraftDiffResponse, SummaryDraftResponse, SummaryDraftVersionResponse,
+        DeidentifyArchiveDraftRequest, PublishedSummaryVersion, PublishedSummaryVersionResponse,
+        RestoreArchiveReviewMaterialRequest, ReviewArchiveDraftRequest, ReviewClueDraftRequest,
+        ReviewSummaryDraftRequest, SummaryDraftDiffResponse, SummaryDraftResponse,
+        SummaryDraftVersionResponse,
     },
     roles::{CaseRole, GlobalCapability},
     services::{case_service, case_summary_service, task_service},
@@ -1238,6 +1239,33 @@ pub async fn list_summary_draft_versions(
         .map(response)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(SummaryDraftVersionResponse { items })
+}
+
+/// Lists only human-published, publication-eligible summary versions for a
+/// volunteer. Pending drafts and commander review notes stay restricted.
+pub async fn list_published_summary_versions_for_volunteer(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+) -> Result<PublishedSummaryVersionResponse, ApiError> {
+    case_service::require_case_role(db, &auth.id, case_id, &[CaseRole::Volunteer]).await?;
+    let items = summary_drafts::Entity::find()
+        .filter(summary_drafts::Column::CaseId.eq(case_id))
+        .filter(summary_drafts::Column::PublicationEligible.eq(true))
+        .filter(summary_drafts::Column::Status.is_in(["published", "superseded"]))
+        .order_by_desc(summary_drafts::Column::Version)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|draft| PublishedSummaryVersion {
+            version: draft.version,
+            content: draft.content,
+            // A published version keeps its original human-review timestamp
+            // when a later version supersedes it.
+            published_at: draft.reviewed_at.unwrap_or(draft.updated_at),
+        })
+        .collect();
+    Ok(PublishedSummaryVersionResponse { items })
 }
 
 pub async fn diff_summary_draft_versions(

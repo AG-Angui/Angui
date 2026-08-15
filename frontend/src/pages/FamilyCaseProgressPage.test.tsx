@@ -131,6 +131,8 @@ describe("FamilyCaseProgressPage", () => {
     mocked.createCasePlace.mockResolvedValue({});
     renderPage();
     await screen.findByRole("heading", { name: "常去地点" });
+    expect(screen.getByLabelText("经度")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("纬度")).toHaveAttribute("inputmode", "decimal");
     fireEvent.change(screen.getByLabelText("地点名称"), { target: { value: "社区花园" } });
     fireEvent.change(screen.getByLabelText("文字地址"), { target: { value: "虹桥路 100 号" } });
     fireEvent.change(screen.getByLabelText("经度"), { target: { value: "121.41" } });
@@ -149,5 +151,22 @@ describe("FamilyCaseProgressPage", () => {
         }),
       ),
     );
+  });
+
+  it("keeps incomplete coordinate input visible and rejects it on submit", async () => {
+    renderPage();
+    await screen.findByRole("heading", { name: "常去地点" });
+    fireEvent.change(screen.getByLabelText("地点名称"), { target: { value: "社区花园" } });
+    fireEvent.change(screen.getByLabelText("文字地址"), { target: { value: "虹桥路 100 号" } });
+    fireEvent.change(screen.getByLabelText("经度"), { target: { value: "-" } });
+    expect(screen.getByLabelText("经度")).toHaveValue("-");
+    fireEvent.change(screen.getByLabelText("经度"), { target: { value: "121." } });
+    expect(screen.getByLabelText("经度")).toHaveValue("121.");
+
+    fireEvent.change(screen.getByLabelText("经度"), { target: { value: "-" } });
+    fireEvent.change(screen.getByLabelText("纬度"), { target: { value: "31.21" } });
+    fireEvent.submit(screen.getByRole("button", { name: "提交地点" }).closest("form")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent("经度和纬度必须是有效数字。");
+    expect(mocked.createCasePlace).not.toHaveBeenCalled();
   });
 });

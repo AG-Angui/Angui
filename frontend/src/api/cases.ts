@@ -358,6 +358,11 @@ export interface SummaryDraftDiff {
   added: string[];
   removed: string[];
 }
+export interface PublishedSummaryVersion {
+  version: number;
+  content: string;
+  published_at: string;
+}
 export interface ArchiveDraft {
   id: string;
   case_id: string;
@@ -885,6 +890,13 @@ export function listSummaryDraftVersions(
   caseId: string,
 ): Promise<{ items: SummaryDraft[] }> {
   return apiRequest(`/cases/${caseId}/summary-drafts/versions`, {}, token);
+}
+
+export function listVolunteerPublishedSummaryVersions(
+  token: string,
+  caseId: string,
+): Promise<{ items: PublishedSummaryVersion[] }> {
+  return apiRequest(`/cases/${caseId}/summary-drafts/published`, {}, token);
 }
 
 export function diffSummaryDraftVersions(
