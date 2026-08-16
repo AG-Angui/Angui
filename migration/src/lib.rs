@@ -45,6 +45,8 @@ mod m0042_create_ai_executions;
 mod m0043_add_intake_report_details;
 mod m0044_add_learning_category_governance;
 mod m0045_create_auth_access_and_message_delivery;
+mod m0046_create_collaboration_spaces;
+mod m0047_add_collaboration_activity;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -99,6 +101,8 @@ impl MigratorTrait for Migrator {
             Box::new(m0043_add_intake_report_details::Migration),
             Box::new(m0044_add_learning_category_governance::Migration),
             Box::new(m0045_create_auth_access_and_message_delivery::Migration),
+            Box::new(m0046_create_collaboration_spaces::Migration),
+            Box::new(m0047_add_collaboration_activity::Migration),
         ]
     }
 }

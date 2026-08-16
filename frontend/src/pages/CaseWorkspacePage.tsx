@@ -89,6 +89,8 @@ import {
   LoadingState,
 } from "../components/ContentState";
 import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
+import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
+import { StatusTag, statusTone } from "../components/StatusTag";
 import { parseOptionalCoordinatePair } from "../coordinateInput";
 import { FamilyIntakeForm } from "./FamilyIntakeForm";
 
@@ -685,9 +687,7 @@ function CaseDetailView({
               <h2 className="m-0 text-xl font-bold text-slate-950">
                 {detail.elder_profile.display_name}
               </h2>
-              <Chip size="sm" variant="soft">
-                <Chip.Label>{statusLabels[detail.status]}</Chip.Label>
-              </Chip>
+              <StatusTag tone={statusTone(detail.status)} label={statusLabels[detail.status]} />
               {pendingCount > 0 && (
                 <Chip size="sm" variant="soft">
                   <Chip.Label>{pendingCount} 条待审核</Chip.Label>
@@ -703,6 +703,16 @@ function CaseDetailView({
           </span>
         </div>
       </header>
+
+      {(detail.access_role === "commander" || detail.access_role === "volunteer") && (
+        <div className="border-b border-slate-200 px-5 py-4 sm:px-6">
+          <CollaborationSpacePanel
+            token={token}
+            caseId={detail.id}
+            role={detail.access_role}
+          />
+        </div>
+      )}
 
       <RoleActionPanel
         accessRole={detail.access_role}

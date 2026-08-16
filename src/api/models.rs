@@ -9,6 +9,68 @@ use crate::{
     roles::{AccountType, CaseRole, GlobalCapability},
 };
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCollaborationSpaceRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinCollaborationSpaceRequest {
+    pub location_consent: bool,
+    pub consent_version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct CollaborationSpaceResponse {
+    pub id: String,
+    pub case_id: String,
+    pub name: String,
+    pub status: String,
+    pub created_by_user_id: String,
+    pub created_at: String,
+    pub archived_at: Option<String>,
+    pub current_version: i32,
+    pub member_status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SpaceMemberResponse {
+    pub id: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub role: String,
+    pub status: String,
+    pub joined_at: String,
+    pub left_at: Option<String>,
+    pub location_consent_granted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CollaborationSpaceSnapshotResponse {
+    pub space: CollaborationSpaceResponse,
+    pub members: Vec<SpaceMemberResponse>,
+    pub version: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpaceEventsQuery {
+    pub after_version: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpaceEventResponse {
+    pub event_id: String,
+    pub space_id: String,
+    pub case_id: String,
+    pub event_type: String,
+    pub version: i32,
+    pub occurred_at: String,
+    pub visibility_scope: String,
+    pub payload: Value,
+}
+
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUser {
     pub id: String,

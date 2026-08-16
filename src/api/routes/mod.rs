@@ -3,6 +3,7 @@ mod ai_executions;
 mod auth;
 mod cases;
 mod clues;
+mod collaboration_spaces;
 mod health;
 mod intake_sessions;
 mod learning;
@@ -53,6 +54,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .configure(cases::configure)
             .configure(intake_sessions::configure)
             .configure(clues::configure)
+            .configure(collaboration_spaces::configure)
             .configure(tasks::configure),
     );
 }
