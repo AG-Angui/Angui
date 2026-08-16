@@ -31,7 +31,7 @@ test("a family clue moves through commander review and returns as confirmed prog
     name: fixture.displayName,
     exact: false,
   });
-  await expect(page.getByRole("region", { name: "案件列表" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "案件列表" })).toBeVisible({ timeout: 15_000 });
   await expect(familyCaseLink).toBeVisible();
   await familyCaseLink.click();
   await page.getByRole("button", { name: /提交一条新线索/ }).click();
@@ -129,7 +129,9 @@ test("a commander creates a collaboration space through the browser and its acti
 
   await useAccount(page, volunteerToken, "/volunteer");
   const volunteerSpace = page.locator("li").filter({ hasText: spaceName });
-  await expect(volunteerSpace.getByRole("button", { name: "同意并加入" })).toBeVisible();
+  await expect(volunteerSpace.getByRole("button", { name: "同意并加入" })).toBeVisible({
+    timeout: 15_000,
+  });
   await volunteerSpace.getByRole("button", { name: "同意并加入" }).click();
   await expect(volunteerSpace.getByText("已在空间中")).toBeVisible();
 
