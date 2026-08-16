@@ -4,8 +4,8 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateCollaborationSpaceRequest, JoinCollaborationSpaceRequest,
-        SpaceEventsQuery,
+        AuthenticatedUser, CreateCollaborationSpaceRequest, CreateSpaceMessageRequest,
+        JoinCollaborationSpaceRequest, RecordSpaceLocationRequest, SpaceEventsQuery,
     },
     services::collaboration_space_service,
 };
@@ -21,6 +21,13 @@ pub fn configure(config: &mut web::ServiceConfig) {
             web::scope("/collaboration-spaces")
                 .route("/{space_id}/snapshot", web::get().to(get_snapshot))
                 .route("/{space_id}/events", web::get().to(list_events))
+                .route("/{space_id}/locations", web::post().to(record_location))
+                .route(
+                    "/{space_id}/members/{user_id}/track",
+                    web::get().to(list_member_locations),
+                )
+                .route("/{space_id}/messages", web::get().to(list_messages))
+                .route("/{space_id}/messages", web::post().to(create_message))
                 .route("/{space_id}/join", web::post().to(join_space))
                 .route("/{space_id}/leave", web::post().to(leave_space))
                 .route(
@@ -130,4 +137,59 @@ async fn list_events(
         )
         .await?,
     ))
+}
+
+async fn record_location(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+    request: web::Json<RecordSpaceLocationRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        collaboration_space_service::record_location(
+            &state.db,
+            &auth,
+            &space_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn list_member_locations(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, user_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        collaboration_space_service::list_member_locations(&state.db, &auth, &space_id, &user_id)
+            .await?,
+    ))
+}
+
+async fn create_message(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+    request: web::Json<CreateSpaceMessageRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        collaboration_space_service::create_message(
+            &state.db,
+            &auth,
+            &space_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn list_messages(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(collaboration_space_service::list_messages(&state.db, &auth, &space_id).await?))
 }

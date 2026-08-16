@@ -1,22 +1,23 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, env};
 
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde_json::{Value, json};
 
 use crate::{
     entities::{
         collaboration_spaces, event_outbox, space_events, space_location_consents,
-        space_member_slots, space_members, users,
+        space_location_samples, space_member_slots, space_members, space_messages, users,
     },
     error::ApiError,
     models::{
         AuthenticatedUser, CollaborationSpaceResponse, CollaborationSpaceSnapshotResponse,
-        CreateCollaborationSpaceRequest, JoinCollaborationSpaceRequest, SpaceEventResponse,
-        SpaceMemberResponse,
+        CreateCollaborationSpaceRequest, CreateSpaceMessageRequest, JoinCollaborationSpaceRequest,
+        RecordSpaceLocationRequest, SpaceEventResponse, SpaceLocationResponse, SpaceMemberResponse,
+        SpaceMessageResponse,
     },
     roles::CaseRole,
     services::case_service::{new_id, require_case_role, write_audit},
@@ -397,6 +398,191 @@ pub async fn list_events(
         .collect()
 }
 
+/// Persists only an authorized volunteer's latest sample. Callers must provide
+/// an operation id so a reconnect cannot create a second sample or event.
+pub async fn record_location(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    request: RecordSpaceLocationRequest,
+) -> Result<SpaceLocationResponse, ApiError> {
+    validate_location(&request)?;
+    if !location_retention_is_configured() {
+        return Err(ApiError::Conflict(
+            "location storage is disabled until an operator configures retention".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let space = active_space(&transaction, space_id).await?;
+    require_case_role(
+        &transaction,
+        &auth.id,
+        &space.case_id,
+        &[CaseRole::Volunteer],
+    )
+    .await?;
+    let member = active_member(&transaction, space_id, &auth.id).await?;
+    let consent = space_location_consents::Entity::find()
+        .filter(space_location_consents::Column::MemberId.eq(&member.id))
+        .one(&transaction)
+        .await?;
+    if !consent.is_some_and(|item| item.revoked_at.is_none()) {
+        return Err(ApiError::Forbidden(
+            "an active location-sharing consent is required".to_owned(),
+        ));
+    }
+    if let Some(existing) = space_location_samples::Entity::find()
+        .filter(space_location_samples::Column::OperationId.eq(&request.operation_id))
+        .one(&transaction)
+        .await?
+    {
+        if existing.space_id == space.id && existing.user_id == auth.id {
+            return location_response(existing);
+        }
+        return Err(ApiError::Conflict(
+            "location operation id was already used".to_owned(),
+        ));
+    }
+    let timestamp = now();
+    let sample = space_location_samples::ActiveModel {
+        id: Set(new_id()),
+        space_id: Set(space.id.clone()),
+        user_id: Set(auth.id.clone()),
+        latitude: Set(request.latitude),
+        longitude: Set(request.longitude),
+        accuracy_meters: Set(request.accuracy_meters),
+        captured_at: Set(request.captured_at),
+        operation_id: Set(request.operation_id),
+        created_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await?;
+    publish_event(
+        &transaction,
+        &space,
+        "member.location_updated",
+        "space_members",
+        json!({
+            "user_id": auth.id, "latitude": sample.latitude, "longitude": sample.longitude,
+            "accuracy_meters": sample.accuracy_meters, "captured_at": sample.captured_at,
+        }),
+        &timestamp,
+    )
+    .await?;
+    write_audit(
+        &transaction,
+        Some(space.case_id.clone()),
+        auth,
+        "collaboration_space.location_recorded",
+        "collaboration_space",
+        space.id.clone(),
+        Some(json!({"sample_id": sample.id})),
+    )
+    .await?;
+    transaction.commit().await?;
+    location_response(sample)
+}
+
+pub async fn list_member_locations(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    user_id: &str,
+) -> Result<Vec<SpaceLocationResponse>, ApiError> {
+    let (_space, own_member) = require_space_access(db, auth, space_id).await?;
+    if own_member
+        .as_ref()
+        .is_some_and(|member| member.role == "volunteer")
+        && auth.id != user_id
+    {
+        // A volunteer can read current room locations, but historical tracks are
+        // intentionally commander-only until an explicit retention policy exists.
+        return Err(ApiError::Forbidden(
+            "trajectory history is commander-only".to_owned(),
+        ));
+    }
+    space_location_samples::Entity::find()
+        .filter(space_location_samples::Column::SpaceId.eq(space_id))
+        .filter(space_location_samples::Column::UserId.eq(user_id))
+        .order_by_desc(space_location_samples::Column::CapturedAt)
+        .limit(200)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(location_response)
+        .collect()
+}
+
+pub async fn create_message(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    request: CreateSpaceMessageRequest,
+) -> Result<SpaceMessageResponse, ApiError> {
+    let content = request.content.trim();
+    if content.is_empty() || content.chars().count() > 2_000 {
+        return Err(ApiError::Validation(
+            "message content must contain between 1 and 2000 characters".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let space = active_space(&transaction, space_id).await?;
+    let member = active_member(&transaction, space_id, &auth.id).await?;
+    let message_type = request.message_type.unwrap_or_else(|| "text".to_owned());
+    if !matches!(message_type.as_str(), "text" | "broadcast") {
+        return Err(ApiError::Validation(
+            "message_type must be text or broadcast".to_owned(),
+        ));
+    }
+    if message_type == "broadcast" && member.role != "commander" {
+        return Err(ApiError::Forbidden(
+            "only commanders may send broadcasts".to_owned(),
+        ));
+    }
+    let timestamp = now();
+    let message = space_messages::ActiveModel {
+        id: Set(new_id()),
+        space_id: Set(space.id.clone()),
+        sender_id: Set(auth.id.clone()),
+        message_type: Set(message_type),
+        content: Set(content.to_owned()),
+        sent_at: Set(timestamp.clone()),
+        recalled_at: Set(None),
+    }
+    .insert(&transaction)
+    .await?;
+    publish_event(&transaction, &space, "message.sent", "space_members", json!({"message_id": message.id, "sender_id": auth.id, "message_type": message.message_type, "content": message.content, "sent_at": message.sent_at}), &timestamp).await?;
+    write_audit(
+        &transaction,
+        Some(space.case_id.clone()),
+        auth,
+        "collaboration_space.message_sent",
+        "space_message",
+        message.id.clone(),
+        None,
+    )
+    .await?;
+    transaction.commit().await?;
+    message_response(message)
+}
+
+pub async fn list_messages(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+) -> Result<Vec<SpaceMessageResponse>, ApiError> {
+    require_space_access(db, auth, space_id).await?;
+    space_messages::Entity::find()
+        .filter(space_messages::Column::SpaceId.eq(space_id))
+        .order_by_desc(space_messages::Column::SentAt)
+        .limit(100)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(message_response)
+        .collect()
+}
+
 fn event_targets_user(event: &space_events::Model, user_id: &str) -> bool {
     serde_json::from_str::<Value>(&event.payload_json)
         .ok()
@@ -634,6 +820,63 @@ fn event_response(event: space_events::Model) -> Result<SpaceEventResponse, ApiE
         visibility_scope: event.visibility_scope,
         payload: serde_json::from_str(&event.payload_json).map_err(|_| ApiError::Internal)?,
     })
+}
+
+fn location_response(
+    sample: space_location_samples::Model,
+) -> Result<SpaceLocationResponse, ApiError> {
+    Ok(SpaceLocationResponse {
+        id: sample.id,
+        user_id: sample.user_id,
+        latitude: sample.latitude,
+        longitude: sample.longitude,
+        accuracy_meters: sample.accuracy_meters,
+        captured_at: sample.captured_at,
+    })
+}
+
+fn message_response(message: space_messages::Model) -> Result<SpaceMessageResponse, ApiError> {
+    Ok(SpaceMessageResponse {
+        id: message.id,
+        sender_id: message.sender_id,
+        message_type: message.message_type,
+        content: message.content,
+        sent_at: message.sent_at,
+        recalled_at: message.recalled_at,
+    })
+}
+
+fn validate_location(request: &RecordSpaceLocationRequest) -> Result<(), ApiError> {
+    if !request.latitude.is_finite()
+        || !(-90.0..=90.0).contains(&request.latitude)
+        || !request.longitude.is_finite()
+        || !(-180.0..=180.0).contains(&request.longitude)
+        || !request.accuracy_meters.is_finite()
+        || !(0.0..=10_000.0).contains(&request.accuracy_meters)
+    {
+        return Err(ApiError::Validation(
+            "location coordinates or accuracy are invalid".to_owned(),
+        ));
+    }
+    if request.operation_id.trim().is_empty()
+        || request.operation_id.len() > 128
+        || request.captured_at.trim().is_empty()
+        || request.captured_at.len() > 64
+    {
+        return Err(ApiError::Validation(
+            "captured_at and operation_id are required".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// A missing policy intentionally disables sensitive trajectory collection.
+/// Operations must configure a bounded retention window before enabling it.
+fn location_retention_is_configured() -> bool {
+    env::var("ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .is_some_and(|hours| (1..=8_760).contains(&hours))
 }
 
 fn validated_name(value: String) -> Result<String, ApiError> {

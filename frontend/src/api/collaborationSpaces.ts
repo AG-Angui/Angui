@@ -25,6 +25,8 @@ export interface SpaceMember {
 
 export interface SpaceSnapshot { space: CollaborationSpace; members: SpaceMember[]; version: number }
 export interface SpaceEvent { event_id: string; space_id: string; case_id: string; event_type: string; version: number; occurred_at: string; visibility_scope: string; payload: Record<string, unknown> }
+export interface SpaceLocation { id: string; user_id: string; latitude: number; longitude: number; accuracy_meters: number; captured_at: string }
+export interface SpaceMessage { id: string; sender_id: string; message_type: "text" | "broadcast"; content: string; sent_at: string; recalled_at: string | null }
 
 export const listCollaborationSpaces = (token: string, caseId: string) =>
   apiRequest<CollaborationSpace[]>(`/cases/${caseId}/collaboration-spaces`, {}, token);
@@ -40,3 +42,11 @@ export const leaveCollaborationSpace = (token: string, spaceId: string) =>
   apiRequest<void>(`/collaboration-spaces/${spaceId}/leave`, { method: "POST" }, token);
 export const revokeSpaceLocationConsent = (token: string, spaceId: string) =>
   apiRequest<void>(`/collaboration-spaces/${spaceId}/location-consents/me`, { method: "DELETE" }, token);
+export const recordSpaceLocation = (token: string, spaceId: string, location: Omit<SpaceLocation, "id" | "user_id"> & { operation_id: string }) =>
+  apiRequest<SpaceLocation>(`/collaboration-spaces/${spaceId}/locations`, { method: "POST", body: JSON.stringify(location) }, token);
+export const listMemberTrack = (token: string, spaceId: string, userId: string) =>
+  apiRequest<SpaceLocation[]>(`/collaboration-spaces/${spaceId}/members/${userId}/track`, {}, token);
+export const listSpaceMessages = (token: string, spaceId: string) =>
+  apiRequest<SpaceMessage[]>(`/collaboration-spaces/${spaceId}/messages`, {}, token);
+export const sendSpaceMessage = (token: string, spaceId: string, content: string, message_type: "text" | "broadcast" = "text") =>
+  apiRequest<SpaceMessage>(`/collaboration-spaces/${spaceId}/messages`, { method: "POST", body: JSON.stringify({ content, message_type }) }, token);

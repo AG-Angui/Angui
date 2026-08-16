@@ -71,6 +71,43 @@ pub struct SpaceEventResponse {
     pub payload: Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordSpaceLocationRequest {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy_meters: f64,
+    pub captured_at: String,
+    pub operation_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpaceLocationResponse {
+    pub id: String,
+    pub user_id: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy_meters: f64,
+    pub captured_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSpaceMessageRequest {
+    pub content: String,
+    pub message_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpaceMessageResponse {
+    pub id: String,
+    pub sender_id: String,
+    pub message_type: String,
+    pub content: String,
+    pub sent_at: String,
+    pub recalled_at: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUser {
     pub id: String,

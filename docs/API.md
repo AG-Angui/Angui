@@ -10,6 +10,14 @@
 
 ## 2. 接口列表
 
+### 协作空间（内部行动数据）
+
+协作空间只允许同案件的 `commander` 和已加入空间的 `volunteer` 访问；家属、跨案件成员和未加入该空间的志愿者均不得枚举或读取成员、事件、消息或轨迹。`POST /api/cases/{case_id}/collaboration-spaces` 创建空间；`GET` 同路径列出可访问空间；空间成员可使用快照、事件补偿、加入、离开与位置同意接口恢复本地状态。空间状态改变在同一事务内写入审计、`space_events` 和 `event_outbox`。
+
+`POST /api/collaboration-spaces/{space_id}/locations` 只允许已经加入且持有未撤回位置同意的志愿者调用。请求必须携带可重试的 `operation_id`；同一操作不会产生重复样本或事件。位置历史只对指挥员、或位置所属的志愿者本人开放，且在运营/合规明确配置 `ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS` 前服务端会拒绝任何位置落库。HTTP 快照与 `GET /events?after_version=` 是实时网关不可用时的恢复协议，Redis 不能作为业务事实源。
+
+`GET/POST /api/collaboration-spaces/{space_id}/messages` 提供最多 100 条受控文字消息；`message_type: broadcast` 仅允许指挥员。消息内容不会写进审计元数据，发送仍会生成空间事件和 outbox 记录。语音报告、ASR 和 AI 草稿目前仅完成了 `voice_reports` / `voice_transcripts` 的受控持久化迁移边界；在实际对象存储、ASR 供应商和保留策略获批准前，不开放音频上传或自动处理入口，且不会自动确认线索。
+
 | 方法 | 路径 | 成功状态 | 用途 |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | `200` | 服务健康检查 |
