@@ -77,6 +77,7 @@ impl TestContext {
                 "shelter".to_owned(),
                 "other".to_owned(),
             ],
+            poi_selection_token_secret: "0123456789abcdef0123456789abcdef".to_owned(),
             amap_service: AmapService::disabled(),
             ai_gateway: AiGateway::from_configurations(Vec::new())
                 .expect("empty AI provider configuration should be valid"),

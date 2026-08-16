@@ -1,10 +1,13 @@
 use chrono::{SecondsFormat, Utc};
+use hmac::{Hmac, Mac};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel,
     PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::Sha256;
 
 use crate::{
     ai_gateway::{AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel},
@@ -31,6 +34,16 @@ use crate::{
 
 const DRAFT_TEMPLATE_VERSION: &str = "case-summary-rule-v1";
 const ARCHIVE_DRAFT_TEMPLATE_VERSION: &str = "case-archive-safe-metadata-v1";
+const POI_SELECTION_TOKEN_TTL_SECONDS: i64 = 5 * 60;
+
+#[derive(Deserialize, Serialize)]
+struct PoiSelectionTokenPayload {
+    case_id: String,
+    user_id: String,
+    destination_longitude: f64,
+    destination_latitude: f64,
+    expires_at: i64,
+}
 
 pub async fn create_case_source_record(
     db: &DatabaseConnection,
@@ -1393,6 +1406,7 @@ pub async fn list_case_pois(
     case_id: &str,
     query: CasePoiQuery,
     amap: &crate::amap_service::AmapService,
+    poi_selection_token_secret: &str,
 ) -> Result<CasePoiResponse, ApiError> {
     let role = case_service::require_case_role(
         db,
@@ -1414,7 +1428,26 @@ pub async fn list_case_pois(
         return Err(ApiError::Validation("category is unsupported".to_owned()));
     }
     let (center, center_source) = poi_search_center(db, auth, case_id, role, &query, amap).await?;
-    let (items, source, degradation_status, fallback_message) = match amap.search_nearby_pois(center, &category).await { PoiSearch::Available(pois) if !pois.is_empty() => (pois.into_iter().map(poi_item).collect(), "amap_webservice".to_owned(), "available".to_owned(), None), _ => (fallback_pois(&category), "fixed_demo_fallback".to_owned(), "degraded".to_owned(), Some("Nearby POI service is unavailable. Use the task area text and contact the commander for local confirmation.".to_owned())) };
+    let (items, source, degradation_status, fallback_message) =
+        match amap.search_nearby_pois(center, &category).await {
+            PoiSearch::Available(pois) if !pois.is_empty() => (
+                pois.into_iter()
+                    .map(|poi| poi_item(poi, case_id, &auth.id, poi_selection_token_secret))
+                    .collect(),
+                "amap_webservice".to_owned(),
+                "available".to_owned(),
+                None,
+            ),
+            _ => (
+                fallback_pois(&category),
+                "fixed_demo_fallback".to_owned(),
+                "degraded".to_owned(),
+                Some(
+                    "Nearby POI service is unavailable. Use the task area text and contact the commander for local confirmation."
+                        .to_owned(),
+                ),
+            ),
+        };
     Ok(CasePoiResponse {
         items,
         center_source,
@@ -1430,6 +1463,7 @@ pub async fn get_case_poi_route(
     case_id: &str,
     query: CasePoiRouteQuery,
     amap: &crate::amap_service::AmapService,
+    poi_selection_token_secret: &str,
 ) -> Result<CasePoiRouteResponse, ApiError> {
     case_service::require_case_role(
         db,
@@ -1442,15 +1476,17 @@ pub async fn get_case_poi_route(
         longitude: query.browser_longitude,
         latitude: query.browser_latitude,
     };
-    let destination = Coordinate {
-        longitude: query.destination_longitude,
-        latitude: query.destination_latitude,
-    };
-    if !browser_origin.is_valid() || !destination.is_valid() {
+    if !browser_origin.is_valid() {
         return Err(ApiError::Validation(
             "route coordinates are invalid".to_owned(),
         ));
     }
+    let destination = selected_poi_destination(
+        &query.selection_token,
+        case_id,
+        &auth.id,
+        poi_selection_token_secret,
+    )?;
     let origin = amap.convert_gps_coordinate(browser_origin).await.ok_or_else(|| {
         ApiError::Conflict(
             "browser location could not be converted for route planning; use the authorized case center instead"
@@ -1560,7 +1596,17 @@ async fn authorized_center(
     ))
 }
 
-fn poi_item(poi: crate::amap_service::Poi) -> CasePoiItem {
+fn poi_item(
+    poi: crate::amap_service::Poi,
+    case_id: &str,
+    user_id: &str,
+    poi_selection_token_secret: &str,
+) -> CasePoiItem {
+    let selection_token = poi.coordinate.and_then(|coordinate| {
+        coordinate.is_valid().then(|| {
+            issue_poi_selection_token(case_id, user_id, coordinate, poi_selection_token_secret)
+        })
+    });
     CasePoiItem {
         id: poi.id,
         name: poi.name,
@@ -1569,6 +1615,7 @@ fn poi_item(poi: crate::amap_service::Poi) -> CasePoiItem {
         longitude: poi.coordinate.map(|coordinate| coordinate.longitude),
         latitude: poi.coordinate.map(|coordinate| coordinate.latitude),
         distance_meters: poi.distance_meters,
+        selection_token,
     }
 }
 fn fallback_pois(category: &str) -> Vec<CasePoiItem> {
@@ -1580,7 +1627,73 @@ fn fallback_pois(category: &str) -> Vec<CasePoiItem> {
         longitude: None,
         latitude: None,
         distance_meters: None,
+        selection_token: None,
     }]
+}
+
+fn issue_poi_selection_token(
+    case_id: &str,
+    user_id: &str,
+    destination: Coordinate,
+    secret: &str,
+) -> String {
+    let payload = PoiSelectionTokenPayload {
+        case_id: case_id.to_owned(),
+        user_id: user_id.to_owned(),
+        destination_longitude: destination.longitude,
+        destination_latitude: destination.latitude,
+        expires_at: Utc::now().timestamp() + POI_SELECTION_TOKEN_TTL_SECONDS,
+    };
+    let encoded_payload =
+        hex::encode(serde_json::to_vec(&payload).expect("POI token payload serializes"));
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts token-secret key lengths");
+    mac.update(encoded_payload.as_bytes());
+    format!(
+        "{encoded_payload}.{}",
+        hex::encode(mac.finalize().into_bytes())
+    )
+}
+
+fn selected_poi_destination(
+    token: &str,
+    case_id: &str,
+    user_id: &str,
+    secret: &str,
+) -> Result<Coordinate, ApiError> {
+    let invalid_selection = || {
+        ApiError::Conflict(
+            "selected POI is no longer valid; refresh nearby resources and try again".to_owned(),
+        )
+    };
+    if token.len() > 2_048 {
+        return Err(invalid_selection());
+    }
+    let (encoded_payload, signature) = token.split_once('.').ok_or_else(invalid_selection)?;
+    let signature = hex::decode(signature).map_err(|_| invalid_selection())?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| ApiError::Internal)?;
+    mac.update(encoded_payload.as_bytes());
+    mac.verify_slice(&signature)
+        .map_err(|_| invalid_selection())?;
+    let payload = hex::decode(encoded_payload)
+        .ok()
+        .and_then(|value| serde_json::from_slice::<PoiSelectionTokenPayload>(&value).ok())
+        .ok_or_else(invalid_selection)?;
+    if payload.case_id != case_id
+        || payload.user_id != user_id
+        || payload.expires_at < Utc::now().timestamp()
+    {
+        return Err(invalid_selection());
+    }
+    let destination = Coordinate {
+        longitude: payload.destination_longitude,
+        latitude: payload.destination_latitude,
+    };
+    destination
+        .is_valid()
+        .then_some(destination)
+        .ok_or_else(invalid_selection)
 }
 
 fn haversine_meters(origin: Coordinate, destination: Coordinate) -> u64 {
@@ -2177,4 +2290,46 @@ fn excerpt(value: &str, maximum: usize) -> String {
 }
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Coordinate, issue_poi_selection_token, selected_poi_destination};
+
+    const SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn poi_selection_token_is_bound_to_its_case_user_and_destination() {
+        let destination = Coordinate {
+            longitude: 116.404,
+            latitude: 39.915,
+        };
+        let token = issue_poi_selection_token("case-a", "user-a", destination, SECRET);
+
+        assert_eq!(
+            selected_poi_destination(&token, "case-a", "user-a", SECRET)
+                .expect("issued token should be accepted")
+                .as_query_value(),
+            destination.as_query_value()
+        );
+        assert!(selected_poi_destination(&token, "case-b", "user-a", SECRET).is_err());
+        assert!(selected_poi_destination(&token, "case-a", "user-b", SECRET).is_err());
+    }
+
+    #[test]
+    fn poi_selection_token_rejects_tampering() {
+        let token = issue_poi_selection_token(
+            "case-a",
+            "user-a",
+            Coordinate {
+                longitude: 116.404,
+                latitude: 39.915,
+            },
+            SECRET,
+        );
+        let (payload, signature) = token.split_once('.').expect("signed token format");
+        let tampered = format!("{payload}.{}", signature.replacen('a', "b", 1));
+
+        assert!(selected_poi_destination(&tampered, "case-a", "user-a", SECRET).is_err());
+    }
 }

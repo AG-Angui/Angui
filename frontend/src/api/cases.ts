@@ -293,6 +293,7 @@ export interface CasePoi {
   longitude: number | null;
   latitude: number | null;
   distance_meters: number | null;
+  selection_token: string | null;
 }
 export interface CasePois {
   items: CasePoi[];
@@ -865,8 +866,7 @@ export function getCasePoiRoute(
   input: {
     browser_longitude: number;
     browser_latitude: number;
-    destination_longitude: number;
-    destination_latitude: number;
+    selection_token: string;
   },
 ): Promise<CasePoiRoute> {
   const params = new URLSearchParams(

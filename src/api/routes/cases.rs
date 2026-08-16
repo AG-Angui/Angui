@@ -590,6 +590,7 @@ async fn list_case_pois(
             &case_id,
             query.into_inner(),
             &state.amap_service,
+            &state.poi_selection_token_secret,
         )
         .await?,
     ))
@@ -608,6 +609,7 @@ async fn get_case_poi_route(
             &case_id,
             query.into_inner(),
             &state.amap_service,
+            &state.poi_selection_token_secret,
         )
         .await?,
     ))

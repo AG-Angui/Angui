@@ -84,9 +84,15 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
 }
 
-function poiErrorMessage(cause: unknown) {
+function poiListErrorMessage(cause: unknown) {
   if (cause instanceof ApiClientError && cause.status === 409)
     return "当前中心不能用于附近资源检索。可改用本人的当前位置，或联系指挥确认任务区域和公开地点。";
+  return messageFrom(cause);
+}
+
+function poiRouteErrorMessage(cause: unknown) {
+  if (cause instanceof ApiClientError && cause.status === 409)
+    return "当前位置或所选地点已失效。请重新授权定位并再次检索附近资源，或稍后重试。";
   return messageFrom(cause);
 }
 
@@ -923,7 +929,7 @@ export function VolunteerWorkspacePage() {
                                   workspace.detail.id,
                                   category,
                                 ).catch((cause) => {
-                                  throw new Error(poiErrorMessage(cause));
+                                  throw new Error(poiListErrorMessage(cause));
                                 });
                                 setPois((value) => ({
                                   ...value,
@@ -956,7 +962,7 @@ export function VolunteerWorkspacePage() {
                                   category,
                                   browserLocation,
                                 ).catch((cause) => {
-                                  throw new Error(poiErrorMessage(cause));
+                                  throw new Error(poiListErrorMessage(cause));
                                 });
                                 setBrowserPoiLocations((value) => ({
                                   ...value,
@@ -1010,7 +1016,8 @@ export function VolunteerWorkspacePage() {
                                 "browser_location" &&
                                 browserPoiLocations[workspace.detail.id] &&
                                 poi.longitude !== null &&
-                                poi.latitude !== null && (
+                                poi.latitude !== null &&
+                                poi.selection_token !== null && (
                                   <Button
                                     size="sm"
                                     variant="ghost"
@@ -1030,11 +1037,10 @@ export function VolunteerWorkspacePage() {
                                             {
                                               browser_longitude: origin.longitude,
                                               browser_latitude: origin.latitude,
-                                              destination_longitude: poi.longitude!,
-                                              destination_latitude: poi.latitude!,
+                                              selection_token: poi.selection_token!,
                                             },
                                           ).catch((cause) => {
-                                            throw new Error(poiErrorMessage(cause));
+                                            throw new Error(poiRouteErrorMessage(cause));
                                           });
                                           setPoiRoutes((value) => ({
                                             ...value,

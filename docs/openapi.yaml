@@ -1360,7 +1360,7 @@ paths:
       tags: [Cases]
       operationId: listCasePois
       summary: Find bounded nearby resources from an authorized or explicitly consented center
-      description: The caller can choose only an allow-listed category. With no browser coordinates, the server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task coordinate or, when none exists, a confirmed place; volunteers may use only confirmed public places as that fallback center. A caller may explicitly provide both browser coordinates in WGS-84 for this request only. The server converts them to AMap coordinates before the upstream request and must not persist them. AMap transport, quota, conversion, or business failures return an explicit error or a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
+      description: The caller can choose only an allow-listed category. With no browser coordinates, the server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task coordinate or, when none exists, a confirmed place; volunteers may use only confirmed public places as that fallback center. A caller may explicitly provide both browser coordinates in WGS-84 for this request only. The server converts them to AMap coordinates before the upstream request and must not persist them. Each coordinate-bearing returned POI includes a short-lived, case- and user-bound selection token for route planning. AMap transport, quota, conversion, or business failures return an explicit error or a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander, volunteer]
@@ -1391,7 +1391,7 @@ paths:
       tags: [Cases]
       operationId: getCasePoiRoute
       summary: Estimate a walking route from an explicitly consented browser location to a selected POI
-      description: Commander and volunteer only. browser coordinates are WGS-84 and are used only for this request; destination coordinates must be the selected AMap POI coordinate. The server converts the browser coordinate before requesting an AMap walking estimate and returns a straight-line fallback when route estimation is unavailable. Neither coordinate is persisted or written to audit metadata.
+      description: Commander and volunteer only. Browser coordinates are WGS-84 and are used only for this request. A short-lived selection token from listCasePois identifies a selected AMap POI and is bound to the caller and case, preventing arbitrary destination routing. The server converts the browser coordinate before requesting an AMap walking estimate and returns a straight-line fallback when route estimation is unavailable. Neither coordinate is persisted or written to audit metadata.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander, volunteer]
@@ -1405,16 +1405,11 @@ paths:
           in: query
           required: true
           schema: { type: number, minimum: -90, maximum: 90 }
-        - name: destination_longitude
+        - name: selection_token
           in: query
           required: true
-          description: Selected AMap POI longitude in GCJ-02 / Autonavi coordinates.
-          schema: { type: number, minimum: -180, maximum: 180 }
-        - name: destination_latitude
-          in: query
-          required: true
-          description: Selected AMap POI latitude in GCJ-02 / Autonavi coordinates.
-          schema: { type: number, minimum: -90, maximum: 90 }
+          description: Short-lived token returned with the selected POI by listCasePois.
+          schema: { type: string, minLength: 1, maxLength: 2048 }
       responses:
         "200": { description: Walking route estimate or straight-line fallback, content: { application/json: { schema: { $ref: "#/components/schemas/CasePoiRoute" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
@@ -4363,7 +4358,7 @@ components:
     CasePoi:
       type: object
       additionalProperties: false
-      required: [id, name, category, address, longitude, latitude, distance_meters]
+      required: [id, name, category, address, longitude, latitude, distance_meters, selection_token]
       properties:
         id: { type: string }
         name: { type: string }
@@ -4372,6 +4367,7 @@ components:
         longitude: { type: [number, "null"] }
         latitude: { type: [number, "null"] }
         distance_meters: { type: [integer, "null"], minimum: 0 }
+        selection_token: { type: [string, "null"], maxLength: 2048 }
 
     CasePois:
       type: object

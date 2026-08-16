@@ -302,6 +302,7 @@ dependencies = [
  "env_logger",
  "futures-util",
  "hex",
+ "hmac",
  "http 0.2.12",
  "image",
  "lettre",

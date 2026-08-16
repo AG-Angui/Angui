@@ -264,7 +264,7 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
             &app,
             test::TestRequest::get()
                 .uri(&format!(
-                    "/api/cases/{case_id}/pois/route?browser_longitude=200&browser_latitude=39.9&destination_longitude=116.4&destination_latitude=39.9"
+                    "/api/cases/{case_id}/pois/route?browser_longitude=200&browser_latitude=39.9&selection_token=not-a-token"
                 ))
                 .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
                 .to_request(),
@@ -272,6 +272,22 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
         .await,
         StatusCode::BAD_REQUEST,
         "validation_error",
+    )
+    .await;
+
+    assert_error(
+        test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/cases/{case_id}/pois/route?browser_longitude=116.4&browser_latitude=39.9&selection_token=forged-token"
+                ))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+                .to_request(),
+        )
+        .await,
+        StatusCode::CONFLICT,
+        "conflict",
     )
     .await;
 

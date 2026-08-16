@@ -1511,6 +1511,9 @@ pub struct CasePoiItem {
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
     pub distance_meters: Option<u64>,
+    /// Short-lived, user- and case-bound capability required to request a
+    /// route to this POI. It is not persisted.
+    pub selection_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1519,9 +1522,8 @@ pub struct CasePoiRouteQuery {
     /// Browser geolocation is WGS-84 and only exists for the duration of this request.
     pub browser_longitude: f64,
     pub browser_latitude: f64,
-    /// AMap POI coordinates are GCJ-02 / Autonavi coordinates.
-    pub destination_longitude: f64,
-    pub destination_latitude: f64,
+    /// A short-lived capability issued with the selected POI by list_case_pois.
+    pub selection_token: String,
 }
 
 #[derive(Debug, Serialize)]
