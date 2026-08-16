@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::{
     ai_gateway::{AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel},
-    amap_service::{Coordinate, PoiSearch},
+    amap_service::{Coordinate, PoiSearch, RouteEstimate, RouteMode},
     entities::{
         archive_drafts, archive_review_materials, case_places, case_source_records, cases,
         clue_drafts, clues, summary_drafts, tasks,
@@ -16,14 +16,14 @@ use crate::{
     error::ApiError,
     models::{
         ArchiveDraftResponse, ArchiveReviewMaterialDiffResponse, ArchiveReviewMaterialResponse,
-        AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse, CasePublicProgressItem,
-        CasePublicProgressResponse, CaseSourceRecordResponse, ClueDraftCandidate,
-        ClueDraftFieldDecision, ClueDraftResponse, CreateCaseSourceRecordRequest,
-        CreateClueDraftRequest, CreateClueRequest, CreateSummaryDraftRequest,
-        DeidentifyArchiveDraftRequest, PublishedSummaryVersion, PublishedSummaryVersionResponse,
-        RestoreArchiveReviewMaterialRequest, ReviewArchiveDraftRequest, ReviewClueDraftRequest,
-        ReviewSummaryDraftRequest, SummaryDraftDiffResponse, SummaryDraftResponse,
-        SummaryDraftVersionResponse,
+        AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse, CasePoiRouteQuery,
+        CasePoiRouteResponse, CasePublicProgressItem, CasePublicProgressResponse,
+        CaseSourceRecordResponse, ClueDraftCandidate, ClueDraftFieldDecision, ClueDraftResponse,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
+        CreateSummaryDraftRequest, DeidentifyArchiveDraftRequest, PublishedSummaryVersion,
+        PublishedSummaryVersionResponse, RestoreArchiveReviewMaterialRequest,
+        ReviewArchiveDraftRequest, ReviewClueDraftRequest, ReviewSummaryDraftRequest,
+        SummaryDraftDiffResponse, SummaryDraftResponse, SummaryDraftVersionResponse,
     },
     roles::{CaseRole, GlobalCapability},
     services::{case_service, case_summary_service, task_service},
@@ -1403,7 +1403,8 @@ pub async fn list_case_pois(
     .await?;
     let category = query
         .category
-        .unwrap_or_else(|| "hospital".to_owned())
+        .as_deref()
+        .unwrap_or("hospital")
         .trim()
         .to_lowercase();
     if !matches!(
@@ -1412,14 +1413,111 @@ pub async fn list_case_pois(
     ) {
         return Err(ApiError::Validation("category is unsupported".to_owned()));
     }
-    let center = authorized_center(db, auth, case_id, role).await?;
+    let (center, center_source) = poi_search_center(db, auth, case_id, role, &query, amap).await?;
     let (items, source, degradation_status, fallback_message) = match amap.search_nearby_pois(center, &category).await { PoiSearch::Available(pois) if !pois.is_empty() => (pois.into_iter().map(poi_item).collect(), "amap_webservice".to_owned(), "available".to_owned(), None), _ => (fallback_pois(&category), "fixed_demo_fallback".to_owned(), "degraded".to_owned(), Some("Nearby POI service is unavailable. Use the task area text and contact the commander for local confirmation.".to_owned())) };
     Ok(CasePoiResponse {
         items,
+        center_source,
         source,
         degradation_status,
         fallback_message,
     })
+}
+
+pub async fn get_case_poi_route(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    query: CasePoiRouteQuery,
+    amap: &crate::amap_service::AmapService,
+) -> Result<CasePoiRouteResponse, ApiError> {
+    case_service::require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let browser_origin = Coordinate {
+        longitude: query.browser_longitude,
+        latitude: query.browser_latitude,
+    };
+    let destination = Coordinate {
+        longitude: query.destination_longitude,
+        latitude: query.destination_latitude,
+    };
+    if !browser_origin.is_valid() || !destination.is_valid() {
+        return Err(ApiError::Validation(
+            "route coordinates are invalid".to_owned(),
+        ));
+    }
+    let origin = amap.convert_gps_coordinate(browser_origin).await.ok_or_else(|| {
+        ApiError::Conflict(
+            "browser location could not be converted for route planning; use the authorized case center instead"
+                .to_owned(),
+        )
+    })?;
+    let straight_line_meters = haversine_meters(origin, destination);
+    match amap
+        .estimate_route(origin, destination, RouteMode::Walking)
+        .await
+    {
+        RouteEstimate::Available {
+            distance_meters,
+            duration_seconds,
+            ..
+        } => Ok(CasePoiRouteResponse {
+            straight_line_meters,
+            walking_distance_meters: Some(distance_meters),
+            walking_duration_seconds: Some(duration_seconds),
+            source: "amap_webservice".to_owned(),
+            degradation_status: "available".to_owned(),
+        }),
+        RouteEstimate::Unavailable { .. } => Ok(CasePoiRouteResponse {
+            straight_line_meters,
+            walking_distance_meters: None,
+            walking_duration_seconds: None,
+            source: "straight_line_fallback".to_owned(),
+            degradation_status: "degraded".to_owned(),
+        }),
+    }
+}
+
+async fn poi_search_center(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    role: CaseRole,
+    query: &CasePoiQuery,
+    amap: &crate::amap_service::AmapService,
+) -> Result<(Coordinate, String), ApiError> {
+    match (query.browser_longitude, query.browser_latitude) {
+        (Some(longitude), Some(latitude)) => {
+            let browser_coordinate = Coordinate {
+                longitude,
+                latitude,
+            };
+            if !browser_coordinate.is_valid() {
+                return Err(ApiError::Validation(
+                    "browser location is invalid".to_owned(),
+                ));
+            }
+            let coordinate = amap.convert_gps_coordinate(browser_coordinate).await.ok_or_else(|| {
+                ApiError::Conflict(
+                    "browser location could not be converted for nearby search; use the authorized case center instead"
+                        .to_owned(),
+                )
+            })?;
+            Ok((coordinate, "browser_location".to_owned()))
+        }
+        (None, None) => Ok((
+            authorized_center(db, auth, case_id, role).await?,
+            "authorized_case_location".to_owned(),
+        )),
+        _ => Err(ApiError::Validation(
+            "browser_longitude and browser_latitude must be provided together".to_owned(),
+        )),
+    }
 }
 
 async fn authorized_center(
@@ -1470,6 +1568,7 @@ fn poi_item(poi: crate::amap_service::Poi) -> CasePoiItem {
         address: poi.address,
         longitude: poi.coordinate.map(|coordinate| coordinate.longitude),
         latitude: poi.coordinate.map(|coordinate| coordinate.latitude),
+        distance_meters: poi.distance_meters,
     }
 }
 fn fallback_pois(category: &str) -> Vec<CasePoiItem> {
@@ -1480,7 +1579,18 @@ fn fallback_pois(category: &str) -> Vec<CasePoiItem> {
         address: Some("Confirm locally with the commander".to_owned()),
         longitude: None,
         latitude: None,
+        distance_meters: None,
     }]
+}
+
+fn haversine_meters(origin: Coordinate, destination: Coordinate) -> u64 {
+    let latitude_delta = (destination.latitude - origin.latitude).to_radians();
+    let longitude_delta = (destination.longitude - origin.longitude).to_radians();
+    let a = (latitude_delta / 2.0).sin().powi(2)
+        + origin.latitude.to_radians().cos()
+            * destination.latitude.to_radians().cos()
+            * (longitude_delta / 2.0).sin().powi(2);
+    (6_371_000.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())).round() as u64
 }
 fn deterministic_draft_content(summary: &crate::models::CaseSummaryResponse) -> String {
     format!(

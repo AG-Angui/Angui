@@ -215,6 +215,7 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
     .await;
     assert_eq!(pois.status(), StatusCode::OK);
     let pois: Value = test::read_body_json(pois).await;
+    assert_eq!(pois["center_source"], "authorized_case_location");
     assert_eq!(pois["source"], "fixed_demo_fallback");
     assert_eq!(pois["degradation_status"], "degraded");
     assert!(pois["items"][0]["longitude"].is_null());
@@ -235,6 +236,36 @@ async fn case_collaboration_endpoints_apply_roles_lifecycle_and_degraded_fallbac
             &app,
             test::TestRequest::get()
                 .uri(&format!("/api/cases/{case_id}/pois?category=unknown"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+                .to_request(),
+        )
+        .await,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+    assert_error(
+        test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/cases/{case_id}/pois?category=hospital&browser_longitude=116.4"
+                ))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+                .to_request(),
+        )
+        .await,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+    assert_error(
+        test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/cases/{case_id}/pois/route?browser_longitude=200&browser_latitude=39.9&destination_longitude=116.4&destination_latitude=39.9"
+                ))
                 .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
                 .to_request(),
         )

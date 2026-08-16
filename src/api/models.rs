@@ -1487,11 +1487,16 @@ pub struct ArchiveDraftResponse {
 #[serde(deny_unknown_fields)]
 pub struct CasePoiQuery {
     pub category: Option<String>,
+    /// Optional browser geolocation in WGS-84. It is used only for this
+    /// request and is converted server-side before calling AMap.
+    pub browser_longitude: Option<f64>,
+    pub browser_latitude: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CasePoiResponse {
     pub items: Vec<CasePoiItem>,
+    pub center_source: String,
     pub source: String,
     pub degradation_status: String,
     pub fallback_message: Option<String>,
@@ -1505,6 +1510,27 @@ pub struct CasePoiItem {
     pub address: Option<String>,
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
+    pub distance_meters: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CasePoiRouteQuery {
+    /// Browser geolocation is WGS-84 and only exists for the duration of this request.
+    pub browser_longitude: f64,
+    pub browser_latitude: f64,
+    /// AMap POI coordinates are GCJ-02 / Autonavi coordinates.
+    pub destination_longitude: f64,
+    pub destination_latitude: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasePoiRouteResponse {
+    pub straight_line_meters: u64,
+    pub walking_distance_meters: Option<u64>,
+    pub walking_duration_seconds: Option<u64>,
+    pub source: String,
+    pub degradation_status: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

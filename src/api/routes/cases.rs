@@ -10,9 +10,9 @@ use crate::{
     error::ApiError,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse, CasePoiQuery,
-        CaseResourceConfigurationResponse, CreateCasePlaceRequest, CreateCaseRequest,
-        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
-        CreateSummaryDraftRequest, CreateTaskRequest, ReviewCasePlaceRequest,
+        CasePoiRouteQuery, CaseResourceConfigurationResponse, CreateCasePlaceRequest,
+        CreateCaseRequest, CreateCaseSourceRecordRequest, CreateClueDraftRequest,
+        CreateClueRequest, CreateSummaryDraftRequest, CreateTaskRequest, ReviewCasePlaceRequest,
         ReviewClueDraftRequest, ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
         UpdateElderProfileRequest,
     },
@@ -58,6 +58,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 web::patch().to(review_clue_draft),
             )
             .route("/{case_id}/pois", web::get().to(list_case_pois))
+            .route("/{case_id}/pois/route", web::get().to(get_case_poi_route))
             .route(
                 "/{case_id}/summary-drafts",
                 web::get().to(get_latest_summary_draft),
@@ -584,6 +585,24 @@ async fn list_case_pois(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(
         crate::services::case_collaboration_service::list_case_pois(
+            &state.db,
+            &auth,
+            &case_id,
+            query.into_inner(),
+            &state.amap_service,
+        )
+        .await?,
+    ))
+}
+
+async fn get_case_poi_route(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+    query: web::Query<CasePoiRouteQuery>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_collaboration_service::get_case_poi_route(
             &state.db,
             &auth,
             &case_id,

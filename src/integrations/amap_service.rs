@@ -51,6 +51,7 @@ pub struct Poi {
     pub category: String,
     pub address: Option<String>,
     pub coordinate: Option<Coordinate>,
+    pub distance_meters: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -169,6 +170,36 @@ impl AmapService {
         }
     }
 
+    /// Converts the WGS-84 coordinate returned by browser geolocation into
+    /// the AMap/Autonavi coordinate system. Callers must not persist the raw
+    /// browser coordinate as a side effect of this conversion.
+    pub async fn convert_gps_coordinate(&self, coordinate: Coordinate) -> Option<Coordinate> {
+        if !coordinate.is_valid() {
+            return None;
+        }
+        let key = self.key.as_ref()?;
+        let locations = coordinate.as_query_value();
+        let response = self
+            .client
+            .get(format!("{}/v3/assistant/coordinate/convert", self.base_url))
+            .query(&[
+                ("key", key.as_str()),
+                ("locations", locations.as_str()),
+                ("coordsys", "gps"),
+            ])
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let payload: AmapCoordinateConvertResponse = response.json().await.ok()?;
+        if payload.status.as_deref() != Some("1") {
+            return None;
+        }
+        payload.locations.as_deref().and_then(parse_coordinate)
+    }
+
     pub async fn search_nearby_pois(&self, center: Coordinate, category: &str) -> PoiSearch {
         if !center.is_valid()
             || !matches!(
@@ -226,6 +257,7 @@ impl AmapService {
                         category: category.to_owned(),
                         address: (!poi.address.trim().is_empty()).then_some(poi.address),
                         coordinate,
+                        distance_meters: poi.distance.and_then(|value| value.parse().ok()),
                     })
                 })
                 .collect(),
@@ -267,6 +299,13 @@ struct AmapPoi {
     #[serde(default)]
     address: String,
     location: Option<String>,
+    distance: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AmapCoordinateConvertResponse {
+    status: Option<String>,
+    locations: Option<String>,
 }
 
 fn parse_coordinate(value: &str) -> Option<Coordinate> {

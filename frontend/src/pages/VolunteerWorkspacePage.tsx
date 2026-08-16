@@ -15,6 +15,7 @@ import {
   applyForTask,
   createClue,
   getCase,
+  getCasePoiRoute,
   getCaseSummary,
   getTaskNavigation,
   getTaskSafetyBriefing,
@@ -30,6 +31,8 @@ import {
 } from "../api/cases";
 import type {
   CaseDetail,
+  CasePoi,
+  CasePoiRoute,
   CasePois,
   CaseSummary,
   CaseTask,
@@ -75,6 +78,7 @@ type ClueDraft = {
   location: string;
   precision: "exact" | "approximate" | null;
 };
+type BrowserPoiLocation = { longitude: number; latitude: number };
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
@@ -82,8 +86,36 @@ function messageFrom(cause: unknown) {
 
 function poiErrorMessage(cause: unknown) {
   if (cause instanceof ApiClientError && cause.status === 409)
-    return "当前案件没有可用的任务或已确认公开地点坐标，无法检索周边资源。请使用任务区域文字并联系指挥确认。";
+    return "当前中心不能用于附近资源检索。可改用本人的当前位置，或联系指挥确认任务区域和公开地点。";
   return messageFrom(cause);
+}
+
+function currentBrowserLocation(): Promise<BrowserPoiLocation> {
+  if (!navigator.geolocation) {
+    return Promise.reject(new Error("当前浏览器不支持定位，请使用案件授权中心检索。"));
+  }
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) =>
+        resolve({
+          longitude: position.coords.longitude,
+          latitude: position.coords.latitude,
+        }),
+      () => reject(new Error("未获得当前位置授权，请检查浏览器定位权限后重试。")),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
+    );
+  });
+}
+
+function distanceLabel(distanceMeters: number | null) {
+  if (distanceMeters === null) return null;
+  if (distanceMeters < 1000) return `${distanceMeters} 米`;
+  return `${(distanceMeters / 1000).toFixed(1)} 公里`;
+}
+
+function durationLabel(durationSeconds: number | null) {
+  if (durationSeconds === null) return null;
+  return `${Math.max(1, Math.round(durationSeconds / 60))} 分钟`;
 }
 function localNow() {
   return new Date().toISOString();
@@ -110,6 +142,12 @@ export function VolunteerWorkspacePage() {
   >({});
   const [pois, setPois] = useState<Record<string, CasePois>>({});
   const [poiCategory, setPoiCategory] = useState<Record<string, string>>({});
+  const [browserPoiLocations, setBrowserPoiLocations] = useState<
+    Record<string, BrowserPoiLocation>
+  >({});
+  const [poiRoutes, setPoiRoutes] = useState<
+    Record<string, { poi: CasePoi; route: CasePoiRoute }>
+  >({});
   const [feedback, setFeedback] = useState<Record<string, string>>({});
   const [clueDrafts, setClueDrafts] = useState<Record<string, ClueDraft>>({});
   const [location, setLocation] = useState<
@@ -849,8 +887,7 @@ export function VolunteerWorkspacePage() {
                       附近资源
                     </h3>
                     <p className="mb-0 mt-1 text-xs text-slate-600">
-                      服务端会根据任务区域或已确认的公开地点选择授权中心；
-                      不会使用浏览器提供的位置作为检索中心。
+                      默认以任务区域或已确认公开地点检索。也可主动授权使用当前位置；该位置只用于本次搜索和路线估算，不会写入案件、任务或其他成员视图。
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <select
@@ -900,10 +937,58 @@ export function VolunteerWorkspacePage() {
                         <Search size={16} />
                         搜索附近资源
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        isDisabled={pendingTaskIds.has(
+                          `case-${workspace.detail.id}-browser-pois`,
+                        )}
+                        onPress={() => {
+                          if (token)
+                            void run(
+                              `case-${workspace.detail.id}-browser-pois`,
+                              async () => {
+                                const browserLocation =
+                                  await currentBrowserLocation();
+                                const result = await listCasePois(
+                                  token,
+                                  workspace.detail.id,
+                                  category,
+                                  browserLocation,
+                                ).catch((cause) => {
+                                  throw new Error(poiErrorMessage(cause));
+                                });
+                                setBrowserPoiLocations((value) => ({
+                                  ...value,
+                                  [workspace.detail.id]: browserLocation,
+                                }));
+                                setPois((value) => ({
+                                  ...value,
+                                  [workspace.detail.id]: result,
+                                }));
+                                setPoiRoutes((value) => {
+                                  const next = { ...value };
+                                  delete next[workspace.detail.id];
+                                  return next;
+                                });
+                              },
+                              "已按当前位置加载附近资源。",
+                            );
+                        }}
+                      >
+                        <LocateFixed size={16} />
+                        使用我的位置
+                      </Button>
                     </div>
                     {pois[workspace.detail.id] && (
                       <div className="mt-3 rounded-md border border-slate-200 p-3 text-sm text-slate-700">
                         <p className="m-0 text-xs text-slate-500">
+                          检索中心：
+                          {pois[workspace.detail.id].center_source ===
+                          "browser_location"
+                            ? "当前设备位置（仅本次使用）"
+                            : "案件授权位置"}
+                          。
                           数据来源：
                           {poiSourceLabel(pois[workspace.detail.id].source)}
                           {pois[workspace.detail.id].fallback_message
@@ -912,12 +997,75 @@ export function VolunteerWorkspacePage() {
                         </p>
                         <ul className="mb-0 mt-2 list-disc space-y-1 pl-5">
                           {pois[workspace.detail.id].items.map((poi) => (
-                            <li key={poi.id}>
+                            <li
+                              key={poi.id}
+                              className="flex flex-wrap items-center justify-between gap-2"
+                            >
                               {poi.name}
+                              {distanceLabel(poi.distance_meters)
+                                ? ` · 约 ${distanceLabel(poi.distance_meters)}`
+                                : ""}
                               {poi.address ? ` — ${poi.address}` : ""}
+                              {pois[workspace.detail.id].center_source ===
+                                "browser_location" &&
+                                browserPoiLocations[workspace.detail.id] &&
+                                poi.longitude !== null &&
+                                poi.latitude !== null && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    isDisabled={pendingTaskIds.has(
+                                      `case-${workspace.detail.id}-poi-route-${poi.id}`,
+                                    )}
+                                    onPress={() => {
+                                      const origin =
+                                        browserPoiLocations[workspace.detail.id];
+                                      if (!token || !origin) return;
+                                      void run(
+                                        `case-${workspace.detail.id}-poi-route-${poi.id}`,
+                                        async () => {
+                                          const route = await getCasePoiRoute(
+                                            token,
+                                            workspace.detail.id,
+                                            {
+                                              browser_longitude: origin.longitude,
+                                              browser_latitude: origin.latitude,
+                                              destination_longitude: poi.longitude!,
+                                              destination_latitude: poi.latitude!,
+                                            },
+                                          ).catch((cause) => {
+                                            throw new Error(poiErrorMessage(cause));
+                                          });
+                                          setPoiRoutes((value) => ({
+                                            ...value,
+                                            [workspace.detail.id]: { poi, route },
+                                          }));
+                                        },
+                                        "步行路线已更新。",
+                                      );
+                                    }}
+                                  >
+                                    <Compass size={15} />
+                                    路线
+                                  </Button>
+                                )}
                             </li>
                           ))}
                         </ul>
+                        {poiRoutes[workspace.detail.id] && (
+                          <div className="mt-3 border-t border-slate-200 pt-3">
+                            <p className="m-0 font-medium text-slate-900">
+                              到 {poiRoutes[workspace.detail.id].poi.name} 的步行路线
+                            </p>
+                            <p className="mb-0 mt-1 text-xs text-slate-600">
+                              直线约 {distanceLabel(poiRoutes[workspace.detail.id].route.straight_line_meters)}
+                              {poiRoutes[workspace.detail.id].route.walking_distance_meters !==
+                              null
+                                ? `；步行约 ${distanceLabel(poiRoutes[workspace.detail.id].route.walking_distance_meters)}，预计 ${durationLabel(poiRoutes[workspace.detail.id].route.walking_duration_seconds)}。`
+                                : "；路线服务暂不可用，以上为直线距离估算。"}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     )}
                   </section>

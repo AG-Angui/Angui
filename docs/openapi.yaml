@@ -1359,8 +1359,8 @@ paths:
     get:
       tags: [Cases]
       operationId: listCasePois
-      summary: Find bounded nearby resources from a server-authorized center
-      description: The caller can choose only an allow-listed category; it cannot submit coordinates. The server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task coordinate or, when none exists, a confirmed place; volunteers may use only confirmed public places as that fallback center. AMap transport, quota, or business failures return a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
+      summary: Find bounded nearby resources from an authorized or explicitly consented center
+      description: The caller can choose only an allow-listed category. With no browser coordinates, the server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task coordinate or, when none exists, a confirmed place; volunteers may use only confirmed public places as that fallback center. A caller may explicitly provide both browser coordinates in WGS-84 for this request only. The server converts them to AMap coordinates before the upstream request and must not persist them. AMap transport, quota, conversion, or business failures return an explicit error or a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander, volunteer]
@@ -1369,8 +1369,54 @@ paths:
         - name: category
           in: query
           schema: { type: string, enum: [hospital, police, transit, market, community_service], default: hospital }
+        - name: browser_longitude
+          in: query
+          description: Optional WGS-84 browser location. Must be supplied with browser_latitude and is never persisted.
+          schema: { type: number, minimum: -180, maximum: 180 }
+        - name: browser_latitude
+          in: query
+          description: Optional WGS-84 browser location. Must be supplied with browser_longitude and is never persisted.
+          schema: { type: number, minimum: -90, maximum: 90 }
       responses:
         "200": { description: Nearby POIs or explicit degraded fallback, content: { application/json: { schema: { $ref: "#/components/schemas/CasePois" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/cases/{case_id}/pois/route:
+    parameters: [{ $ref: "#/components/parameters/CaseId" }]
+    get:
+      tags: [Cases]
+      operationId: getCasePoiRoute
+      summary: Estimate a walking route from an explicitly consented browser location to a selected POI
+      description: Commander and volunteer only. browser coordinates are WGS-84 and are used only for this request; destination coordinates must be the selected AMap POI coordinate. The server converts the browser coordinate before requesting an AMap walking estimate and returns a straight-line fallback when route estimation is unavailable. Neither coordinate is persisted or written to audit metadata.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      parameters:
+        - name: browser_longitude
+          in: query
+          required: true
+          schema: { type: number, minimum: -180, maximum: 180 }
+        - name: browser_latitude
+          in: query
+          required: true
+          schema: { type: number, minimum: -90, maximum: 90 }
+        - name: destination_longitude
+          in: query
+          required: true
+          description: Selected AMap POI longitude in GCJ-02 / Autonavi coordinates.
+          schema: { type: number, minimum: -180, maximum: 180 }
+        - name: destination_latitude
+          in: query
+          required: true
+          description: Selected AMap POI latitude in GCJ-02 / Autonavi coordinates.
+          schema: { type: number, minimum: -90, maximum: 90 }
+      responses:
+        "200": { description: Walking route estimate or straight-line fallback, content: { application/json: { schema: { $ref: "#/components/schemas/CasePoiRoute" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -4317,7 +4363,7 @@ components:
     CasePoi:
       type: object
       additionalProperties: false
-      required: [id, name, category, address, longitude, latitude]
+      required: [id, name, category, address, longitude, latitude, distance_meters]
       properties:
         id: { type: string }
         name: { type: string }
@@ -4325,16 +4371,29 @@ components:
         address: { type: [string, "null"] }
         longitude: { type: [number, "null"] }
         latitude: { type: [number, "null"] }
+        distance_meters: { type: [integer, "null"], minimum: 0 }
 
     CasePois:
       type: object
       additionalProperties: false
-      required: [items, source, degradation_status, fallback_message]
+      required: [items, center_source, source, degradation_status, fallback_message]
       properties:
         items: { type: array, maxItems: 10, items: { $ref: "#/components/schemas/CasePoi" } }
+        center_source: { type: string, enum: [authorized_case_location, browser_location] }
         source: { type: string, enum: [amap_webservice, fixed_demo_fallback] }
         degradation_status: { type: string, enum: [available, degraded] }
         fallback_message: { type: [string, "null"] }
+
+    CasePoiRoute:
+      type: object
+      additionalProperties: false
+      required: [straight_line_meters, walking_distance_meters, walking_duration_seconds, source, degradation_status]
+      properties:
+        straight_line_meters: { type: integer, minimum: 0 }
+        walking_distance_meters: { type: [integer, "null"], minimum: 0 }
+        walking_duration_seconds: { type: [integer, "null"], minimum: 0 }
+        source: { type: string, enum: [amap_webservice, straight_line_fallback] }
+        degradation_status: { type: string, enum: [available, degraded] }
 
     CreateSummaryDraftRequest:
       type: object

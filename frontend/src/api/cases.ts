@@ -292,12 +292,21 @@ export interface CasePoi {
   address: string | null;
   longitude: number | null;
   latitude: number | null;
+  distance_meters: number | null;
 }
 export interface CasePois {
   items: CasePoi[];
+  center_source: "browser_location" | "authorized_case_location";
   source: string;
   degradation_status: string;
   fallback_message: string | null;
+}
+export interface CasePoiRoute {
+  straight_line_meters: number;
+  walking_distance_meters: number | null;
+  walking_duration_seconds: number | null;
+  source: string;
+  degradation_status: "available" | "degraded";
 }
 export type CaseMapObjectType = "last_seen" | "place" | "clue" | "task";
 export type MapLocationPrecision = "exact" | "approximate" | "unknown";
@@ -836,9 +845,35 @@ export function listCasePois(
   token: string,
   caseId: string,
   category = "hospital",
+  browserLocation?: { longitude: number; latitude: number },
 ): Promise<CasePois> {
+  const params = new URLSearchParams({ category });
+  if (browserLocation) {
+    params.set("browser_longitude", String(browserLocation.longitude));
+    params.set("browser_latitude", String(browserLocation.latitude));
+  }
   return apiRequest<CasePois>(
-    `/cases/${caseId}/pois?category=${encodeURIComponent(category)}`,
+    `/cases/${caseId}/pois?${params.toString()}`,
+    {},
+    token,
+  );
+}
+
+export function getCasePoiRoute(
+  token: string,
+  caseId: string,
+  input: {
+    browser_longitude: number;
+    browser_latitude: number;
+    destination_longitude: number;
+    destination_latitude: number;
+  },
+): Promise<CasePoiRoute> {
+  const params = new URLSearchParams(
+    Object.entries(input).map(([key, value]) => [key, String(value)]),
+  );
+  return apiRequest<CasePoiRoute>(
+    `/cases/${caseId}/pois/route?${params.toString()}`,
     {},
     token,
   );

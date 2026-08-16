@@ -40,7 +40,8 @@
 | `GET` | `/api/cases/{case_id}/public-progress` | `200` | 家属查看仅含已确认信息和本人待补充事项的公开进展 |
 | `POST` | `/api/cases/{case_id}/clue-drafts` | `201` | 将受控文本持久化为不可直接确认的线索草稿 |
 | `PATCH` | `/api/cases/{case_id}/clue-drafts/{draft_id}/review` | `200` | 指挥人工接受或拒绝线索字段候选 |
-| `GET` | `/api/cases/{case_id}/pois` | `200` | 按服务端授权中心查询有上限的周边资源，失败时明确降级 |
+| `GET` | `/api/cases/{case_id}/pois` | `200` | 按案件授权中心或用户主动授权的临时当前位置查询有上限的周边资源，失败时明确降级 |
+| `GET` | `/api/cases/{case_id}/pois/route` | `200` | 从用户主动授权的临时当前位置到选中 POI 的步行距离和预计时长 |
 | `POST` | `/api/cases/{case_id}/summary-drafts` | `201` | 指挥创建带来源范围和版本的内部摘要草稿 |
 | `PATCH` | `/api/cases/{case_id}/summary-drafts/{draft_id}/review` | `200` | 指挥提交、审核发布、驳回或撤回摘要草稿 |
 | `POST` | `/api/cases/{case_id}/archive-drafts` | `201` | 指挥为已结束案件创建受控内部归档草稿 |
@@ -244,7 +245,7 @@ Example:
 ## 志愿者任务协作
 
 志愿者只要已作为案件 `volunteer` 成员加入案件，即可通过 `GET /api/cases`、`GET /api/cases/{case_id}`、`GET /api/cases/{case_id}/summary` 与 `GET /api/cases/{case_id}/tasks` 进入协作工作区；不再以“是否已有个人任务”为案件可见性的前提。工作区包含经该角色授权的案件摘要、线索、健康备注与家属联系邮箱；后两者仅在请求者已被显式授予该案件 `volunteer` 角色时一并返回。它不包含其他志愿者的精确位置。
-志愿者可看到已确认线索和自己提交但仍待人工审核的线索；其他成员的待审核线索不会暴露。经人工审核为 `confirmed` 且可见性为 `public` 或 `confirmed` 的关键地点（包括家属提交的地点）会返回给志愿者；`internal` 地点始终不可见。志愿者调用 `GET /api/cases/{case_id}/pois` 时，服务端仅从该角色可见的任务坐标或已确认的公开地点选择中心，客户端不能提供或覆盖中心坐标。
+志愿者可看到已确认线索和自己提交但仍待人工审核的线索；其他成员的待审核线索不会暴露。经人工审核为 `confirmed` 且可见性为 `public` 或 `confirmed` 的关键地点（包括家属提交的地点）会返回给志愿者；`internal` 地点始终不可见。志愿者调用 `GET /api/cases/{case_id}/pois` 时，默认由服务端从该角色可见的任务坐标或已确认的公开地点选择中心。用户也可在浏览器明确同意后，同时提交 `browser_longitude` 与 `browser_latitude`（WGS-84）作为仅本次请求的中心；服务端转换为高德坐标后检索，绝不持久化、审计或返回该原始浏览器坐标。POI 返回直线距离。`GET /api/cases/{case_id}/pois/route` 仅使用这次临时浏览器位置和已选择 POI 的高德坐标给出步行距离、时长，路线服务失败时只返回明确标记的直线距离回退。
 
 任务不再是单人独占：`POST /api/cases/{case_id}/tasks` 可以使用 `volunteer_user_ids` 指定一个或多个已授权的案件志愿者（旧 `volunteer_user_id` 保持兼容）。每位受领者都是同一任务协作空间的成员；成员可以独立推进允许的任务状态、提交反馈和位置报告，任一成员完成任务会更新该共享任务状态。指挥仍可取消未结束任务，但不会因取消而需要成为任务成员。如果两个志愿者字段都未提供（或 `volunteer_user_ids` 为空），则会创建 `pending_claim` 的开放/常驻任务；案件志愿者可申请加入，指挥批准首位申请者后任务转为 `assigned`。
 
