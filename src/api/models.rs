@@ -1487,11 +1487,16 @@ pub struct ArchiveDraftResponse {
 #[serde(deny_unknown_fields)]
 pub struct CasePoiQuery {
     pub category: Option<String>,
+    /// Optional browser geolocation in WGS-84. It is used only for this
+    /// request and is converted server-side before calling AMap.
+    pub browser_longitude: Option<f64>,
+    pub browser_latitude: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CasePoiResponse {
     pub items: Vec<CasePoiItem>,
+    pub center_source: String,
     pub source: String,
     pub degradation_status: String,
     pub fallback_message: Option<String>,
@@ -1505,6 +1510,29 @@ pub struct CasePoiItem {
     pub address: Option<String>,
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
+    pub distance_meters: Option<u64>,
+    /// Short-lived, user- and case-bound capability required to request a
+    /// route to this POI. It is not persisted.
+    pub selection_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CasePoiRouteQuery {
+    /// Browser geolocation is WGS-84 and only exists for the duration of this request.
+    pub browser_longitude: f64,
+    pub browser_latitude: f64,
+    /// A short-lived capability issued with the selected POI by list_case_pois.
+    pub selection_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasePoiRouteResponse {
+    pub straight_line_meters: u64,
+    pub walking_distance_meters: Option<u64>,
+    pub walking_duration_seconds: Option<u64>,
+    pub source: String,
+    pub degradation_status: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

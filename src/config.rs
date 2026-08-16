@@ -3,6 +3,7 @@ use std::{
     collections::HashSet,
     path::{Component, PathBuf},
 };
+use uuid::Uuid;
 
 use crate::integrations::ai_gateway::{
     AiGateway, ProviderConfig, validate_provider_configurations,
@@ -30,6 +31,7 @@ pub struct Settings {
     pub attachment_max_image_bytes: usize,
     pub attachment_max_per_case: u64,
     pub case_place_types: Vec<String>,
+    pub poi_selection_token_secret: String,
     pub amap_webservice_key: Option<String>,
     pub amap_webservice_base_url: String,
     pub amap_timeout_ms: u64,
@@ -107,6 +109,14 @@ impl Settings {
             parse_case_place_types(&value("ANGUI_CASE_PLACE_TYPES")?.unwrap_or_else(|| {
                 "frequent,key_location,last_seen_context,medical,shelter,other".to_owned()
             }))?;
+        let poi_selection_token_secret = value("ANGUI_POI_SELECTION_TOKEN_SECRET")?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()));
+        if poi_selection_token_secret.len() < 32 {
+            return Err(
+                "ANGUI_POI_SELECTION_TOKEN_SECRET must be at least 32 characters".to_owned(),
+            );
+        }
         let amap_webservice_key =
             value("AMAP_WEBSERVICE_KEY")?.filter(|value| !value.trim().is_empty());
         let amap_webservice_base_url = value("AMAP_WEBSERVICE_BASE_URL")?
@@ -136,6 +146,7 @@ impl Settings {
             attachment_max_image_bytes,
             attachment_max_per_case,
             case_place_types,
+            poi_selection_token_secret,
             amap_webservice_key,
             amap_webservice_base_url,
             amap_timeout_ms,
@@ -270,6 +281,7 @@ mod tests {
             ]
         );
         assert_eq!(settings.amap_webservice_key, None);
+        assert!(settings.poi_selection_token_secret.len() >= 32);
         assert_eq!(
             settings.amap_webservice_base_url,
             "https://restapi.amap.com"
@@ -291,6 +303,10 @@ mod tests {
             ("ANGUI_ATTACHMENT_MAX_IMAGE_BYTES", "10485760"),
             ("ANGUI_ATTACHMENT_MAX_PER_CASE", "24"),
             ("ANGUI_CASE_PLACE_TYPES", "frequent,station,clinic"),
+            (
+                "ANGUI_POI_SELECTION_TOKEN_SECRET",
+                "0123456789abcdef0123456789abcdef",
+            ),
             ("AMAP_WEBSERVICE_KEY", "test-key"),
             ("AMAP_WEBSERVICE_BASE_URL", "https://maps.example.invalid"),
             ("AMAP_TIMEOUT_MS", "10000"),
@@ -304,6 +320,10 @@ mod tests {
             PathBuf::from("private/case-media")
         );
         assert_eq!(settings.amap_webservice_key.as_deref(), Some("test-key"));
+        assert_eq!(
+            settings.poi_selection_token_secret,
+            "0123456789abcdef0123456789abcdef"
+        );
         assert_eq!(settings.attachment_max_image_bytes, 10 * 1024 * 1024);
         assert_eq!(settings.attachment_max_per_case, 24);
         assert_eq!(
@@ -376,6 +396,11 @@ mod tests {
             ("AMAP_TIMEOUT_MS", "slow", "must be a positive integer"),
             ("AMAP_TIMEOUT_MS", "99", "must be between 100 and 10000"),
             ("AMAP_TIMEOUT_MS", "10001", "must be between 100 and 10000"),
+            (
+                "ANGUI_POI_SELECTION_TOKEN_SECRET",
+                "too-short",
+                "must be at least 32 characters",
+            ),
             (
                 "ANGUI_ATTACHMENT_MAX_IMAGE_BYTES",
                 "zero",
@@ -464,6 +489,7 @@ mod tests {
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
             case_place_types: vec!["frequent".to_owned()],
+            poi_selection_token_secret: "0123456789abcdef0123456789abcdef".to_owned(),
             amap_webservice_key: None,
             amap_webservice_base_url: "https://restapi.amap.com".to_owned(),
             amap_timeout_ms: 2_500,

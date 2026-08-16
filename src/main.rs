@@ -39,6 +39,7 @@ async fn main() -> io::Result<()> {
         attachment_max_image_bytes: settings.attachment_max_image_bytes,
         attachment_max_per_case: settings.attachment_max_per_case,
         case_place_types: settings.case_place_types.clone(),
+        poi_selection_token_secret: settings.poi_selection_token_secret.clone(),
         amap_service: AmapService::new(
             settings.amap_webservice_key,
             settings.amap_webservice_base_url,

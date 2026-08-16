@@ -1,14 +1,17 @@
 use chrono::{SecondsFormat, Utc};
+use hmac::{Hmac, Mac};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel,
     PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::Sha256;
 
 use crate::{
     ai_gateway::{AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel},
-    amap_service::{Coordinate, PoiSearch},
+    amap_service::{Coordinate, PoiSearch, RouteEstimate, RouteMode},
     entities::{
         archive_drafts, archive_review_materials, case_places, case_source_records, cases,
         clue_drafts, clues, summary_drafts, tasks,
@@ -16,14 +19,14 @@ use crate::{
     error::ApiError,
     models::{
         ArchiveDraftResponse, ArchiveReviewMaterialDiffResponse, ArchiveReviewMaterialResponse,
-        AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse, CasePublicProgressItem,
-        CasePublicProgressResponse, CaseSourceRecordResponse, ClueDraftCandidate,
-        ClueDraftFieldDecision, ClueDraftResponse, CreateCaseSourceRecordRequest,
-        CreateClueDraftRequest, CreateClueRequest, CreateSummaryDraftRequest,
-        DeidentifyArchiveDraftRequest, PublishedSummaryVersion, PublishedSummaryVersionResponse,
-        RestoreArchiveReviewMaterialRequest, ReviewArchiveDraftRequest, ReviewClueDraftRequest,
-        ReviewSummaryDraftRequest, SummaryDraftDiffResponse, SummaryDraftResponse,
-        SummaryDraftVersionResponse,
+        AuthenticatedUser, CasePoiItem, CasePoiQuery, CasePoiResponse, CasePoiRouteQuery,
+        CasePoiRouteResponse, CasePublicProgressItem, CasePublicProgressResponse,
+        CaseSourceRecordResponse, ClueDraftCandidate, ClueDraftFieldDecision, ClueDraftResponse,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
+        CreateSummaryDraftRequest, DeidentifyArchiveDraftRequest, PublishedSummaryVersion,
+        PublishedSummaryVersionResponse, RestoreArchiveReviewMaterialRequest,
+        ReviewArchiveDraftRequest, ReviewClueDraftRequest, ReviewSummaryDraftRequest,
+        SummaryDraftDiffResponse, SummaryDraftResponse, SummaryDraftVersionResponse,
     },
     roles::{CaseRole, GlobalCapability},
     services::{case_service, case_summary_service, task_service},
@@ -31,6 +34,16 @@ use crate::{
 
 const DRAFT_TEMPLATE_VERSION: &str = "case-summary-rule-v1";
 const ARCHIVE_DRAFT_TEMPLATE_VERSION: &str = "case-archive-safe-metadata-v1";
+const POI_SELECTION_TOKEN_TTL_SECONDS: i64 = 5 * 60;
+
+#[derive(Deserialize, Serialize)]
+struct PoiSelectionTokenPayload {
+    case_id: String,
+    user_id: String,
+    destination_longitude: f64,
+    destination_latitude: f64,
+    expires_at: i64,
+}
 
 pub async fn create_case_source_record(
     db: &DatabaseConnection,
@@ -1393,6 +1406,7 @@ pub async fn list_case_pois(
     case_id: &str,
     query: CasePoiQuery,
     amap: &crate::amap_service::AmapService,
+    poi_selection_token_secret: &str,
 ) -> Result<CasePoiResponse, ApiError> {
     let role = case_service::require_case_role(
         db,
@@ -1403,7 +1417,8 @@ pub async fn list_case_pois(
     .await?;
     let category = query
         .category
-        .unwrap_or_else(|| "hospital".to_owned())
+        .as_deref()
+        .unwrap_or("hospital")
         .trim()
         .to_lowercase();
     if !matches!(
@@ -1412,14 +1427,133 @@ pub async fn list_case_pois(
     ) {
         return Err(ApiError::Validation("category is unsupported".to_owned()));
     }
-    let center = authorized_center(db, auth, case_id, role).await?;
-    let (items, source, degradation_status, fallback_message) = match amap.search_nearby_pois(center, &category).await { PoiSearch::Available(pois) if !pois.is_empty() => (pois.into_iter().map(poi_item).collect(), "amap_webservice".to_owned(), "available".to_owned(), None), _ => (fallback_pois(&category), "fixed_demo_fallback".to_owned(), "degraded".to_owned(), Some("Nearby POI service is unavailable. Use the task area text and contact the commander for local confirmation.".to_owned())) };
+    let (center, center_source) = poi_search_center(db, auth, case_id, role, &query, amap).await?;
+    let (items, source, degradation_status, fallback_message) =
+        match amap.search_nearby_pois(center, &category).await {
+            PoiSearch::Available(pois) if !pois.is_empty() => (
+                pois.into_iter()
+                    .map(|poi| poi_item(poi, case_id, &auth.id, poi_selection_token_secret))
+                    .collect(),
+                "amap_webservice".to_owned(),
+                "available".to_owned(),
+                None,
+            ),
+            _ => (
+                fallback_pois(&category),
+                "fixed_demo_fallback".to_owned(),
+                "degraded".to_owned(),
+                Some(
+                    "Nearby POI service is unavailable. Use the task area text and contact the commander for local confirmation."
+                        .to_owned(),
+                ),
+            ),
+        };
     Ok(CasePoiResponse {
         items,
+        center_source,
         source,
         degradation_status,
         fallback_message,
     })
+}
+
+pub async fn get_case_poi_route(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    query: CasePoiRouteQuery,
+    amap: &crate::amap_service::AmapService,
+    poi_selection_token_secret: &str,
+) -> Result<CasePoiRouteResponse, ApiError> {
+    case_service::require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    let browser_origin = Coordinate {
+        longitude: query.browser_longitude,
+        latitude: query.browser_latitude,
+    };
+    if !browser_origin.is_valid() {
+        return Err(ApiError::Validation(
+            "route coordinates are invalid".to_owned(),
+        ));
+    }
+    let destination = selected_poi_destination(
+        &query.selection_token,
+        case_id,
+        &auth.id,
+        poi_selection_token_secret,
+    )?;
+    let origin = amap.convert_gps_coordinate(browser_origin).await.ok_or_else(|| {
+        ApiError::Conflict(
+            "browser location could not be converted for route planning; use the authorized case center instead"
+                .to_owned(),
+        )
+    })?;
+    let straight_line_meters = haversine_meters(origin, destination);
+    match amap
+        .estimate_route(origin, destination, RouteMode::Walking)
+        .await
+    {
+        RouteEstimate::Available {
+            distance_meters,
+            duration_seconds,
+            ..
+        } => Ok(CasePoiRouteResponse {
+            straight_line_meters,
+            walking_distance_meters: Some(distance_meters),
+            walking_duration_seconds: Some(duration_seconds),
+            source: "amap_webservice".to_owned(),
+            degradation_status: "available".to_owned(),
+        }),
+        RouteEstimate::Unavailable { .. } => Ok(CasePoiRouteResponse {
+            straight_line_meters,
+            walking_distance_meters: None,
+            walking_duration_seconds: None,
+            source: "straight_line_fallback".to_owned(),
+            degradation_status: "degraded".to_owned(),
+        }),
+    }
+}
+
+async fn poi_search_center(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    role: CaseRole,
+    query: &CasePoiQuery,
+    amap: &crate::amap_service::AmapService,
+) -> Result<(Coordinate, String), ApiError> {
+    match (query.browser_longitude, query.browser_latitude) {
+        (Some(longitude), Some(latitude)) => {
+            let browser_coordinate = Coordinate {
+                longitude,
+                latitude,
+            };
+            if !browser_coordinate.is_valid() {
+                return Err(ApiError::Validation(
+                    "browser location is invalid".to_owned(),
+                ));
+            }
+            let coordinate = amap.convert_gps_coordinate(browser_coordinate).await.ok_or_else(|| {
+                ApiError::Conflict(
+                    "browser location could not be converted for nearby search; use the authorized case center instead"
+                        .to_owned(),
+                )
+            })?;
+            Ok((coordinate, "browser_location".to_owned()))
+        }
+        (None, None) => Ok((
+            authorized_center(db, auth, case_id, role).await?,
+            "authorized_case_location".to_owned(),
+        )),
+        _ => Err(ApiError::Validation(
+            "browser_longitude and browser_latitude must be provided together".to_owned(),
+        )),
+    }
 }
 
 async fn authorized_center(
@@ -1444,7 +1578,7 @@ async fn authorized_center(
         .filter(case_places::Column::Longitude.is_not_null())
         .filter(case_places::Column::Latitude.is_not_null());
     if role == CaseRole::Volunteer {
-        places = places.filter(case_places::Column::Visibility.eq("public"));
+        places = places.filter(case_places::Column::Visibility.is_in(["public", "confirmed"]));
     }
     if let Some(place) = places
         .order_by_desc(case_places::Column::UpdatedAt)
@@ -1462,7 +1596,17 @@ async fn authorized_center(
     ))
 }
 
-fn poi_item(poi: crate::amap_service::Poi) -> CasePoiItem {
+fn poi_item(
+    poi: crate::amap_service::Poi,
+    case_id: &str,
+    user_id: &str,
+    poi_selection_token_secret: &str,
+) -> CasePoiItem {
+    let selection_token = poi.coordinate.and_then(|coordinate| {
+        coordinate.is_valid().then(|| {
+            issue_poi_selection_token(case_id, user_id, coordinate, poi_selection_token_secret)
+        })
+    });
     CasePoiItem {
         id: poi.id,
         name: poi.name,
@@ -1470,6 +1614,8 @@ fn poi_item(poi: crate::amap_service::Poi) -> CasePoiItem {
         address: poi.address,
         longitude: poi.coordinate.map(|coordinate| coordinate.longitude),
         latitude: poi.coordinate.map(|coordinate| coordinate.latitude),
+        distance_meters: poi.distance_meters,
+        selection_token,
     }
 }
 fn fallback_pois(category: &str) -> Vec<CasePoiItem> {
@@ -1480,7 +1626,84 @@ fn fallback_pois(category: &str) -> Vec<CasePoiItem> {
         address: Some("Confirm locally with the commander".to_owned()),
         longitude: None,
         latitude: None,
+        distance_meters: None,
+        selection_token: None,
     }]
+}
+
+fn issue_poi_selection_token(
+    case_id: &str,
+    user_id: &str,
+    destination: Coordinate,
+    secret: &str,
+) -> String {
+    let payload = PoiSelectionTokenPayload {
+        case_id: case_id.to_owned(),
+        user_id: user_id.to_owned(),
+        destination_longitude: destination.longitude,
+        destination_latitude: destination.latitude,
+        expires_at: Utc::now().timestamp() + POI_SELECTION_TOKEN_TTL_SECONDS,
+    };
+    let encoded_payload =
+        hex::encode(serde_json::to_vec(&payload).expect("POI token payload serializes"));
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts token-secret key lengths");
+    mac.update(encoded_payload.as_bytes());
+    format!(
+        "{encoded_payload}.{}",
+        hex::encode(mac.finalize().into_bytes())
+    )
+}
+
+fn selected_poi_destination(
+    token: &str,
+    case_id: &str,
+    user_id: &str,
+    secret: &str,
+) -> Result<Coordinate, ApiError> {
+    let invalid_selection = || {
+        ApiError::Conflict(
+            "selected POI is no longer valid; refresh nearby resources and try again".to_owned(),
+        )
+    };
+    if token.len() > 2_048 {
+        return Err(invalid_selection());
+    }
+    let (encoded_payload, signature) = token.split_once('.').ok_or_else(invalid_selection)?;
+    let signature = hex::decode(signature).map_err(|_| invalid_selection())?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| ApiError::Internal)?;
+    mac.update(encoded_payload.as_bytes());
+    mac.verify_slice(&signature)
+        .map_err(|_| invalid_selection())?;
+    let payload = hex::decode(encoded_payload)
+        .ok()
+        .and_then(|value| serde_json::from_slice::<PoiSelectionTokenPayload>(&value).ok())
+        .ok_or_else(invalid_selection)?;
+    if payload.case_id != case_id
+        || payload.user_id != user_id
+        || payload.expires_at < Utc::now().timestamp()
+    {
+        return Err(invalid_selection());
+    }
+    let destination = Coordinate {
+        longitude: payload.destination_longitude,
+        latitude: payload.destination_latitude,
+    };
+    destination
+        .is_valid()
+        .then_some(destination)
+        .ok_or_else(invalid_selection)
+}
+
+fn haversine_meters(origin: Coordinate, destination: Coordinate) -> u64 {
+    let latitude_delta = (destination.latitude - origin.latitude).to_radians();
+    let longitude_delta = (destination.longitude - origin.longitude).to_radians();
+    let a = (latitude_delta / 2.0).sin().powi(2)
+        + origin.latitude.to_radians().cos()
+            * destination.latitude.to_radians().cos()
+            * (longitude_delta / 2.0).sin().powi(2);
+    (6_371_000.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())).round() as u64
 }
 fn deterministic_draft_content(summary: &crate::models::CaseSummaryResponse) -> String {
     format!(
@@ -2067,4 +2290,46 @@ fn excerpt(value: &str, maximum: usize) -> String {
 }
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Coordinate, issue_poi_selection_token, selected_poi_destination};
+
+    const SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn poi_selection_token_is_bound_to_its_case_user_and_destination() {
+        let destination = Coordinate {
+            longitude: 116.404,
+            latitude: 39.915,
+        };
+        let token = issue_poi_selection_token("case-a", "user-a", destination, SECRET);
+
+        assert_eq!(
+            selected_poi_destination(&token, "case-a", "user-a", SECRET)
+                .expect("issued token should be accepted")
+                .as_query_value(),
+            destination.as_query_value()
+        );
+        assert!(selected_poi_destination(&token, "case-b", "user-a", SECRET).is_err());
+        assert!(selected_poi_destination(&token, "case-a", "user-b", SECRET).is_err());
+    }
+
+    #[test]
+    fn poi_selection_token_rejects_tampering() {
+        let token = issue_poi_selection_token(
+            "case-a",
+            "user-a",
+            Coordinate {
+                longitude: 116.404,
+                latitude: 39.915,
+            },
+            SECRET,
+        );
+        let (payload, signature) = token.split_once('.').expect("signed token format");
+        let tampered = format!("{payload}.{}", signature.replacen('a', "b", 1));
+
+        assert!(selected_poi_destination(&tampered, "case-a", "user-a", SECRET).is_err());
+    }
 }
