@@ -117,6 +117,17 @@ test("a commander creates a collaboration space through the browser and its acti
   );
   expect(familySnapshot.status()).toBe(403);
 
+  const volunteerSpaces = (await apiGet(
+    request,
+    volunteerToken,
+    `/api/cases/${fixture.caseId}/collaboration-spaces`,
+  )) as Array<{ id: string; status: string; member_status: string | null }>;
+  expect(volunteerSpaces).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: space!.id, status: "active", member_status: null }),
+    ]),
+  );
+
   const joined = (await apiPost(
     request,
     volunteerToken,

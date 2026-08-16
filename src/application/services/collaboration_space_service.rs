@@ -126,7 +126,8 @@ pub async fn list_case_spaces(
         .into_iter()
         .filter_map(|space| {
             let status = memberships.get(&space.id).cloned();
-            (role == CaseRole::Commander || status.is_some()).then(|| space_response(space, status))
+            (role == CaseRole::Commander || space.status == "active")
+                .then(|| space_response(space, status))
         })
         .collect())
 }
