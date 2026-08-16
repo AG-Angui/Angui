@@ -367,6 +367,55 @@ async fn mark_place_confirmed(context: &TestContext, place_id: &str) {
 }
 
 #[actix_web::test]
+async fn volunteer_can_search_from_a_confirmed_case_place_with_coordinates() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    context
+        .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
+        .await;
+    let family = context.authenticated(FAMILY).await;
+    let place_types = context.app_state().case_place_types;
+    let place = case_resource_service::create_place(
+        &context.database,
+        &family,
+        &case_id,
+        CreateCasePlaceRequest {
+            name: "Confirmed volunteer search center".to_owned(),
+            place_type: "key_location".to_owned(),
+            address: "Fictional confirmed square".to_owned(),
+            longitude: Some(117.2272),
+            latitude: Some(31.8206),
+            visibility: PlaceVisibility::Confirmed,
+        },
+        &place_types,
+    )
+    .await
+    .expect("fixture place should be created");
+    mark_place_confirmed(&context, &place.id).await;
+
+    let app = crate::init_api_app!(&context);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{case_id}/pois?category=hospital"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(VOLUNTEER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(response["center_source"], "authorized_case_location");
+    assert_eq!(response["degradation_status"], "degraded");
+}
+
+#[actix_web::test]
 async fn post_case_places_uses_the_configured_place_type_allowlist() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;

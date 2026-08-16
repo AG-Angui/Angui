@@ -1578,7 +1578,7 @@ async fn authorized_center(
         .filter(case_places::Column::Longitude.is_not_null())
         .filter(case_places::Column::Latitude.is_not_null());
     if role == CaseRole::Volunteer {
-        places = places.filter(case_places::Column::Visibility.eq("public"));
+        places = places.filter(case_places::Column::Visibility.is_in(["public", "confirmed"]));
     }
     if let Some(place) = places
         .order_by_desc(case_places::Column::UpdatedAt)
