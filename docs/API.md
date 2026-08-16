@@ -1,5 +1,13 @@
 # API 说明
 
+### Collaboration-space voice reports
+
+`POST /api/collaboration-spaces/{space_id}/voice-reports` accepts exactly one private `file` part with one of `audio/mpeg`, `audio/ogg`, `audio/wav`, or `audio/webm`, bounded at 10 MiB. Only an active space member may upload. The object key is generated server-side under private storage; raw audio has no public URL or download route.
+
+`GET /api/collaboration-spaces/{space_id}/voice-reports` returns at most 100 reports. A volunteer receives only their own lifecycle metadata. A commander receives reports for the space and may receive a persisted transcript when a future approved ASR worker has produced one. Family users and users outside the space get no collaboration-space data.
+
+This deployment deliberately has no configured ASR adapter. A successfully stored report is therefore marked `failed` with `ASR provider is not configured`, rather than manufacturing a transcript, a clue, a task action, or public progress. Audio bodies, transcript text, and original filenames are excluded from audit metadata and space-event payloads.
+
 ## 1. 当前范围
 
 当前 API 提供用于 MVP 开发的认证、案件成员授权、案件和线索纵向闭环。它已经连接 SeaORM 数据层，并实现可撤销数据库会话和服务端字段裁剪；密码找回、MFA、账号审批、组织模型和生产级安全运营仍未实现。请求只允许使用虚构或充分脱敏的数据。
@@ -16,7 +24,7 @@
 
 `POST /api/collaboration-spaces/{space_id}/locations` 只允许已经加入且持有未撤回位置同意的志愿者调用。请求必须携带可重试的 `operation_id`；同一操作不会产生重复样本或事件。位置历史只对指挥员、或位置所属的志愿者本人开放，且在运营/合规明确配置 `ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS` 前服务端会拒绝任何位置落库。HTTP 快照与 `GET /events?after_version=` 是实时网关不可用时的恢复协议，Redis 不能作为业务事实源。
 
-`GET/POST /api/collaboration-spaces/{space_id}/messages` 提供最多 100 条受控文字消息；`message_type: broadcast` 仅允许指挥员。消息内容不会写进审计元数据，发送仍会生成空间事件和 outbox 记录。语音报告、ASR 和 AI 草稿目前仅完成了 `voice_reports` / `voice_transcripts` 的受控持久化迁移边界；在实际对象存储、ASR 供应商和保留策略获批准前，不开放音频上传或自动处理入口，且不会自动确认线索。
+`GET/POST /api/collaboration-spaces/{space_id}/messages` 提供最多 100 条受控文字消息；`message_type: broadcast` 仅允许指挥员。消息内容不会写进审计元数据，发送仍会生成空间事件和 outbox 记录。语音报告通过独立的受控上传接口保存到私有存储，当前没有获批准的 ASR 供应商时会显式标记失败；绝不会伪造转写、自动确认线索、自动派发任务或公开进展。
 
 | 方法 | 路径 | 成功状态 | 用途 |
 | --- | --- | --- | --- |

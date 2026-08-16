@@ -46,11 +46,247 @@ tags:
     description: 线索人工审核
   - name: Tasks
     description: Case-internal rescue task creation, assignment, and execution status.
+  - name: Collaboration spaces
+    description: Case-restricted internal action spaces for commanders and joined volunteers. Family accounts never receive space, location, message, audio, or transcript data.
   - name: Intake sessions
     description: 家属创建的未确认走失信息问询会话
 security:
   - bearerAuth: []
 paths:
+  /api/cases/{case_id}/collaboration-spaces:
+    parameters:
+      - name: case_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Collaboration spaces]
+      operationId: listCollaborationSpaces
+      summary: List accessible collaboration spaces for a case
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: case-restricted
+      responses:
+        "200": { description: Accessible spaces, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CollaborationSpace" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Collaboration spaces]
+      operationId: createCollaborationSpace
+      summary: Create the case's active collaboration space
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander]
+      x-data-classification: case-restricted
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateCollaborationSpaceRequest" } } }
+      responses:
+        "201": { description: Created space, content: { application/json: { schema: { $ref: "#/components/schemas/CollaborationSpace" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/collaboration-spaces/{space_id}/snapshot:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Collaboration spaces]
+      operationId: getCollaborationSpaceSnapshot
+      summary: Get an authorized space snapshot
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Space members and event version, content: { application/json: { schema: { $ref: "#/components/schemas/CollaborationSpaceSnapshot" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/events:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: after_version, in: query, required: false, schema: { type: integer, minimum: 0 } }
+    get:
+      tags: [Collaboration spaces]
+      operationId: listCollaborationSpaceEvents
+      summary: Catch up authorized ordered events after a snapshot version
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Ordered, visibility-filtered events, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CollaborationSpaceEvent" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/join:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: joinCollaborationSpace
+      summary: Join an active space; volunteers must explicitly consent to location sharing
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/JoinCollaborationSpaceRequest" } } }
+      responses:
+        "200": { description: Active membership, content: { application/json: { schema: { $ref: "#/components/schemas/CollaborationSpace" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/collaboration-spaces/{space_id}/leave:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: leaveCollaborationSpace
+      summary: Leave an active collaboration space
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "204": { description: Membership left }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/locations:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: recordCollaborationSpaceLocation
+      summary: Persist an idempotent location sample after explicit consent and retention configuration
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RecordSpaceLocationRequest" } } }
+      responses:
+        "201": { description: Location sample, content: { application/json: { schema: { $ref: "#/components/schemas/SpaceLocation" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/collaboration-spaces/{space_id}/members/{user_id}/track:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Collaboration spaces]
+      operationId: listCollaborationMemberTrack
+      summary: Read a member location history
+      description: Commanders may read tracks for their space. A volunteer may read only their own history.
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Most recent 200 samples, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SpaceLocation" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/location-consents:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: grantCollaborationSpaceLocationConsent
+      summary: Grant the current volunteer's explicit location-sharing consent
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/JoinCollaborationSpaceRequest" } } }
+      responses:
+        "204": { description: Consent recorded }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/location-consents/me:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    delete:
+      tags: [Collaboration spaces]
+      operationId: revokeCollaborationSpaceLocationConsent
+      summary: Immediately revoke the current volunteer's location-sharing consent
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [volunteer]
+      x-data-classification: sensitive
+      responses:
+        "204": { description: Consent revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/messages:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Collaboration spaces]
+      operationId: listCollaborationSpaceMessages
+      summary: List the most recent authorized text messages
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Recent messages, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SpaceMessage" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Collaboration spaces]
+      operationId: createCollaborationSpaceMessage
+      summary: Send a text message or commander-only broadcast
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateSpaceMessageRequest" } } }
+      responses:
+        "201": { description: Created message, content: { application/json: { schema: { $ref: "#/components/schemas/SpaceMessage" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-reports:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Collaboration spaces]
+      operationId: listCollaborationSpaceVoiceReports
+      summary: List voice-report status; transcripts are commander-only
+      description: Members only receive their own report status. Raw audio has no download endpoint. Transcripts and AI candidates are never exposed to family users.
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Authorized reports, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/VoiceReport" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Collaboration spaces]
+      operationId: createCollaborationSpaceVoiceReport
+      summary: Upload a bounded private audio report
+      description: Accepted audio types are MPEG, OGG, WAV, and WebM. Without an approved ASR provider the report is explicitly marked failed; the server never fabricates a transcript or confirms a clue.
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: Stored report status, content: { application/json: { schema: { $ref: "#/components/schemas/VoiceReport" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/health:
     get:
       tags: [Health]
@@ -4677,6 +4913,144 @@ components:
         case_place_types:
           type: array
           items: { type: string }
+
+    CreateCollaborationSpaceRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+
+    JoinCollaborationSpaceRequest:
+      type: object
+      additionalProperties: false
+      required: [location_consent]
+      properties:
+        location_consent: { type: boolean }
+        consent_version: { type: [string, "null"], maxLength: 64 }
+
+    CollaborationSpace:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, name, status, created_by_user_id, created_at, archived_at, current_version, member_status]
+      properties:
+        id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [active, archived] }
+        created_by_user_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        archived_at: { type: [string, "null"], format: date-time }
+        current_version: { type: integer, minimum: 0 }
+        member_status: { type: [string, "null"], enum: [active, left, null] }
+
+    CollaborationSpaceMember:
+      type: object
+      additionalProperties: false
+      required: [id, user_id, display_name, role, status, joined_at, left_at, location_consent_granted]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        display_name: { type: string }
+        role: { type: string, enum: [commander, volunteer] }
+        status: { type: string, enum: [active, left] }
+        joined_at: { type: string, format: date-time }
+        left_at: { type: [string, "null"], format: date-time }
+        location_consent_granted: { type: boolean }
+
+    CollaborationSpaceSnapshot:
+      type: object
+      additionalProperties: false
+      required: [space, members, version]
+      properties:
+        space: { $ref: "#/components/schemas/CollaborationSpace" }
+        members: { type: array, items: { $ref: "#/components/schemas/CollaborationSpaceMember" } }
+        version: { type: integer, minimum: 0 }
+
+    CollaborationSpaceEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, space_id, case_id, event_type, version, occurred_at, visibility_scope, payload]
+      properties:
+        event_id: { type: string, format: uuid }
+        space_id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        event_type: { type: string }
+        version: { type: integer, minimum: 1 }
+        occurred_at: { type: string, format: date-time }
+        visibility_scope: { type: string, enum: [space_members, commanders, self] }
+        payload: { type: object, additionalProperties: true }
+
+    RecordSpaceLocationRequest:
+      type: object
+      additionalProperties: false
+      required: [latitude, longitude, accuracy_meters, captured_at, operation_id]
+      properties:
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        accuracy_meters: { type: number, minimum: 0, maximum: 10000 }
+        captured_at: { type: string, format: date-time }
+        operation_id: { type: string, minLength: 1, maxLength: 128 }
+
+    SpaceLocation:
+      type: object
+      additionalProperties: false
+      required: [id, user_id, latitude, longitude, accuracy_meters, captured_at]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        latitude: { type: number }
+        longitude: { type: number }
+        accuracy_meters: { type: number }
+        captured_at: { type: string, format: date-time }
+
+    CreateSpaceMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content: { type: string, minLength: 1, maxLength: 2000 }
+        message_type: { type: [string, "null"], enum: [text, broadcast, null] }
+
+    SpaceMessage:
+      type: object
+      additionalProperties: false
+      required: [id, sender_id, message_type, content, sent_at, recalled_at]
+      properties:
+        id: { type: string, format: uuid }
+        sender_id: { type: string, format: uuid }
+        message_type: { type: string, enum: [text, broadcast] }
+        content: { type: string }
+        sent_at: { type: string, format: date-time }
+        recalled_at: { type: [string, "null"], format: date-time }
+
+    VoiceTranscript:
+      type: object
+      additionalProperties: false
+      required: [content, provider, status, created_at]
+      properties:
+        content: { type: string, description: Commander-only when present. }
+        provider: { type: string }
+        status: { type: string, enum: [completed, failed] }
+        created_at: { type: string, format: date-time }
+
+    VoiceReport:
+      type: object
+      additionalProperties: false
+      required: [id, reporter_id, content_type, byte_size, status, created_at, failed_reason]
+      properties:
+        id: { type: string, format: uuid }
+        reporter_id: { type: string, format: uuid }
+        content_type: { type: string, enum: [audio/mpeg, audio/ogg, audio/wav, audio/webm] }
+        byte_size: { type: integer, minimum: 1, maximum: 10485760 }
+        status: { type: string, enum: [uploaded, transcribing, transcribed, draft_ready, failed, reviewed] }
+        created_at: { type: string, format: date-time }
+        failed_reason: { type: [string, "null"] }
+        transcript:
+          oneOf:
+            - $ref: "#/components/schemas/VoiceTranscript"
+            - type: "null"
+          description: Omitted for non-commanders and when no completed transcript exists.
 
     ErrorResponse:
       type: object

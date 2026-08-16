@@ -48,3 +48,5 @@ pub mod tasks;
 pub mod user_global_capabilities;
 pub mod user_profiles;
 pub mod users;
+pub mod voice_reports;
+pub mod voice_transcripts;

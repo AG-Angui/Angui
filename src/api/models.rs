@@ -108,6 +108,27 @@ pub struct SpaceMessageResponse {
     pub recalled_at: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct VoiceReportResponse {
+    pub id: String,
+    pub reporter_id: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub status: String,
+    pub created_at: String,
+    pub failed_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<VoiceTranscriptResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VoiceTranscriptResponse {
+    pub content: String,
+    pub provider: String,
+    pub status: String,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUser {
     pub id: String,

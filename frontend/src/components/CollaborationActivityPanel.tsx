@@ -1,15 +1,18 @@
 import { Button, TextArea } from "@heroui/react";
-import { LocateFixed, MessageSquareText, Send } from "lucide-react";
+import { LocateFixed, MessageSquareText, Mic, Send, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   getSpaceEvents,
   getSpaceSnapshot,
   listSpaceMessages,
+  listVoiceReports,
   recordSpaceLocation,
   sendSpaceMessage,
+  uploadVoiceReport,
   type SpaceEvent,
   type SpaceMessage,
   type SpaceSnapshot,
+  type VoiceReport,
 } from "../api/collaborationSpaces";
 import { ErrorState, LoadingState } from "./ContentState";
 
@@ -19,6 +22,7 @@ const LOCATION_INTERVAL_MS = 15_000;
 export function CollaborationActivityPanel({ token, spaceId, canBroadcast }: { token: string; spaceId: string; canBroadcast: boolean }) {
   const [snapshot, setSnapshot] = useState<SpaceSnapshot | null>(null);
   const [messages, setMessages] = useState<SpaceMessage[]>([]);
+  const [voiceReports, setVoiceReports] = useState<VoiceReport[]>([]);
   const [content, setContent] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,8 +30,8 @@ export function CollaborationActivityPanel({ token, spaceId, canBroadcast }: { t
   const locationAt = useRef(0);
   const load = useCallback(async () => {
     try {
-      const [nextSnapshot, nextMessages] = await Promise.all([getSpaceSnapshot(token, spaceId), listSpaceMessages(token, spaceId)]);
-      version.current = nextSnapshot.version; setSnapshot(nextSnapshot); setMessages(nextMessages); setError("");
+      const [nextSnapshot, nextMessages, nextVoiceReports] = await Promise.all([getSpaceSnapshot(token, spaceId), listSpaceMessages(token, spaceId), listVoiceReports(token, spaceId)]);
+      version.current = nextSnapshot.version; setSnapshot(nextSnapshot); setMessages(nextMessages); setVoiceReports(nextVoiceReports); setError("");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "无法同步协作空间"); }
   }, [spaceId, token]);
   useEffect(() => { void load(); }, [load]);
@@ -53,6 +57,11 @@ export function CollaborationActivityPanel({ token, spaceId, canBroadcast }: { t
     {error && <p className="mt-2 text-xs text-red-700" role="alert">{error}</p>}
     <div className="mt-3 max-h-48 overflow-auto border border-slate-200 bg-white p-2"><div className="mb-2 flex items-center gap-1 text-xs font-medium text-slate-600"><MessageSquareText size={14} />最近消息</div>{messages.length === 0 ? <p className="m-0 text-xs text-slate-500">暂无消息。</p> : messages.slice().reverse().map((message) => <p className="mb-2 text-sm text-slate-800" key={message.id}>{message.message_type === "broadcast" && <strong className="mr-1 text-red-800">[指挥广播]</strong>}{message.content}</p>)}</div>
     <form className="mt-2 flex gap-2" onSubmit={(event) => { event.preventDefault(); const text = content.trim(); if (!text) return; setBusy(true); void sendSpaceMessage(token, spaceId, text).then(() => { setContent(""); return load(); }).catch((cause) => setError(cause instanceof Error ? cause.message : "消息发送失败")).finally(() => setBusy(false)); }}><TextArea aria-label="发送协作消息" value={content} onChange={(event) => setContent(event.target.value)} maxLength={2000} placeholder="发送现场消息" /><Button type="submit" variant="primary" isDisabled={busy || !content.trim()}><Send size={15} />发送</Button>{canBroadcast && <Button type="button" variant="secondary" isDisabled={busy || !content.trim()} onPress={() => { const text = content.trim(); if (!text) return; setBusy(true); void sendSpaceMessage(token, spaceId, text, "broadcast").then(() => { setContent(""); return load(); }).catch((cause) => setError(cause instanceof Error ? cause.message : "广播发送失败")).finally(() => setBusy(false)); }}>广播</Button>}</form>
+    <div className="mt-3 border-t border-slate-200 pt-3">
+      <div className="flex items-center gap-1 text-xs font-medium text-slate-700"><Mic size={14} />Voice reports</div>
+      <label className="mt-2 flex items-center gap-2 text-xs text-slate-600"><input aria-label="Upload a voice report" accept="audio/mpeg,audio/ogg,audio/wav,audio/webm" className="block max-w-full text-xs" disabled={busy} type="file" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (!file) return; setBusy(true); void uploadVoiceReport(token, spaceId, file).then(() => load()).catch((cause) => setError(cause instanceof Error ? cause.message : "Voice report upload failed")).finally(() => setBusy(false)); }} /><Upload size={14} /></label>
+      {voiceReports.length > 0 && <div className="mt-2 max-h-32 overflow-auto text-xs text-slate-700">{voiceReports.map((report) => <div className="border-b border-slate-100 py-1" key={report.id}><span className="font-medium">{report.status}</span><span className="ml-2">{Math.ceil(report.byte_size / 1024)} KB</span>{report.failed_reason && <span className="ml-2 text-amber-800">{report.failed_reason}</span>}{canBroadcast && report.transcript && <p className="mt-1 whitespace-pre-wrap text-slate-800">{report.transcript.content}</p>}</div>)}</div>}
+    </div>
   </section>;
 }
 

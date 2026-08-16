@@ -27,6 +27,8 @@ export interface SpaceSnapshot { space: CollaborationSpace; members: SpaceMember
 export interface SpaceEvent { event_id: string; space_id: string; case_id: string; event_type: string; version: number; occurred_at: string; visibility_scope: string; payload: Record<string, unknown> }
 export interface SpaceLocation { id: string; user_id: string; latitude: number; longitude: number; accuracy_meters: number; captured_at: string }
 export interface SpaceMessage { id: string; sender_id: string; message_type: "text" | "broadcast"; content: string; sent_at: string; recalled_at: string | null }
+export interface VoiceTranscript { content: string; provider: string; status: "completed" | "failed"; created_at: string }
+export interface VoiceReport { id: string; reporter_id: string; content_type: string; byte_size: number; status: "uploaded" | "transcribing" | "transcribed" | "draft_ready" | "failed" | "reviewed"; created_at: string; failed_reason: string | null; transcript?: VoiceTranscript }
 
 export const listCollaborationSpaces = (token: string, caseId: string) =>
   apiRequest<CollaborationSpace[]>(`/cases/${caseId}/collaboration-spaces`, {}, token);
@@ -50,3 +52,10 @@ export const listSpaceMessages = (token: string, spaceId: string) =>
   apiRequest<SpaceMessage[]>(`/collaboration-spaces/${spaceId}/messages`, {}, token);
 export const sendSpaceMessage = (token: string, spaceId: string, content: string, message_type: "text" | "broadcast" = "text") =>
   apiRequest<SpaceMessage>(`/collaboration-spaces/${spaceId}/messages`, { method: "POST", body: JSON.stringify({ content, message_type }) }, token);
+export const listVoiceReports = (token: string, spaceId: string) =>
+  apiRequest<VoiceReport[]>(`/collaboration-spaces/${spaceId}/voice-reports`, {}, token);
+export const uploadVoiceReport = (token: string, spaceId: string, file: File) => {
+  const body = new FormData();
+  body.append("file", file, file.name);
+  return apiRequest<VoiceReport>(`/collaboration-spaces/${spaceId}/voice-reports`, { method: "POST", body }, token);
+};

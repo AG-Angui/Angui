@@ -1,3 +1,4 @@
+use actix_multipart::Multipart;
 use actix_web::{HttpResponse, web};
 
 use crate::{
@@ -28,6 +29,14 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 )
                 .route("/{space_id}/messages", web::get().to(list_messages))
                 .route("/{space_id}/messages", web::post().to(create_message))
+                .route(
+                    "/{space_id}/voice-reports",
+                    web::get().to(list_voice_reports),
+                )
+                .route(
+                    "/{space_id}/voice-reports",
+                    web::post().to(create_voice_report),
+                )
                 .route("/{space_id}/join", web::post().to(join_space))
                 .route("/{space_id}/leave", web::post().to(leave_space))
                 .route(
@@ -192,4 +201,39 @@ async fn list_messages(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok()
         .json(collaboration_space_service::list_messages(&state.db, &auth, &space_id).await?))
+}
+
+async fn create_voice_report(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+    multipart: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    let (filename, content_type, bytes) =
+        crate::services::case_resource_service::read_single_audio_upload(
+            multipart,
+            collaboration_space_service::MAX_VOICE_REPORT_BYTES,
+        )
+        .await?;
+    Ok(HttpResponse::Created().json(
+        collaboration_space_service::store_voice_report(
+            &state.db,
+            &auth,
+            &space_id,
+            &filename,
+            &content_type,
+            &bytes,
+            &state.attachment_storage_directory,
+        )
+        .await?,
+    ))
+}
+
+async fn list_voice_reports(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(collaboration_space_service::list_voice_reports(&state.db, &auth, &space_id).await?))
 }
