@@ -3,7 +3,6 @@ import {
   accounts,
   apiGet,
   apiPatch,
-  apiPost,
   createCaseFixture,
   tokenFor,
   uniqueTestSuffix,
@@ -117,6 +116,23 @@ test("a commander creates a collaboration space through the browser and its acti
   );
   expect(familySnapshot.status()).toBe(403);
 
+  const availableVolunteerSpaces = (await apiGet(
+    request,
+    volunteerToken,
+    `/api/cases/${fixture.caseId}/collaboration-spaces`,
+  )) as Array<{ id: string; status: string; member_status: string | null }>;
+  expect(availableVolunteerSpaces).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: space!.id, status: "active", member_status: null }),
+    ]),
+  );
+
+  await useAccount(page, volunteerToken, "/volunteer");
+  const volunteerSpace = page.locator("li").filter({ hasText: spaceName });
+  await expect(volunteerSpace.getByRole("button", { name: "同意并加入" })).toBeVisible();
+  await volunteerSpace.getByRole("button", { name: "同意并加入" }).click();
+  await expect(volunteerSpace.getByText("已在空间中")).toBeVisible();
+
   const volunteerSpaces = (await apiGet(
     request,
     volunteerToken,
@@ -124,17 +140,9 @@ test("a commander creates a collaboration space through the browser and its acti
   )) as Array<{ id: string; status: string; member_status: string | null }>;
   expect(volunteerSpaces).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ id: space!.id, status: "active", member_status: null }),
+      expect.objectContaining({ id: space!.id, status: "active", member_status: "active" }),
     ]),
   );
-
-  const joined = (await apiPost(
-    request,
-    volunteerToken,
-    `/api/collaboration-spaces/${space!.id}/join`,
-    { location_consent: true, consent_version: "e2e-location-consent-v1" },
-  )) as { member_status: string };
-  expect(joined.member_status).toBe("active");
 
   const reportResponse = await request.post(
     `/api/collaboration-spaces/${space!.id}/voice-reports`,
