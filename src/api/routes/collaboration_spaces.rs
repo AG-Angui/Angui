@@ -24,6 +24,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{space_id}/events", web::get().to(list_events))
                 .route("/{space_id}/locations", web::post().to(record_location))
                 .route(
+                    "/{space_id}/locations/latest",
+                    web::get().to(list_latest_locations),
+                )
+                .route(
                     "/{space_id}/members/{user_id}/track",
                     web::get().to(list_member_locations),
                 )
@@ -174,6 +178,16 @@ async fn list_member_locations(
     Ok(HttpResponse::Ok().json(
         collaboration_space_service::list_member_locations(&state.db, &auth, &space_id, &user_id)
             .await?,
+    ))
+}
+
+async fn list_latest_locations(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        collaboration_space_service::list_latest_locations(&state.db, &auth, &space_id).await?,
     ))
 }
 

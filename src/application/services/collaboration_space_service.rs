@@ -425,11 +425,11 @@ pub async fn record_location(
     }
     let transaction = db.begin().await?;
     let space = active_space(&transaction, space_id).await?;
-    require_case_role(
+    let role = require_case_role(
         &transaction,
         &auth.id,
         &space.case_id,
-        &[CaseRole::Volunteer],
+        &[CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
     let member = active_member(&transaction, space_id, &auth.id).await?;
@@ -437,7 +437,7 @@ pub async fn record_location(
         .filter(space_location_consents::Column::MemberId.eq(&member.id))
         .one(&transaction)
         .await?;
-    if !consent.is_some_and(|item| item.revoked_at.is_none()) {
+    if role == CaseRole::Volunteer && !consent.is_some_and(|item| item.revoked_at.is_none()) {
         return Err(ApiError::Forbidden(
             "an active location-sharing consent is required".to_owned(),
         ));
@@ -521,7 +521,29 @@ pub async fn list_member_locations(
         .await?
         .into_iter()
         .map(location_response)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Returns the most recent location sample for each member. This endpoint is
+/// intentionally limited to one sample per user so volunteers can see the
+/// current team picture without receiving historical trajectories.
+pub async fn list_latest_locations(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+) -> Result<Vec<SpaceLocationResponse>, ApiError> {
+    let (_space, _member) = require_space_access(db, auth, space_id).await?;
+    let samples = space_location_samples::Entity::find()
+        .filter(space_location_samples::Column::SpaceId.eq(space_id))
+        .order_by_desc(space_location_samples::Column::CapturedAt)
+        .limit(500)
+        .all(db)
+        .await?;
+    let mut latest = HashMap::new();
+    for sample in samples {
+        latest.entry(sample.user_id.clone()).or_insert(sample);
+    }
+    latest.into_values().map(location_response).collect()
 }
 
 pub async fn create_message(
@@ -562,7 +584,7 @@ pub async fn create_message(
     }
     .insert(&transaction)
     .await?;
-    publish_event(&transaction, &space, "message.sent", "space_members", json!({"message_id": message.id, "sender_id": auth.id, "message_type": message.message_type, "content": message.content, "sent_at": message.sent_at}), &timestamp).await?;
+    publish_event(&transaction, &space, "message.sent", "space_members", json!({"message_id": message.id, "sender_id": auth.id, "sender_display_name": auth.display_name, "message_type": message.message_type, "content": message.content, "sent_at": message.sent_at}), &timestamp).await?;
     write_audit(
         &transaction,
         Some(space.case_id.clone()),
@@ -574,7 +596,7 @@ pub async fn create_message(
     )
     .await?;
     transaction.commit().await?;
-    message_response(message)
+    message_response(db, message).await
 }
 
 pub async fn list_messages(
@@ -583,15 +605,34 @@ pub async fn list_messages(
     space_id: &str,
 ) -> Result<Vec<SpaceMessageResponse>, ApiError> {
     require_space_access(db, auth, space_id).await?;
-    space_messages::Entity::find()
+    let messages = space_messages::Entity::find()
         .filter(space_messages::Column::SpaceId.eq(space_id))
         .order_by_desc(space_messages::Column::SentAt)
         .limit(100)
         .all(db)
-        .await?
+        .await?;
+    let sender_ids: Vec<String> = messages
+        .iter()
+        .map(|message| message.sender_id.clone())
+        .collect();
+    let senders = users::Entity::find()
+        .filter(users::Column::Id.is_in(sender_ids))
+        .all(db)
+        .await?;
+    let names: HashMap<String, String> = senders
         .into_iter()
-        .map(message_response)
-        .collect()
+        .map(|user| (user.id, user.display_name))
+        .collect();
+    Ok(messages
+        .into_iter()
+        .map(|message| {
+            let sender_display_name = names
+                .get(&message.sender_id)
+                .cloned()
+                .unwrap_or_else(|| "未知用户".to_owned());
+            message_response_with_name(message, sender_display_name)
+        })
+        .collect())
 }
 
 /// Stores an authorized member's audio report in private storage. There is no
@@ -963,15 +1004,31 @@ fn location_response(
     })
 }
 
-fn message_response(message: space_messages::Model) -> Result<SpaceMessageResponse, ApiError> {
-    Ok(SpaceMessageResponse {
+async fn message_response(
+    db: &DatabaseConnection,
+    message: space_messages::Model,
+) -> Result<SpaceMessageResponse, ApiError> {
+    let sender_display_name = users::Entity::find_by_id(&message.sender_id)
+        .one(db)
+        .await?
+        .map(|user| user.display_name)
+        .unwrap_or_else(|| "未知用户".to_owned());
+    Ok(message_response_with_name(message, sender_display_name))
+}
+
+fn message_response_with_name(
+    message: space_messages::Model,
+    sender_display_name: String,
+) -> SpaceMessageResponse {
+    SpaceMessageResponse {
         id: message.id,
         sender_id: message.sender_id,
+        sender_display_name,
         message_type: message.message_type,
         content: message.content,
         sent_at: message.sent_at,
         recalled_at: message.recalled_at,
-    })
+    }
 }
 
 fn voice_report_response(

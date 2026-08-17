@@ -102,6 +102,7 @@ pub struct CreateSpaceMessageRequest {
 pub struct SpaceMessageResponse {
     pub id: String,
     pub sender_id: String,
+    pub sender_display_name: String,
     pub message_type: String,
     pub content: String,
     pub sent_at: String,
