@@ -29,6 +29,8 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${frontendPort}`,
     channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL,
+    geolocation: { latitude: 31.2304, longitude: 121.4737 },
+    permissions: ["geolocation"],
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -51,6 +53,7 @@ export default defineConfig({
       ANGUI_PORT: String(backendPort),
       ANGUI_FRONTEND_ORIGIN: `http://127.0.0.1:${frontendPort}`,
       ANGUI_RUNTIME_ENV: "test",
+      ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: "24",
       ANGUI_ALLOW_DEMO_BOOTSTRAP: "1",
       ANGUI_DEMO_PASSWORD: "e2e-demo-password",
       ANGUI_DEMO_GRANT_REVIEWER_ADMINS: "1",

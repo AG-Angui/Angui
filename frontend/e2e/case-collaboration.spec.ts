@@ -3,6 +3,7 @@ import {
   accounts,
   apiGet,
   apiPatch,
+  apiPost,
   createCaseFixture,
   tokenFor,
   uniqueTestSuffix,
@@ -87,6 +88,13 @@ test("a commander creates a collaboration space through the browser and its acti
   await page.getByLabel("协作空间名称").fill(spaceName);
   await page.getByRole("button", { name: "创建空间" }).click();
 
+  const commanderSpaceRow = page.locator("li").filter({ hasText: spaceName });
+  await expect(commanderSpaceRow.getByRole("button", { name: "开始位置共享" })).toBeVisible();
+  await commanderSpaceRow.getByRole("button", { name: "开始位置共享" }).click();
+  await expect(commanderSpaceRow.getByRole("button", { name: "停止位置共享" })).toBeVisible();
+  await commanderSpaceRow.getByRole("button", { name: "停止位置共享" }).click();
+  await expect(commanderSpaceRow.getByRole("button", { name: "开始位置共享" })).toBeVisible();
+
   const commanderSpaces = (await apiGet(
     request,
     commanderToken,
@@ -95,6 +103,33 @@ test("a commander creates a collaboration space through the browser and its acti
   const space = commanderSpaces.find((candidate) => candidate.name === spaceName);
   expect(space).toBeDefined();
   expect(space?.status).toBe("active");
+
+  const commanderSnapshot = (await apiGet(
+    request,
+    commanderToken,
+    `/api/collaboration-spaces/${space!.id}/snapshot`,
+  )) as { members: Array<{ display_name: string; role: string; status: string }> };
+  expect(commanderSnapshot.members).toEqual(
+    expect.arrayContaining([expect.objectContaining({ role: "commander", status: "active" })]),
+  );
+  expect(commanderSnapshot.members.every((member) => member.display_name.length > 0)).toBe(true);
+
+  const commanderMessage = (await apiPost(
+    request,
+    commanderToken,
+    `/api/collaboration-spaces/${space!.id}/messages`,
+    { content: `Commander update ${suffix}` },
+  )) as { sender_display_name: string; sent_at: string; content: string };
+  expect(commanderMessage).toMatchObject({ content: `Commander update ${suffix}` });
+  expect(commanderMessage.sender_display_name).toBeTruthy();
+  expect(Number.isNaN(Date.parse(commanderMessage.sent_at))).toBe(false);
+
+  const initialLocations = (await apiGet(
+    request,
+    commanderToken,
+    `/api/collaboration-spaces/${space!.id}/locations/latest`,
+  )) as unknown[];
+  expect(initialLocations.length).toBeGreaterThan(0);
 
   const familyCreate = await request.post(
     `/api/cases/${fixture.caseId}/collaboration-spaces`,
@@ -134,6 +169,13 @@ test("a commander creates a collaboration space through the browser and its acti
   });
   await volunteerSpace.getByRole("button", { name: "同意并加入" }).click();
   await expect(volunteerSpace.getByText("已在空间中")).toBeVisible();
+
+  await expect(volunteerSpace.getByRole("button", { name: "开始位置共享" })).toBeVisible();
+  await volunteerSpace.getByRole("button", { name: "开始位置共享" }).click();
+  await expect(volunteerSpace.getByRole("button", { name: "停止位置共享" }).first()).toBeVisible();
+  await volunteerSpace.getByRole("button", { name: "停止位置共享" }).last().click();
+  await expect(volunteerSpace.getByRole("button", { name: "开始位置共享" })).toBeVisible();
+  await expect(volunteerSpace.getByText(`Commander update ${suffix}`)).toBeVisible();
 
   const volunteerSpaces = (await apiGet(
     request,
