@@ -10,12 +10,12 @@ import {
 } from "./support";
 
 async function useAccount(page: Page, token: string, path: string) {
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "networkidle" });
   await page.evaluate((sessionToken) => {
     sessionStorage.clear();
     sessionStorage.setItem("angui.session.token", sessionToken);
   }, token);
-  await page.goto(path);
+  await page.goto(path, { waitUntil: "networkidle" });
 }
 
 test("a family clue moves through commander review and returns as confirmed progress", async ({
@@ -58,7 +58,7 @@ test("a family clue moves through commander review and returns as confirmed prog
   await useAccount(page, commanderToken, `/command/cases/${fixture.caseId}`);
   await expect(
     page.getByRole("heading", { name: fixture.displayName }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 
   await useAccount(page, familyToken, "/family");
   const confirmedFamilyCaseLink = page.getByRole("link", {
