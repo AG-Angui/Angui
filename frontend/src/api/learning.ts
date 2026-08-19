@@ -47,14 +47,24 @@ export interface LearningAnswer {
   explanation: string;
   source: LearningSource;
 }
+export interface KnowledgeImage {
+  id: string;
+  storage_path: string;
+  mime_type: string;
+  width: number | null;
+  height: number | null;
+  metadata: Record<string, unknown>;
+}
 export interface LearningSource {
-  resource_id: string;
+  knowledge_item_id: string;
   title: string;
   version: number;
+  score: number;
+  images: KnowledgeImage[];
 }
 export interface KnowledgeAnswer {
   answer: string;
-  certainty: "source_backed" | "insufficient_sources";
+  certainty: "source_backed" | "rule_based" | "insufficient_sources";
   sources: LearningSource[];
   human_review_notice: string;
 }
@@ -166,8 +176,8 @@ export const submitLearningAnswer = (
   );
 export const askKnowledge = (token: string, question: string) =>
   apiRequest<KnowledgeAnswer>(
-    "/knowledge/ask",
-    { method: "POST", body: JSON.stringify({ question }) },
+    "/knowledge-bases/learning-materials/chat",
+    { method: "POST", body: JSON.stringify({ query: question, limit: 5 }) },
     token,
   );
 export const listManagedLearningResources = (token: string) =>

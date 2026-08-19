@@ -483,12 +483,27 @@ export function LearningCenterPage() {
                 {answer.human_review_notice}
               </p>
               {answer.sources.length > 0 && (
-                <p className="mb-0 mt-2 text-xs text-slate-500">
-                  引用来源（均为已审核发布）：
-                  {answer.sources
-                    .map((source) => `${source.title} v${source.version}`)
-                    .join("、")}
-                </p>
+                <div className="mt-3 grid gap-3">
+                  <p className="m-0 text-xs text-slate-500">
+                    引用来源（均为已审核发布）：
+                    {answer.sources
+                      .map((source) => `${source.title} v${source.version}`)
+                      .join("、")}
+                  </p>
+                  {answer.sources.flatMap((source) => source.images ?? []).length > 0 && (
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {answer.sources.flatMap((source) => source.images ?? []).map((image) => (
+                        <img
+                          key={image.id}
+                          src={image.storage_path}
+                          alt="Knowledge source image"
+                          className="aspect-video w-full rounded-md border border-slate-200 object-cover"
+                          loading="lazy"
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           ) : (
