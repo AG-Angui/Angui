@@ -238,6 +238,192 @@ pub struct KnowledgeAnswerResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CreateKnowledgeBaseRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub visibility: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateKnowledgeBaseRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub visibility: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeBaseResponse {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub visibility: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeImageInput {
+    pub storage_path: String,
+    pub mime_type: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    #[serde(default = "empty_json_object")]
+    pub metadata: Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeImageResponse {
+    pub id: String,
+    pub storage_path: String,
+    pub mime_type: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateKnowledgeItemRequest {
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    pub content: String,
+    #[serde(default)]
+    pub category: String,
+    pub category_id: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    pub source_name: Option<String>,
+    pub source_url: Option<String>,
+    pub visibility: String,
+    #[serde(default)]
+    pub images: Vec<KnowledgeImageInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateKnowledgeItemRequest {
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub content: Option<String>,
+    pub category: Option<String>,
+    pub category_id: Option<String>,
+    pub keywords: Option<Vec<String>>,
+    pub source_name: Option<String>,
+    pub source_url: Option<String>,
+    pub visibility: Option<String>,
+    pub images: Option<Vec<KnowledgeImageInput>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeImportRowResponse {
+    pub id: String,
+    pub row_number: i32,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub normalized_data: Value,
+    pub knowledge_item_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeImportBatchResponse {
+    pub id: String,
+    pub knowledge_base_id: String,
+    pub file_name: String,
+    pub status: String,
+    pub total_rows: i32,
+    pub valid_rows: i32,
+    pub invalid_rows: i32,
+    pub rows: Vec<KnowledgeImportRowResponse>,
+    pub confirmed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeSearchRequest {
+    pub query: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeBaseOverviewResponse {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub visibility: String,
+    pub total_items: u64,
+    pub draft_items: u64,
+    pub reviewed_items: u64,
+    pub published_items: u64,
+    pub withdrawn_items: u64,
+    pub image_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeOverviewResponse {
+    pub total_bases: u64,
+    pub enabled_bases: u64,
+    pub total_items: u64,
+    pub draft_items: u64,
+    pub reviewed_items: u64,
+    pub published_items: u64,
+    pub withdrawn_items: u64,
+    pub image_count: u64,
+    pub bases: Vec<KnowledgeBaseOverviewResponse>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeSearchResultResponse {
+    pub knowledge_item_id: String,
+    pub title: String,
+    pub content: String,
+    pub score: f64,
+    pub knowledge_base_id: String,
+    pub version: i32,
+    pub source_name: String,
+    pub source_url: Option<String>,
+    pub images: Vec<KnowledgeImageResponse>,
+    pub status: String,
+}
+#[derive(Debug, Serialize)]
+pub struct KnowledgeSearchResponse {
+    pub results: Vec<KnowledgeSearchResultResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeChatRequest {
+    pub query: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeChatSourceResponse {
+    pub knowledge_item_id: String,
+    pub title: String,
+    pub version: i32,
+    pub score: f64,
+    pub images: Vec<KnowledgeImageResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeChatResponse {
+    pub answer: String,
+    pub certainty: String,
+    pub sources: Vec<KnowledgeChatSourceResponse>,
+    pub human_review_notice: String,
+}
+
+fn empty_json_object() -> Value {
+    Value::Object(Default::default())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateLearningResourceRequest {
     pub title: String,
     pub summary: String,

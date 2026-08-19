@@ -434,11 +434,35 @@ pub async fn submit_answer(
     })
 }
 
+#[allow(unreachable_code)]
 pub async fn ask_knowledge(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     request: KnowledgeAskRequest,
 ) -> Result<KnowledgeAnswerResponse, ApiError> {
+    let chat = crate::services::knowledge_service::chat(
+        db,
+        auth,
+        "learning-materials",
+        &request.question,
+        Some(5),
+    )
+    .await?;
+    return Ok(KnowledgeAnswerResponse {
+        answer: chat.answer,
+        certainty: chat.certainty,
+        sources: chat
+            .sources
+            .into_iter()
+            .map(|source| LearningAnswerSource {
+                resource_id: source.knowledge_item_id,
+                title: source.title,
+                version: source.version,
+            })
+            .collect(),
+        human_review_notice: chat.human_review_notice,
+    });
+
     let prompt = request.question.trim();
     if prompt.is_empty() || prompt.chars().count() > MAX_QUESTION_LENGTH {
         return Err(ApiError::Validation(

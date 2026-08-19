@@ -10,5 +10,6 @@ pub mod collaboration_space_service;
 pub mod heic_decoder;
 pub mod intake_photo_service;
 pub mod intake_session_service;
+pub mod knowledge_service;
 pub mod learning_service;
 pub mod task_service;

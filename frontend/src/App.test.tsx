@@ -17,6 +17,7 @@ const mocked = vi.hoisted(() => ({
   listManagedLearningResources: vi.fn().mockResolvedValue([]),
   listManagedLearningQuestions: vi.fn().mockResolvedValue([]),
   listManagedLearningCategories: vi.fn().mockResolvedValue([]),
+  listKnowledgeBases: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./auth/useAuth", () => ({ useAuth: () => mocked.auth }));
@@ -51,6 +52,14 @@ vi.mock("./api/learning", () => ({
   listManagedLearningCategories: (...args: unknown[]) =>
     mocked.listManagedLearningCategories(...args),
   askKnowledge: vi.fn(),
+  listKnowledgeBases: (...args: unknown[]) => mocked.listKnowledgeBases(...args),
+  createKnowledgeBase: vi.fn(),
+  previewKnowledgeImport: vi.fn(),
+  confirmKnowledgeImport: vi.fn(),
+  cancelKnowledgeImport: vi.fn(),
+  createKnowledgeItem: vi.fn(),
+  listKnowledgeItems: vi.fn(),
+  transitionKnowledgeItem: vi.fn(),
   submitLearningAnswer: vi.fn(),
 }));
 

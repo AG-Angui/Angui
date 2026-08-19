@@ -10,6 +10,16 @@ import {
   transitionManagedLearningCategory,
   transitionManagedLearningQuestion,
   transitionManagedLearningResource,
+  createKnowledgeBase,
+  listKnowledgeBases,
+  previewKnowledgeImport,
+  confirmKnowledgeImport,
+  cancelKnowledgeImport,
+  createKnowledgeItem,
+  listKnowledgeItems,
+  transitionKnowledgeItem,
+  getKnowledgeOverview,
+  uploadKnowledgeImage,
 } from "../api/learning";
 import type {
   CreateLearningQuestionInput,
@@ -209,6 +219,14 @@ export function LearningGovernancePage() {
   );
   const [questionTags, setQuestionTags] = useState("");
   const [optionLines, setOptionLines] = useState("");
+  const [knowledgeBases, setKnowledgeBases] = useState<import("../api/learning").KnowledgeBase[]>([]);
+  const [knowledgeOverview, setKnowledgeOverview] = useState<import("../api/learning").KnowledgeOverview | null>(null);
+  const [knowledgeBaseName, setKnowledgeBaseName] = useState("");
+  const [knowledgeBaseDescription, setKnowledgeBaseDescription] = useState("");
+  const [knowledgeImport, setKnowledgeImport] = useState<import("../api/learning").KnowledgeImportBatch | null>(null);
+  const [knowledgeItems, setKnowledgeItems] = useState<import("../api/learning").KnowledgeItem[]>([]);
+  const [knowledgeItemBaseId, setKnowledgeItemBaseId] = useState("");
+  const [knowledgeItemForm, setKnowledgeItemForm] = useState({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" });
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -221,6 +239,15 @@ export function LearningGovernancePage() {
       ]);
       setResources(nextResources);
       setQuestions(nextQuestions);
+      const bases = await listKnowledgeBases(token).catch(() => []);
+      setKnowledgeBases(bases);
+      if (bases[0]) {
+        setKnowledgeOverview(
+          await getKnowledgeOverview(token, bases[0].id).catch(() => null),
+        );
+      } else {
+        setKnowledgeOverview(null);
+      }
       // Keep resource governance usable while rolling out the optional
       // category-governance endpoint to older deployments.
       const nextCategories =
@@ -241,6 +268,34 @@ export function LearningGovernancePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const createBase = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !knowledgeBaseName.trim()) return;
+    setBusyId("knowledge-base");
+    void createKnowledgeBase(token, { name: knowledgeBaseName, description: knowledgeBaseDescription, visibility: "learner" })
+      .then((base) => { setKnowledgeBases((current) => [...current, base]); setKnowledgeBaseName(""); setKnowledgeBaseDescription(""); })
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+  const uploadKnowledgeCsv = (baseId: string, file: File) => {
+    if (!token) return;
+    setBusyId("knowledge-import");
+    void previewKnowledgeImport(token, baseId, file)
+      .then(setKnowledgeImport)
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+  const updateImport = (action: "confirm" | "cancel") => {
+    if (!token || !knowledgeImport) return;
+    setBusyId("knowledge-import");
+    const operation = action === "confirm" ? confirmKnowledgeImport : cancelKnowledgeImport;
+    void operation(token, knowledgeImport.id).then(setKnowledgeImport).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId(""));
+  };
+  const loadKnowledgeItems = (baseId: string) => { if (!token || !baseId) return; setKnowledgeItemBaseId(baseId); void Promise.all([listKnowledgeItems(token, baseId), getKnowledgeOverview(token, baseId)]).then(([items, overview]) => { setKnowledgeItems(items); setKnowledgeOverview(overview); }).catch((cause) => setOperationError(errorMessage(cause))); };
+  const uploadItemImages = (itemId: string, files: FileList | null) => { if (!token || !files?.length) return; setBusyId(itemId); void Promise.all(Array.from(files).map((file) => uploadKnowledgeImage(token, itemId, file))).then(() => loadKnowledgeItems(knowledgeItemBaseId)).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const createItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId) return; setBusyId("knowledge-item"); const images: { storage_path: string; mime_type: string; width: number | null; height: number | null; metadata: Record<string, unknown> }[] = []; void createKnowledgeItem(token, knowledgeItemBaseId, { title: knowledgeItemForm.title, summary: knowledgeItemForm.summary, content: knowledgeItemForm.content, category: knowledgeItemForm.category, category_id: null, keywords: parseTags(knowledgeItemForm.keywords), source_name: knowledgeItemForm.source_name, source_url: knowledgeItemForm.source_url.trim() || null, visibility: "learner", images }).then(() => { setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const transitionItem = (itemId: string, action: "review" | "publish" | "withdraw") => { if (!token) return; setBusyId(itemId); void transitionKnowledgeItem(token, itemId, action).then(() => listKnowledgeItems(token, knowledgeItemBaseId)).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
   if (isLoading) return <LoadingState label="正在加载学习内容治理记录" />;
   if (loadError)
     return <ErrorState message={loadError} onRetry={() => void load()} />;
@@ -380,6 +435,66 @@ export function LearningGovernancePage() {
           <p className="mb-0 mt-1 text-sm text-slate-600">仅管理员可操作</p>
         </div>
       </header>
+      <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="knowledge-library-title">
+        <header className="border-b border-slate-200 px-5 py-4">
+          <h2 id="knowledge-library-title" className="m-0 text-base font-bold text-slate-950">资料库管理</h2>
+        </header>
+        {knowledgeOverview && <div className="grid grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-4">
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Knowledge bases</span><strong>{knowledgeOverview.total_bases}</strong></div>
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Enabled</span><strong>{knowledgeOverview.enabled_bases}</strong></div>
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Items</span><strong>{knowledgeOverview.total_items}</strong></div>
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Published</span><strong>{knowledgeOverview.published_items}</strong></div>
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Waiting review</span><strong>{knowledgeOverview.draft_items}</strong></div>
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Reviewed</span><strong>{knowledgeOverview.reviewed_items}</strong></div>
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Withdrawn</span><strong>{knowledgeOverview.withdrawn_items}</strong></div>
+          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Images</span><strong>{knowledgeOverview.image_count}</strong></div>
+        </div>}
+        <form className="grid gap-3 border-b border-slate-100 p-5 lg:grid-cols-3" onSubmit={createBase}>
+          <label className="grid gap-1 text-sm text-slate-700">资料库名称<Input aria-label="资料库名称" value={knowledgeBaseName} onChange={(event) => setKnowledgeBaseName(event.target.value)} required /></label>
+          <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">说明<Input aria-label="说明" value={knowledgeBaseDescription} onChange={(event) => setKnowledgeBaseDescription(event.target.value)} /></label>
+          <div className="lg:col-span-3"><Button type="submit" isDisabled={busyId === "knowledge-base"}>{busyId === "knowledge-base" ? <Spinner size="sm" /> : "新建资料库"}</Button></div>
+        </form>
+        <div className="divide-y divide-slate-100">
+          {knowledgeBases.map((base) => <article key={base.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
+            <div><h3 className="m-0 text-sm font-semibold text-slate-950">{base.name}</h3><p className="mb-0 mt-1 text-xs text-slate-500">{base.description || "无说明"} · {base.status}</p></div>
+            <div className="flex flex-wrap items-center gap-3"><Button variant="secondary" onPress={() => loadKnowledgeItems(base.id)}>查看条目</Button><label className="text-sm text-slate-700">CSV 导入<input className="ml-2 text-xs" type="file" accept=".csv,text/csv" disabled={busyId === "knowledge-import"} onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) uploadKnowledgeCsv(base.id, file); }} /></label></div>
+          </article>)}
+        </div>
+        {knowledgeItemBaseId && <div className="border-t border-slate-200 p-5">
+          <h3 className="m-0 text-sm font-semibold text-slate-950">手工录入知识条目</h3>
+          <form className="mt-3 grid gap-3 lg:grid-cols-2" onSubmit={createItem}>
+            <Input aria-label="知识条目标题" placeholder="标题" value={knowledgeItemForm.title} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, title: event.target.value })} required />
+            <Input aria-label="来源名称" placeholder="来源名称" value={knowledgeItemForm.source_name} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, source_name: event.target.value })} required />
+            <Input aria-label="分类" placeholder="分类" value={knowledgeItemForm.category} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, category: event.target.value })} />
+            <Input aria-label="关键词" placeholder="关键词，逗号分隔" value={knowledgeItemForm.keywords} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, keywords: event.target.value })} />
+            <Input className="lg:col-span-2" aria-label="摘要" placeholder="摘要" value={knowledgeItemForm.summary} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, summary: event.target.value })} />
+            <textarea aria-label="正文" className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm lg:col-span-2" placeholder="正文" value={knowledgeItemForm.content} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, content: event.target.value })} required />
+            <Input aria-label="来源链接" placeholder="HTTPS 来源链接" value={knowledgeItemForm.source_url} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, source_url: event.target.value })} />
+            <div className="lg:col-span-2"><Button type="submit" isDisabled={busyId === "knowledge-item"}>{busyId === "knowledge-item" ? <Spinner size="sm" /> : "保存知识条目"}</Button></div>
+          </form>
+          <div className="mt-5 divide-y divide-slate-100 border-t border-slate-100">
+            {knowledgeItems.map((item) => (
+              <article key={item.knowledge_item_id} className="py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <strong className="text-sm">{item.title}</strong>
+                  <span className="text-xs text-slate-500">v{item.version} · {item.status}</span>
+                  {item.images.length > 0 && <span className="text-xs text-slate-500">{item.images.length} images</span>}
+                  {(item.status === "draft" || item.status === "submitted") && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>Review</Button>}
+                  {item.status === "reviewed" && <Button size="sm" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "publish")}>Publish</Button>}
+                  {item.status === "published" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "withdraw")}>Withdraw</Button>}
+                  <label className="text-xs text-slate-700">Upload images<input className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>}
+        {knowledgeImport && <div className="border-t border-slate-200 p-5">
+          <p className="m-0 text-sm font-semibold text-slate-950">导入预览：{knowledgeImport.file_name}</p>
+          <p className="mb-3 mt-1 text-xs text-slate-600">{knowledgeImport.total_rows} 行，{knowledgeImport.valid_rows} 行有效，{knowledgeImport.invalid_rows} 行有错误，状态：{knowledgeImport.status}</p>
+          <div className="max-h-56 overflow-auto border border-slate-200 text-xs"><table className="w-full text-left"><thead><tr className="border-b bg-slate-50"><th className="p-2">行</th><th className="p-2">状态</th><th className="p-2">错误</th></tr></thead><tbody>{knowledgeImport.rows.map((row) => <tr key={row.id} className="border-b"><td className="p-2">{row.row_number}</td><td className="p-2">{row.status}</td><td className="p-2">{row.error_message ?? "-"}</td></tr>)}</tbody></table></div>
+          {knowledgeImport.status === "previewed" && <div className="mt-3 flex gap-2"><Button onPress={() => updateImport("confirm")} isDisabled={busyId === "knowledge-import"}>确认导入</Button><Button variant="secondary" onPress={() => updateImport("cancel")} isDisabled={busyId === "knowledge-import"}>取消</Button></div>}
+        </div>}
+      </section>
       <div className="mb-5">
         <Input
           aria-label="操作理由"

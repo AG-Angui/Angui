@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { apiBlobRequest, apiRequest } from "./client";
 
 export interface LearningResource {
   id: string;
@@ -47,14 +47,24 @@ export interface LearningAnswer {
   explanation: string;
   source: LearningSource;
 }
+export interface KnowledgeImage {
+  id: string;
+  storage_path: string;
+  mime_type: string;
+  width: number | null;
+  height: number | null;
+  metadata: Record<string, unknown>;
+}
 export interface LearningSource {
-  resource_id: string;
+  knowledge_item_id: string;
   title: string;
   version: number;
+  score: number;
+  images: KnowledgeImage[];
 }
 export interface KnowledgeAnswer {
   answer: string;
-  certainty: "source_backed" | "insufficient_sources";
+  certainty: "source_backed" | "rule_based" | "insufficient_sources";
   sources: LearningSource[];
   human_review_notice: string;
 }
@@ -166,8 +176,8 @@ export const submitLearningAnswer = (
   );
 export const askKnowledge = (token: string, question: string) =>
   apiRequest<KnowledgeAnswer>(
-    "/knowledge/ask",
-    { method: "POST", body: JSON.stringify({ question }) },
+    "/knowledge-bases/learning-materials/chat",
+    { method: "POST", body: JSON.stringify({ query: question, limit: 5 }) },
     token,
   );
 export const listManagedLearningResources = (token: string) =>
@@ -214,7 +224,26 @@ export const transitionManagedLearningResource = (
     `/admin/learning/resources/${resourceId}/${action}`,
     { method: "POST", body: JSON.stringify({ reason }) },
     token,
-  );
+);
+
+export interface KnowledgeBase { id: string; name: string; description: string; visibility: string; status: string; created_at: string; updated_at: string; }
+export interface KnowledgeImportRow { id: string; row_number: number; status: string; error_message: string | null; normalized_data: Record<string, unknown>; knowledge_item_id: string | null; }
+export interface KnowledgeImportBatch { id: string; knowledge_base_id: string; file_name: string; status: string; total_rows: number; valid_rows: number; invalid_rows: number; rows: KnowledgeImportRow[]; confirmed_at: string | null; }
+export interface KnowledgeItem { knowledge_item_id: string; title: string; content: string; score: number; knowledge_base_id: string; version: number; source_name: string; source_url: string | null; images: KnowledgeImage[]; status: string; }
+export interface KnowledgeBaseOverview { id: string; name: string; status: string; visibility: string; total_items: number; draft_items: number; reviewed_items: number; published_items: number; withdrawn_items: number; image_count: number; }
+export interface KnowledgeOverview { total_bases: number; enabled_bases: number; total_items: number; draft_items: number; reviewed_items: number; published_items: number; withdrawn_items: number; image_count: number; bases: KnowledgeBaseOverview[]; }
+export const listKnowledgeBases = (token: string) => apiRequest<KnowledgeBase[]>("/admin/knowledge-bases", {}, token);
+export const createKnowledgeBase = (token: string, input: { name: string; description: string; visibility: string }) => apiRequest<KnowledgeBase>("/admin/knowledge-bases", { method: "POST", body: JSON.stringify(input) }, token);
+export const previewKnowledgeImport = (token: string, baseId: string, file: File) => { const form = new FormData(); form.append("file", file); return apiRequest<KnowledgeImportBatch>(`/admin/knowledge-bases/${baseId}/imports/preview`, { method: "POST", body: form }, token); };
+export const getKnowledgeImport = (token: string, batchId: string) => apiRequest<KnowledgeImportBatch>(`/admin/knowledge-imports/${batchId}`, {}, token);
+export const confirmKnowledgeImport = (token: string, batchId: string) => apiRequest<KnowledgeImportBatch>(`/admin/knowledge-imports/${batchId}/confirm`, { method: "POST" }, token);
+export const cancelKnowledgeImport = (token: string, batchId: string) => apiRequest<KnowledgeImportBatch>(`/admin/knowledge-imports/${batchId}/cancel`, { method: "POST" }, token);
+export const listKnowledgeItems = (token: string, baseId: string) => apiRequest<KnowledgeItem[]>(`/admin/knowledge-bases/${baseId}/items`, {}, token);
+export const getKnowledgeOverview = (token: string, baseId: string) => apiRequest<KnowledgeOverview>(`/admin/knowledge-bases/${baseId}/overview`, {}, token);
+export const uploadKnowledgeImage = (token: string, itemId: string, file: File) => { const form = new FormData(); form.append("file", file); return apiRequest<KnowledgeImage>(`/admin/knowledge-items/${itemId}/images`, { method: "POST", body: form }, token); };
+export const downloadKnowledgeImage = (token: string, itemId: string, imageId: string) => apiBlobRequest(`/admin/knowledge-items/${itemId}/images/${imageId}`, {}, token);
+export const createKnowledgeItem = (token: string, baseId: string, input: { title: string; summary: string; content: string; category: string; category_id: string | null; keywords: string[]; source_name: string; source_url: string | null; visibility: string; images: { storage_path: string; mime_type: string; width: number | null; height: number | null; metadata: Record<string, unknown> }[] }) => apiRequest<KnowledgeItem>(`/admin/knowledge-bases/${baseId}/items`, { method: "POST", body: JSON.stringify(input) }, token);
+export const transitionKnowledgeItem = (token: string, itemId: string, action: "review" | "publish" | "withdraw") => apiRequest<KnowledgeItem>(`/admin/knowledge-items/${itemId}/${action}`, { method: "POST" }, token);
 export const transitionManagedLearningQuestion = (
   token: string,
   questionId: string,
