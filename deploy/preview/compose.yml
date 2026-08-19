@@ -36,6 +36,7 @@ services:
       ANGUI_FRONTEND_ORIGIN: ${PREVIEW_ORIGIN:?PREVIEW_ORIGIN is required}
       DATABASE_URL: ${PREVIEW_DATABASE_URL:-sqlite:///app/data/angui.db?mode=rwc}
       RUST_LOG: ${RUST_LOG:-info}
+      ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: ${ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS:-24}
     volumes:
       - preview-data:/app/data
 

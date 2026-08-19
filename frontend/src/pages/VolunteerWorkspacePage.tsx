@@ -43,6 +43,7 @@ import type {
   TaskStatus,
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
+import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
 import {
   EmptyState,
   ErrorState,
@@ -687,6 +688,13 @@ export function VolunteerWorkspacePage() {
                       {caseStatusLabels[workspace.detail.status] ?? "状态未知"}
                     </Chip.Label>
                   </Chip>
+                </div>
+                <div className="mt-4">
+                  <CollaborationSpacePanel
+                    token={token}
+                    caseId={workspace.detail.id}
+                    role="volunteer"
+                  />
                 </div>
                 <div className="mt-4 grid gap-4 text-sm text-slate-700 lg:grid-cols-3">
                   <div>

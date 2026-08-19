@@ -80,6 +80,59 @@ pub async fn read_single_image_upload(
     file.ok_or_else(|| ApiError::Validation("file field is required".to_owned()))
 }
 
+/// Reads one bounded audio part. Content types are intentionally restricted so
+/// private storage never becomes a generic arbitrary-file upload endpoint.
+pub async fn read_single_audio_upload(
+    mut multipart: Multipart,
+    max_bytes: usize,
+) -> Result<(String, String, Vec<u8>), ApiError> {
+    let mut file: Option<(String, String, Vec<u8>)> = None;
+    while let Some(item) = multipart.next().await {
+        let mut field =
+            item.map_err(|_| ApiError::Validation("multipart upload is malformed".to_owned()))?;
+        if field.name() != Some("file") || file.is_some() {
+            return Err(ApiError::Validation(
+                "submit exactly one file field".to_owned(),
+            ));
+        }
+        let filename = field
+            .content_disposition()
+            .and_then(|value| value.get_filename())
+            .ok_or_else(|| ApiError::Validation("file name is required".to_owned()))?
+            .to_owned();
+        let content_type = field
+            .content_type()
+            .map(|value| value.essence_str().to_owned())
+            .unwrap_or_default();
+        if !matches!(
+            content_type.as_str(),
+            "audio/mpeg" | "audio/ogg" | "audio/wav" | "audio/webm"
+        ) {
+            return Err(ApiError::Validation(
+                "audio must use audio/mpeg, audio/ogg, audio/wav, or audio/webm".to_owned(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.next().await {
+            let chunk = chunk
+                .map_err(|_| ApiError::Validation("file upload could not be read".to_owned()))?;
+            if bytes.len().saturating_add(chunk.len()) > max_bytes {
+                return Err(ApiError::Validation(format!(
+                    "voice report must not exceed {max_bytes} bytes"
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.is_empty() {
+            return Err(ApiError::Validation(
+                "voice report must not be empty".to_owned(),
+            ));
+        }
+        file = Some((filename, content_type, bytes));
+    }
+    file.ok_or_else(|| ApiError::Validation("file field is required".to_owned()))
+}
+
 pub async fn create_place(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,

@@ -1,5 +1,13 @@
 # API 说明
 
+### Collaboration-space voice reports
+
+`POST /api/collaboration-spaces/{space_id}/voice-reports` accepts exactly one private `file` part with one of `audio/mpeg`, `audio/ogg`, `audio/wav`, or `audio/webm`, bounded at 10 MiB. Only an active space member may upload. The object key is generated server-side under private storage; raw audio has no public URL or download route.
+
+`GET /api/collaboration-spaces/{space_id}/voice-reports` returns at most 100 reports. A volunteer receives only their own lifecycle metadata. A commander receives reports for the space and may receive a persisted transcript when a future approved ASR worker has produced one. Family users and users outside the space get no collaboration-space data.
+
+This deployment deliberately has no configured ASR adapter. A successfully stored report is therefore marked `failed` with `ASR provider is not configured`, rather than manufacturing a transcript, a clue, a task action, or public progress. Audio bodies, transcript text, and original filenames are excluded from audit metadata and space-event payloads.
+
 ## 1. 当前范围
 
 当前 API 提供用于 MVP 开发的认证、案件成员授权、案件和线索纵向闭环。它已经连接 SeaORM 数据层，并实现可撤销数据库会话和服务端字段裁剪；密码找回、MFA、账号审批、组织模型和生产级安全运营仍未实现。请求只允许使用虚构或充分脱敏的数据。
@@ -9,6 +17,14 @@
 机器可读的接口契约见 [openapi.yaml](./openapi.yaml)。它与本说明覆盖同一组已注册端点；其中每个 operation 都显式列出认证要求、全局/案件角色限制、错误响应和字段可见性。以服务端路由和测试为准，文档不得把尚未注册的规划接口描述为已实现。
 
 ## 2. 接口列表
+
+### 协作空间（内部行动数据）
+
+协作空间只允许同案件的 `commander` 和已加入空间的 `volunteer` 访问；家属、跨案件成员和未加入该空间的志愿者均不得枚举或读取成员、事件、消息或轨迹。`POST /api/cases/{case_id}/collaboration-spaces` 创建空间；`GET` 同路径列出可访问空间；空间成员可使用快照、事件补偿、加入、离开与位置同意接口恢复本地状态。空间状态改变在同一事务内写入审计、`space_events` 和 `event_outbox`。
+
+`POST /api/collaboration-spaces/{space_id}/locations` 只允许已经加入且持有未撤回位置同意的志愿者调用。请求必须携带可重试的 `operation_id`；同一操作不会产生重复样本或事件。位置历史只对指挥员、或位置所属的志愿者本人开放，且在运营/合规明确配置 `ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS` 前服务端会拒绝任何位置落库。HTTP 快照与 `GET /events?after_version=` 是实时网关不可用时的恢复协议，Redis 不能作为业务事实源。
+
+`GET/POST /api/collaboration-spaces/{space_id}/messages` 提供最多 100 条受控文字消息；`message_type: broadcast` 仅允许指挥员。消息内容不会写进审计元数据，发送仍会生成空间事件和 outbox 记录。语音报告通过独立的受控上传接口保存到私有存储，当前没有获批准的 ASR 供应商时会显式标记失败；绝不会伪造转写、自动确认线索、自动派发任务或公开进展。
 
 | 方法 | 路径 | 成功状态 | 用途 |
 | --- | --- | --- | --- |
