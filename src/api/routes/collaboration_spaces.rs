@@ -43,6 +43,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 )
                 .route("/{space_id}/join", web::post().to(join_space))
                 .route("/{space_id}/leave", web::post().to(leave_space))
+                .route("/{space_id}/archive", web::post().to(archive_space))
                 .route(
                     "/{space_id}/location-consents",
                     web::post().to(grant_location_consent),
@@ -103,6 +104,15 @@ async fn leave_space(
 ) -> Result<HttpResponse, ApiError> {
     collaboration_space_service::leave_space(&state.db, &auth, &space_id).await?;
     Ok(HttpResponse::NoContent().finish())
+}
+
+async fn archive_space(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(collaboration_space_service::archive_space(&state.db, &auth, &space_id).await?))
 }
 
 async fn grant_location_consent(

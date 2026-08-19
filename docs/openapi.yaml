@@ -149,6 +149,22 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/collaboration-spaces/{space_id}/archive:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: archiveCollaborationSpace
+      summary: Archive a collaboration space without deleting its history
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander]
+      x-global-capabilities: [admin]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Archived space, content: { application/json: { schema: { $ref: "#/components/schemas/CollaborationSpace" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/collaboration-spaces/{space_id}/locations:
     parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
     post:

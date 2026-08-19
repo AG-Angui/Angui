@@ -8,6 +8,8 @@
 
 This deployment deliberately has no configured ASR adapter. A successfully stored report is therefore marked `failed` with `ASR provider is not configured`, rather than manufacturing a transcript, a clue, a task action, or public progress. Audio bodies, transcript text, and original filenames are excluded from audit metadata and space-event payloads.
 
+`POST /api/collaboration-spaces/{space_id}/archive` archives an active collaboration space without deleting its operational history. The case commander or a global administrator may perform this action. Archived spaces reject new members and operational writes while authorized commanders retain read access for review.
+
 ## 1. 当前范围
 
 当前 API 提供用于 MVP 开发的认证、案件成员授权、案件和线索纵向闭环。它已经连接 SeaORM 数据层，并实现可撤销数据库会话和服务端字段裁剪；密码找回、MFA、账号审批、组织模型和生产级安全运营仍未实现。请求只允许使用虚构或充分脱敏的数据。

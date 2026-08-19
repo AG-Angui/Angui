@@ -42,6 +42,8 @@ export const joinCollaborationSpace = (token: string, spaceId: string, consentVe
   apiRequest<CollaborationSpace>(`/collaboration-spaces/${spaceId}/join`, { method: "POST", body: JSON.stringify({ location_consent: true, consent_version: consentVersion }) }, token);
 export const leaveCollaborationSpace = (token: string, spaceId: string) =>
   apiRequest<void>(`/collaboration-spaces/${spaceId}/leave`, { method: "POST" }, token);
+export const archiveCollaborationSpace = (token: string, spaceId: string) =>
+  apiRequest<CollaborationSpace>(`/collaboration-spaces/${spaceId}/archive`, { method: "POST" }, token);
 export const revokeSpaceLocationConsent = (token: string, spaceId: string) =>
   apiRequest<void>(`/collaboration-spaces/${spaceId}/location-consents/me`, { method: "DELETE" }, token);
 export const recordSpaceLocation = (token: string, spaceId: string, location: Omit<SpaceLocation, "id" | "user_id"> & { operation_id: string }) =>
