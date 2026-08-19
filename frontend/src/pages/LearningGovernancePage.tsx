@@ -239,10 +239,14 @@ export function LearningGovernancePage() {
       ]);
       setResources(nextResources);
       setQuestions(nextQuestions);
-      if (typeof listKnowledgeBases === "function") {
-        const bases = await listKnowledgeBases(token);
-        setKnowledgeBases(bases);
-        if (bases[0]) setKnowledgeOverview(await getKnowledgeOverview(token, bases[0].id));
+      const bases = await listKnowledgeBases(token).catch(() => []);
+      setKnowledgeBases(bases);
+      if (bases[0]) {
+        setKnowledgeOverview(
+          await getKnowledgeOverview(token, bases[0].id).catch(() => null),
+        );
+      } else {
+        setKnowledgeOverview(null);
       }
       // Keep resource governance usable while rolling out the optional
       // category-governance endpoint to older deployments.
