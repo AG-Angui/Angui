@@ -275,3 +275,52 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     let learner_search: Value = search!(&app, &context, &base_id, "emergency", LEARNER);
     assert_eq!(learner_search["results"], json!([]));
 }
+#[actix_web::test]
+async fn knowledge_csv_preview_rejects_unauthorized_uploads_and_long_file_names() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let boundary = "knowledge-preview-boundary";
+    let payload = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"knowledge.csv\"\r\nContent-Type: text/csv\r\n\r\ncontent\r\n--{boundary}--\r\n"
+    );
+
+    let unauthorized = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/unknown/imports/preview")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(FAMILY).await),
+            ))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(payload)
+            .to_request(),
+    )
+    .await;
+    assert_error(unauthorized, StatusCode::FORBIDDEN, "forbidden").await;
+
+    let long_file_name = format!("{}.csv", "x".repeat(252));
+    let long_name_payload = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{long_file_name}\"\r\nContent-Type: text/csv\r\n\r\ncontent\r\n--{boundary}--\r\n"
+    );
+    let too_long = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/unknown/imports/preview")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(long_name_payload)
+            .to_request(),
+    )
+    .await;
+    assert_error(too_long, StatusCode::BAD_REQUEST, "validation_error").await;
+}

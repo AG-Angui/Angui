@@ -453,7 +453,7 @@ export function LearningGovernancePage() {
         <div className="divide-y divide-slate-100">
           {knowledgeBases.map((base) => <article key={base.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
             <div><h3 className="m-0 text-sm font-semibold text-slate-950">{base.name}</h3><p className="mb-0 mt-1 text-xs text-slate-500">{base.description || "无说明"} · {base.status}</p></div>
-            <div className="flex flex-wrap items-center gap-3"><Button variant="secondary" onPress={() => loadKnowledgeItems(base.id)}>查看条目</Button><label className="text-sm text-slate-700">CSV 导入<input className="ml-2 text-xs" type="file" accept=".csv,text/csv" disabled={busyId === "knowledge-import"} onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadKnowledgeCsv(base.id, file); }} /></label></div>
+            <div className="flex flex-wrap items-center gap-3"><Button variant="secondary" onPress={() => loadKnowledgeItems(base.id)}>查看条目</Button><label className="text-sm text-slate-700">CSV 导入<input className="ml-2 text-xs" type="file" accept=".csv,text/csv" disabled={busyId === "knowledge-import"} onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) uploadKnowledgeCsv(base.id, file); }} /></label></div>
           </article>)}
         </div>
         {knowledgeItemBaseId && <div className="border-t border-slate-200 p-5">

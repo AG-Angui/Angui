@@ -254,6 +254,7 @@ async fn preview_import(
     id: web::Path<String>,
     mut payload: Multipart,
 ) -> Result<HttpResponse, ApiError> {
+    knowledge_service::require_admin(&auth)?;
     let mut bytes = Vec::new();
     let mut file_name = "import.csv".to_owned();
     while let Some(field) = payload.next().await {
@@ -262,6 +263,11 @@ async fn preview_import(
         if let Some(disposition) = field.content_disposition()
             && let Some(name) = disposition.get_filename()
         {
+            if name.chars().count() > 255 {
+                return Err(ApiError::Validation(
+                    "CSV file name must not exceed 255 characters".to_owned(),
+                ));
+            }
             file_name = name.to_owned();
         }
         while let Some(chunk) = field.next().await {

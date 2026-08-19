@@ -1177,7 +1177,7 @@ fn image_response(image: knowledge_images::Model) -> Result<KnowledgeImageRespon
         metadata: serde_json::from_str(&image.metadata_json).map_err(|_| ApiError::Internal)?,
     })
 }
-fn require_admin(auth: &AuthenticatedUser) -> Result<(), ApiError> {
+pub fn require_admin(auth: &AuthenticatedUser) -> Result<(), ApiError> {
     auth.global_capabilities
         .contains(&GlobalCapability::Admin)
         .then_some(())
