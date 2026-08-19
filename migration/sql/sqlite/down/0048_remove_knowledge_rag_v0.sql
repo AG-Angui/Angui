@@ -1,3 +1,5 @@
+ALTER TABLE learning_questions DROP COLUMN source_knowledge_item_id;
+-- statement-break
 DROP TABLE IF EXISTS knowledge_import_rows;
 -- statement-break
 DROP TABLE IF EXISTS knowledge_import_batches;
