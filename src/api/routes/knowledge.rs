@@ -24,7 +24,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{id}/enable", web::post().to(enable_base))
                 .route("/{id}/disable", web::post().to(disable_base))
                 .route("/{id}/items", web::get().to(list_items))
-                .route("/{id}/items", web::post().to(create_item)),
+                .route("/{id}/items", web::post().to(create_item))
+                .route("/{id}/imports/preview", web::post().to(preview_import)),
         )
         .service(
             web::scope("/admin/knowledge-items")
@@ -44,10 +45,6 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{id}", web::get().to(get_import))
                 .route("/{id}/confirm", web::post().to(confirm_import))
                 .route("/{id}/cancel", web::post().to(cancel_import)),
-        )
-        .service(
-            web::scope("/admin/knowledge-bases/{id}/imports")
-                .route("/preview", web::post().to(preview_import)),
         );
 }
 
