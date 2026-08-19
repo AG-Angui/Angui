@@ -38,7 +38,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!token) {
-      setUser(null);
+      // Session clearing is handled synchronously by clearSession(). Do not
+      // reset user here: this effect can be queued from the initial null-token
+      // render and run after login has already populated the user state.
       setIsLoading(false);
       return;
     }
