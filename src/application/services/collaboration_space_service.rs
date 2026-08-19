@@ -26,7 +26,7 @@ use crate::{
         RecordSpaceLocationRequest, SpaceEventResponse, SpaceLocationResponse, SpaceMemberResponse,
         SpaceMessageResponse, VoiceReportResponse, VoiceTranscriptResponse,
     },
-    roles::CaseRole,
+    roles::{CaseRole, GlobalCapability},
     services::case_service::{new_id, require_case_role, write_audit},
 };
 
@@ -130,6 +130,61 @@ pub async fn list_case_spaces(
                 .then(|| space_response(space, status))
         })
         .collect())
+}
+
+/// Archives a collaboration space without deleting its operational history.
+/// Case commanders may archive spaces in their case; administrators may do so
+/// for any space. Archived spaces remain readable to authorized commanders so
+/// messages, locations, events, and audit records remain reviewable.
+pub async fn archive_space(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+) -> Result<CollaborationSpaceResponse, ApiError> {
+    let transaction = db.begin().await?;
+    let space = collaboration_spaces::Entity::find_by_id(space_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("collaboration space was not found".to_owned()))?;
+    if !auth.global_capabilities.contains(&GlobalCapability::Admin) {
+        require_case_role(
+            &transaction,
+            &auth.id,
+            &space.case_id,
+            &[CaseRole::Commander],
+        )
+        .await?;
+    }
+    if space.status == "archived" {
+        transaction.commit().await?;
+        return Ok(space_response(space, None));
+    }
+    let timestamp = now();
+    let mut archived = space.clone().into_active_model();
+    archived.status = Set("archived".to_owned());
+    archived.archived_at = Set(Some(timestamp.clone()));
+    let archived = archived.update(&transaction).await?;
+    publish_event(
+        &transaction,
+        &archived,
+        "space.archived",
+        "space_members",
+        json!({"archived_by_user_id": auth.id}),
+        &timestamp,
+    )
+    .await?;
+    write_audit(
+        &transaction,
+        Some(space.case_id.clone()),
+        auth,
+        "collaboration_space.archived",
+        "collaboration_space",
+        space.id.clone(),
+        Some(json!({"status": "archived", "archived_at": timestamp})),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(space_response(archived, None))
 }
 
 pub async fn get_snapshot(
@@ -780,6 +835,11 @@ async fn require_space_access(
         &[CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
+    if space.status == "archived" && role == CaseRole::Volunteer {
+        return Err(ApiError::NotFound(
+            "collaboration space was not found".to_owned(),
+        ));
+    }
     let member = space_members::Entity::find()
         .filter(space_members::Column::SpaceId.eq(space_id))
         .filter(space_members::Column::UserId.eq(&auth.id))

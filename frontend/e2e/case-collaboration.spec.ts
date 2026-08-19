@@ -10,12 +10,12 @@ import {
 } from "./support";
 
 async function useAccount(page: Page, token: string, path: string) {
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "networkidle" });
   await page.evaluate((sessionToken) => {
     sessionStorage.clear();
     sessionStorage.setItem("angui.session.token", sessionToken);
   }, token);
-  await page.goto(path);
+  await page.goto(path, { waitUntil: "networkidle" });
 }
 
 test("a family clue moves through commander review and returns as confirmed progress", async ({
@@ -58,7 +58,7 @@ test("a family clue moves through commander review and returns as confirmed prog
   await useAccount(page, commanderToken, `/command/cases/${fixture.caseId}`);
   await expect(
     page.getByRole("heading", { name: fixture.displayName }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 
   await useAccount(page, familyToken, "/family");
   const confirmedFamilyCaseLink = page.getByRole("link", {
@@ -229,4 +229,31 @@ test("a commander creates a collaboration space through the browser and its acti
       expect.objectContaining({ reporter_id: volunteerReports[0].reporter_id, status: "failed" }),
     ]),
   );
+
+  const archiveResponse = await request.post(
+    `/api/collaboration-spaces/${space!.id}/archive`,
+    { headers: { Authorization: `Bearer ${commanderToken}` } },
+  );
+  await expect(archiveResponse).toBeOK();
+  await expect((await archiveResponse.json()) as { status: string }).toMatchObject({
+    status: "archived",
+  });
+
+  const archivedSpaces = (await apiGet(
+    request,
+    commanderToken,
+    `/api/cases/${fixture.caseId}/collaboration-spaces`,
+  )) as Array<{ id: string; status: string }>;
+  expect(archivedSpaces).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: space!.id, status: "archived" })]),
+  );
+
+  const volunteerArchiveWrite = await request.post(
+    `/api/collaboration-spaces/${space!.id}/messages`,
+    {
+      headers: { Authorization: `Bearer ${volunteerToken}` },
+      data: { content: `Rejected after archive ${suffix}` },
+    },
+  );
+  expect(volunteerArchiveWrite.status()).toBe(404);
 });
