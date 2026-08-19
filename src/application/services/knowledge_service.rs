@@ -968,7 +968,10 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, ApiError> {
             '\n' if !quoted => {
                 row.push(field.trim().to_owned());
                 field.clear();
-                records.push(std::mem::take(&mut row));
+                let record = std::mem::take(&mut row);
+                if record.iter().any(|value| !value.is_empty()) {
+                    records.push(record);
+                }
             }
             '\r' if !quoted => {}
             _ => field.push(character),
@@ -981,7 +984,9 @@ fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, ApiError> {
     }
     if !field.is_empty() || !row.is_empty() {
         row.push(field.trim().to_owned());
-        records.push(row);
+        if row.iter().any(|value| !value.is_empty()) {
+            records.push(row);
+        }
     }
     if records.is_empty() {
         return Err(ApiError::Validation(
@@ -1339,5 +1344,18 @@ mod tests {
         let context = build_context(&[result]);
         assert!(context.contains("id: item-1"));
         assert!(context.contains("[Knowledge Source 1]"));
+    }
+
+    #[test]
+    fn csv_parser_skips_blank_records() {
+        let records = parse_csv_records("first,second\n\n  ,  \nvalue,content\n\n").unwrap();
+
+        assert_eq!(
+            records,
+            vec![
+                vec!["first".to_owned(), "second".to_owned()],
+                vec!["value".to_owned(), "content".to_owned()],
+            ]
+        );
     }
 }
