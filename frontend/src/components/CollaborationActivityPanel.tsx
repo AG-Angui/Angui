@@ -43,8 +43,8 @@ export function CollaborationActivityPanel({ token, spaceId, canBroadcast }: { t
   }, [load, spaceId, token]);
   useEffect(() => () => { if (watchId.current !== null) navigator.geolocation?.clearWatch(watchId.current); }, []);
 
-  const recordPosition = (position: GeolocationPosition) => {
-    if (Date.now() - locationAt.current < LOCATION_INTERVAL_MS) return;
+  const recordPosition = (position: GeolocationPosition, force = false) => {
+    if (!force && Date.now() - locationAt.current < LOCATION_INTERVAL_MS) return;
     locationAt.current = Date.now();
     void recordSpaceLocation(token, spaceId, {
       latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy_meters: position.coords.accuracy,
@@ -56,7 +56,7 @@ export function CollaborationActivityPanel({ token, spaceId, canBroadcast }: { t
     if (!navigator.geolocation) { setError("当前设备不支持定位"); return; }
     setError("");
     navigator.geolocation.getCurrentPosition((position) => {
-      recordPosition(position);
+      recordPosition(position, true);
       const id = navigator.geolocation!.watchPosition(recordPosition, () => setError("位置共享暂时失去定位权限"), { enableHighAccuracy: false, maximumAge: 10_000, timeout: 8_000 });
       watchId.current = id; setIsSharingLocation(true);
     }, () => setError("未获取定位权限；请允许后再开始共享。"), { enableHighAccuracy: false, maximumAge: 10_000, timeout: 8_000 });
