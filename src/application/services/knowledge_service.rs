@@ -880,19 +880,60 @@ pub async fn confirm_import(
     batch_id: &str,
 ) -> Result<KnowledgeImportBatchResponse, ApiError> {
     require_admin(auth)?;
+    let transaction = db.begin().await?;
     let batch = knowledge_import_batches::Entity::find_by_id(batch_id)
-        .one(db)
+        .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("knowledge import batch was not found".to_owned()))?;
     if batch.status == "confirmed" {
+        transaction.rollback().await?;
         return get_import(db, auth, batch_id).await;
     }
     if batch.status != "previewed" {
+        transaction.rollback().await?;
         return Err(ApiError::Conflict(
             "only previewed imports can be confirmed".to_owned(),
         ));
     }
-    let transaction = db.begin().await?;
+
+    // Claim the batch before importing. The status condition makes competing
+    // confirm/cancel requests observe one winner without importing twice.
+    let timestamp = now();
+    let transitioned = knowledge_import_batches::Entity::update_many()
+        .filter(knowledge_import_batches::Column::Id.eq(batch_id))
+        .filter(knowledge_import_batches::Column::Status.eq("previewed"))
+        .col_expr(
+            knowledge_import_batches::Column::Status,
+            Expr::value("confirmed"),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::ConfirmedByUserId,
+            Expr::value(auth.id.clone()),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::ConfirmedAt,
+            Expr::value(timestamp.clone()),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::UpdatedAt,
+            Expr::value(timestamp),
+        )
+        .exec(&transaction)
+        .await?;
+    if transitioned.rows_affected != 1 {
+        transaction.rollback().await?;
+        let current = knowledge_import_batches::Entity::find_by_id(batch_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("knowledge import batch was not found".to_owned()))?;
+        if current.status == "confirmed" {
+            return get_import(db, auth, batch_id).await;
+        }
+        return Err(ApiError::Conflict(
+            "only previewed imports can be confirmed".to_owned(),
+        ));
+    }
+
     let rows = knowledge_import_rows::Entity::find()
         .filter(knowledge_import_rows::Column::BatchId.eq(batch_id))
         .filter(knowledge_import_rows::Column::Status.eq("valid"))
@@ -973,48 +1014,35 @@ pub async fn confirm_import(
             .exec(&transaction)
             .await?;
     }
-    let timestamp = now();
-    knowledge_import_batches::Entity::update_many()
-        .filter(knowledge_import_batches::Column::Id.eq(batch_id))
-        .col_expr(
-            knowledge_import_batches::Column::Status,
-            Expr::value("confirmed"),
-        )
-        .col_expr(
-            knowledge_import_batches::Column::ConfirmedByUserId,
-            Expr::value(auth.id.clone()),
-        )
-        .col_expr(
-            knowledge_import_batches::Column::ConfirmedAt,
-            Expr::value(timestamp.clone()),
-        )
-        .col_expr(
-            knowledge_import_batches::Column::UpdatedAt,
-            Expr::value(timestamp),
-        )
-        .exec(&transaction)
-        .await?;
     transaction.commit().await?;
     get_import(db, auth, batch_id).await
 }
-
 pub async fn cancel_import(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     batch_id: &str,
 ) -> Result<KnowledgeImportBatchResponse, ApiError> {
     require_admin(auth)?;
+    let transaction = db.begin().await?;
     let batch = knowledge_import_batches::Entity::find_by_id(batch_id)
-        .one(db)
+        .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("knowledge import batch was not found".to_owned()))?;
     if batch.status == "confirmed" {
+        transaction.rollback().await?;
         return Err(ApiError::Conflict(
             "confirmed imports cannot be cancelled".to_owned(),
         ));
     }
-    knowledge_import_batches::Entity::update_many()
+    if batch.status != "previewed" {
+        transaction.rollback().await?;
+        return Err(ApiError::Conflict(
+            "only previewed imports can be cancelled".to_owned(),
+        ));
+    }
+    let transitioned = knowledge_import_batches::Entity::update_many()
         .filter(knowledge_import_batches::Column::Id.eq(batch_id))
+        .filter(knowledge_import_batches::Column::Status.eq("previewed"))
         .col_expr(
             knowledge_import_batches::Column::Status,
             Expr::value("cancelled"),
@@ -1023,11 +1051,24 @@ pub async fn cancel_import(
             knowledge_import_batches::Column::UpdatedAt,
             Expr::value(now()),
         )
-        .exec(db)
+        .exec(&transaction)
         .await?;
+    if transitioned.rows_affected != 1 {
+        transaction.rollback().await?;
+        let current = knowledge_import_batches::Entity::find_by_id(batch_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("knowledge import batch was not found".to_owned()))?;
+        let message = if current.status == "confirmed" {
+            "confirmed imports cannot be cancelled"
+        } else {
+            "only previewed imports can be cancelled"
+        };
+        return Err(ApiError::Conflict(message.to_owned()));
+    }
+    transaction.commit().await?;
     get_import(db, auth, batch_id).await
 }
-
 async fn results_with_images(
     db: &DatabaseConnection,
     items: Vec<knowledge_items::Model>,
