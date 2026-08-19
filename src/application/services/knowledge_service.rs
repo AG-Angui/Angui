@@ -755,11 +755,50 @@ pub async fn preview_csv(
         } else {
             cell(8)
         };
-        let normalized = json!({"knowledge_base_id": base_value, "title": title, "content": content, "summary": summary, "category": category, "keywords": keywords, "source_name": source_name, "source_url": if source_url.is_empty() { Value::Null } else { json!(source_url) }, "visibility": visibility});
-        let duplicate = if title.is_empty() || content.is_empty() {
-            false
+        let validated = validated_item(
+            CreateKnowledgeItemRequest {
+                title: title.to_owned(),
+                summary: summary.to_owned(),
+                content: content.to_owned(),
+                category: category.to_owned(),
+                category_id: None,
+                keywords: keywords.clone(),
+                source_name: Some(source_name.to_owned()),
+                source_url: (!source_url.is_empty()).then(|| source_url.to_owned()),
+                visibility: visibility.to_owned(),
+                images: Vec::new(),
+            },
+            &base.visibility,
+        );
+        let normalized = if let Ok(item) = validated.as_ref() {
+            json!({
+                "knowledge_base_id": base_value,
+                "title": item.title,
+                "content": item.content,
+                "summary": item.summary,
+                "category": item.category,
+                "keywords": item.keywords,
+                "source_name": item.source_name,
+                "source_url": item.source_url,
+                "visibility": item.visibility,
+            })
         } else {
-            let hash = content_hash(title, summary, content, &keywords);
+            json!({
+                "knowledge_base_id": base_value,
+                "title": title,
+                "content": content,
+                "summary": summary,
+                "category": category,
+                "keywords": keywords,
+                "source_name": source_name,
+                "source_url": if source_url.is_empty() { Value::Null } else { json!(source_url) },
+                "visibility": visibility,
+            })
+        };
+        let duplicate = if base_value != base_id {
+            false
+        } else if let Ok(item) = validated.as_ref() {
+            let hash = content_hash(&item.title, &item.summary, &item.content, &item.keywords);
             !seen_hashes.insert(hash.clone())
                 || knowledge_items::Entity::find()
                     .filter(knowledge_items::Column::KnowledgeBaseId.eq(base_id))
@@ -767,17 +806,13 @@ pub async fn preview_csv(
                     .one(&transaction)
                     .await?
                     .is_some()
+        } else {
+            false
         };
         let validation = if base_value != base_id {
             Some("knowledge_base_id does not match the target knowledge base".to_owned())
-        } else if title.is_empty() || content.is_empty() {
-            Some("title and content are required".to_owned())
-        } else if !["public", "authenticated", "volunteer", "learner"].contains(&visibility) {
-            Some("visibility is invalid".to_owned())
-        } else if source_url.starts_with("http://")
-            || (!source_url.is_empty() && !source_url.starts_with("https://"))
-        {
-            Some("source_url must be HTTPS".to_owned())
+        } else if let Err(error) = validated {
+            Some(error.to_string())
         } else if duplicate {
             Some("duplicate content is not allowed".to_owned())
         } else {

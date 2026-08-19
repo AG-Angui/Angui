@@ -199,8 +199,13 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     let base_id = base["id"].as_str().expect("knowledge base id").to_owned();
 
     let boundary = "knowledge-csv-boundary";
+    let long_title = "x".repeat(241);
+    let too_many_keywords = (0..21)
+        .map(|index| format!("tag-{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
     let csv = format!(
-        "knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility\n{base_id},Imported emergency guide,Call emergency services,Immediate response,safety,\"emergency,response\",CSV handbook,https://example.invalid/csv,learner\nwrong-base,Rejected row,Should not import,Invalid,safety,invalid,CSV handbook,https://example.invalid/csv,learner\n"
+        "knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility\n{base_id},Imported emergency guide,Call emergency services,Immediate response,safety,\"emergency,response\",CSV handbook,https://example.invalid/csv,learner\nwrong-base,Rejected row,Should not import,Invalid,safety,invalid,CSV handbook,https://example.invalid/csv,learner\n{base_id},{long_title},Long title content,Invalid,safety,invalid,CSV handbook,https://example.invalid/csv,learner\n{base_id},Too many keywords,Keyword validation,Invalid,safety,\"{too_many_keywords}\",CSV handbook,https://example.invalid/csv,learner\n"
     );
     let mut body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"knowledge.csv\"\r\nContent-Type: text/csv\r\n\r\n"
@@ -227,11 +232,13 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     assert_eq!(preview.status(), StatusCode::CREATED);
     let preview: Value = test::read_body_json(preview).await;
     assert_eq!(preview["status"], "previewed");
-    assert_eq!(preview["total_rows"], 2);
+    assert_eq!(preview["total_rows"], 4);
     assert_eq!(preview["valid_rows"], 1);
-    assert_eq!(preview["invalid_rows"], 1);
+    assert_eq!(preview["invalid_rows"], 3);
     assert_eq!(preview["rows"][0]["status"], "valid");
     assert_eq!(preview["rows"][1]["status"], "invalid");
+    assert_eq!(preview["rows"][2]["status"], "invalid");
+    assert_eq!(preview["rows"][3]["status"], "invalid");
     let batch_id = preview["id"].as_str().expect("import batch id");
 
     let confirm = test::call_service(
@@ -247,6 +254,8 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     assert_eq!(confirm["status"], "confirmed");
     assert_eq!(confirm["rows"][0]["status"], "imported");
     assert_eq!(confirm["rows"][1]["status"], "invalid");
+    assert_eq!(confirm["rows"][2]["status"], "invalid");
+    assert_eq!(confirm["rows"][3]["status"], "invalid");
     assert!(confirm["rows"][0]["knowledge_item_id"].is_string());
     assert!(confirm["rows"][1]["knowledge_item_id"].is_null());
 
