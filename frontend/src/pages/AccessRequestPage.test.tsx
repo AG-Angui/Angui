@@ -66,11 +66,7 @@ describe("AccessRequestPage", () => {
 
     render(<AccessRequestPage />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "验证链接无效、已过期或已被使用",
-      ),
-    );
+    expect(await screen.findByRole("status")).toHaveTextContent("验证链接无效、已过期或已被使用");
     expect(screen.queryByText("secret-token-must-not-render")).not.toBeInTheDocument();
   });
 });

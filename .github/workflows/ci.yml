@@ -33,7 +33,6 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          EVENT_NAME: ${{ github.event_name }}
         with:
           script: |
             const runs = await github.paginate(
@@ -47,15 +46,9 @@ jobs:
                 per_page: 100,
               },
             );
-            // Push runs are the artifact-producing source for preview
-            // deployments. They must execute even when the same SHA already
-            // passed through pull_request CI; otherwise workflow_run preview
-            // jobs receive a successful run with no artifacts to download.
-            const previousSuccess = process.env.EVENT_NAME === 'pull_request'
-              ? runs.find(
-                  (run) => run.id !== context.runId && run.conclusion === 'success',
-                )
-              : undefined;
+            const previousSuccess = runs.find(
+              (run) => run.id !== context.runId && run.conclusion === 'success',
+            );
             const shouldRun = previousSuccess === undefined;
             core.setOutput('should_run', String(shouldRun));
             if (!shouldRun) {

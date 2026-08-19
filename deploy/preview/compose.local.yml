@@ -42,9 +42,6 @@ services:
       ANGUI_FRONTEND_ORIGIN: ${PREVIEW_ORIGIN:?PREVIEW_ORIGIN is required}
       DATABASE_URL: ${PREVIEW_DATABASE_URL:-sqlite:///app/data/angui.db?mode=rwc}
       RUST_LOG: ${RUST_LOG:-info}
-      # Preview is disposable; retain location samples for one day so the
-      # collaboration map and E2E/demo sharing flow are usable by default.
-      ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: ${ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS:-24}
       # Optional server-only Web Service credential. It is intentionally not
       # present in the frontend, migration, or bootstrap containers.
       AMAP_WEBSERVICE_KEY: ${AMAP_WEBSERVICE_KEY:-}

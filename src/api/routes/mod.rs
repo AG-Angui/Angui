@@ -3,7 +3,6 @@ mod ai_executions;
 mod auth;
 mod cases;
 mod clues;
-mod collaboration_spaces;
 mod health;
 mod intake_sessions;
 mod learning;
@@ -51,10 +50,6 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .configure(learning::configure)
             .configure(admin::configure)
             .configure(user_profiles::configure)
-            // This scope begins with `/cases/{case_id}` and must be registered
-            // before the general `/cases` scope, which otherwise captures the
-            // prefix and produces a router-level 404 without backtracking.
-            .configure(collaboration_spaces::configure)
             .configure(cases::configure)
             .configure(intake_sessions::configure)
             .configure(clues::configure)

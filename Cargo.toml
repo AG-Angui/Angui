@@ -12,17 +12,7 @@ resolver = "2"
 [dependencies]
 actix-cors = "0.7.1"
 actix-multipart = "0.7.2"
-# Keep HTTP/2 disabled until Actix HTTP moves to a fixed h2 release.
-actix-web = { version = "4.14.0", default-features = false, features = [
-    "macros",
-    "compress-brotli",
-    "compress-gzip",
-    "compress-zstd",
-    "cookies",
-    "unicode",
-    "compat",
-    "ws",
-] }
+actix-web = "4.14.0"
 argon2 = "0.5.3"
 chrono = "0.4.42"
 dotenvy = "0.15.7"
