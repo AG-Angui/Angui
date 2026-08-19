@@ -446,8 +446,8 @@ export function LearningGovernancePage() {
           <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Images</span><strong>{knowledgeOverview.image_count}</strong></div>
         </div>}
         <form className="grid gap-3 border-b border-slate-100 p-5 lg:grid-cols-3" onSubmit={createBase}>
-          <label className="grid gap-1 text-sm text-slate-700">资料库名称<Input value={knowledgeBaseName} onChange={(event) => setKnowledgeBaseName(event.target.value)} required /></label>
-          <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">说明<Input value={knowledgeBaseDescription} onChange={(event) => setKnowledgeBaseDescription(event.target.value)} /></label>
+          <label className="grid gap-1 text-sm text-slate-700">资料库名称<Input aria-label="资料库名称" value={knowledgeBaseName} onChange={(event) => setKnowledgeBaseName(event.target.value)} required /></label>
+          <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">说明<Input aria-label="说明" value={knowledgeBaseDescription} onChange={(event) => setKnowledgeBaseDescription(event.target.value)} /></label>
           <div className="lg:col-span-3"><Button type="submit" isDisabled={busyId === "knowledge-base"}>{busyId === "knowledge-base" ? <Spinner size="sm" /> : "新建资料库"}</Button></div>
         </form>
         <div className="divide-y divide-slate-100">
