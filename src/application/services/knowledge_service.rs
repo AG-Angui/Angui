@@ -520,6 +520,22 @@ pub async fn preview_csv(
     let timestamp = now();
     let batch_id = case_service::new_id();
     let transaction = db.begin().await?;
+    knowledge_import_batches::ActiveModel {
+        id: Set(batch_id.clone()),
+        knowledge_base_id: Set(base_id.to_owned()),
+        file_name: Set(file_name),
+        status: Set("previewed".to_owned()),
+        total_rows: Set(0),
+        valid_rows: Set(0),
+        invalid_rows: Set(0),
+        created_by_user_id: Set(auth.id.clone()),
+        confirmed_by_user_id: Set(None),
+        created_at: Set(timestamp.clone()),
+        confirmed_at: Set(None),
+        updated_at: Set(timestamp.clone()),
+    }
+    .insert(&transaction)
+    .await?;
     let mut rows = Vec::new();
     let mut seen_hashes = HashSet::new();
     for (index, record) in records.into_iter().skip(1).enumerate() {
@@ -616,22 +632,26 @@ pub async fn preview_csv(
     }
     let valid_rows = rows.iter().filter(|(_, status)| status == "valid").count() as i32;
     let invalid_rows = rows.len() as i32 - valid_rows;
-    knowledge_import_batches::ActiveModel {
-        id: Set(batch_id.clone()),
-        knowledge_base_id: Set(base_id.to_owned()),
-        file_name: Set(file_name),
-        status: Set("previewed".to_owned()),
-        total_rows: Set(rows.len() as i32),
-        valid_rows: Set(valid_rows),
-        invalid_rows: Set(invalid_rows),
-        created_by_user_id: Set(auth.id.clone()),
-        confirmed_by_user_id: Set(None),
-        created_at: Set(timestamp.clone()),
-        confirmed_at: Set(None),
-        updated_at: Set(timestamp),
-    }
-    .insert(&transaction)
-    .await?;
+    knowledge_import_batches::Entity::update_many()
+        .filter(knowledge_import_batches::Column::Id.eq(&batch_id))
+        .col_expr(
+            knowledge_import_batches::Column::TotalRows,
+            Expr::value(rows.len() as i32),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::ValidRows,
+            Expr::value(valid_rows),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::InvalidRows,
+            Expr::value(invalid_rows),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::UpdatedAt,
+            Expr::value(timestamp),
+        )
+        .exec(&transaction)
+        .await?;
     transaction.commit().await?;
     get_import(db, auth, &batch_id).await
 }
