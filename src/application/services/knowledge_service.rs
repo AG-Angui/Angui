@@ -1,10 +1,16 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use std::collections::{HashMap, HashSet};
 
+use actix_web::web;
 use chrono::{SecondsFormat, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-    QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 
@@ -19,13 +25,17 @@ use crate::{
     error::ApiError,
     models::{
         AuthenticatedUser, CreateKnowledgeBaseRequest, CreateKnowledgeItemRequest,
-        KnowledgeBaseResponse, KnowledgeChatResponse, KnowledgeChatSourceResponse,
-        KnowledgeImageInput, KnowledgeImageResponse, KnowledgeImportBatchResponse,
-        KnowledgeImportRowResponse, KnowledgeSearchResponse, KnowledgeSearchResultResponse,
-        UpdateKnowledgeBaseRequest, UpdateKnowledgeItemRequest,
+        KnowledgeBaseOverviewResponse, KnowledgeBaseResponse, KnowledgeChatResponse,
+        KnowledgeChatSourceResponse, KnowledgeImageInput, KnowledgeImageResponse,
+        KnowledgeImportBatchResponse, KnowledgeImportRowResponse, KnowledgeOverviewResponse,
+        KnowledgeSearchResponse, KnowledgeSearchResultResponse, UpdateKnowledgeBaseRequest,
+        UpdateKnowledgeItemRequest,
     },
     roles::{AccountType, GlobalCapability},
-    services::case_service,
+    services::{
+        case_resource_service::{AttachmentUpload, normalize_image_upload},
+        case_service,
+    },
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -59,6 +69,78 @@ pub async fn list_bases(
         .into_iter()
         .map(base_response)
         .collect()
+}
+pub async fn overview(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<KnowledgeOverviewResponse, ApiError> {
+    require_admin(auth)?;
+    let bases = knowledge_bases::Entity::find()
+        .order_by_asc(knowledge_bases::Column::Name)
+        .all(db)
+        .await?;
+    let mut total_items = 0;
+    let mut draft_items = 0;
+    let mut reviewed_items = 0;
+    let mut published_items = 0;
+    let mut withdrawn_items = 0;
+    let mut image_count = 0;
+    let mut summaries = Vec::with_capacity(bases.len());
+    for base in bases {
+        let items = knowledge_items::Entity::find()
+            .filter(knowledge_items::Column::KnowledgeBaseId.eq(&base.id))
+            .all(db)
+            .await?;
+        let ids: Vec<_> = items.iter().map(|item| item.id.clone()).collect();
+        let base_images = if ids.is_empty() {
+            0
+        } else {
+            knowledge_images::Entity::find()
+                .filter(knowledge_images::Column::KnowledgeItemId.is_in(ids))
+                .count(db)
+                .await?
+        };
+        let count = |status: &str| items.iter().filter(|item| item.status == status).count() as u64;
+        let total = items.len() as u64;
+        let draft = count("draft") + count("submitted");
+        let reviewed = count("reviewed");
+        let published = count("published");
+        let withdrawn = count("withdrawn");
+        total_items += total;
+        draft_items += draft;
+        reviewed_items += reviewed;
+        published_items += published;
+        withdrawn_items += withdrawn;
+        image_count += base_images;
+        summaries.push(KnowledgeBaseOverviewResponse {
+            id: base.id,
+            name: base.name,
+            status: base.status,
+            visibility: base.visibility,
+            total_items: total,
+            draft_items: draft,
+            reviewed_items: reviewed,
+            published_items: published,
+            withdrawn_items: withdrawn,
+            image_count: base_images,
+        });
+    }
+    let total_bases = summaries.len() as u64;
+    let enabled_bases = summaries
+        .iter()
+        .filter(|base| base.status == "enabled")
+        .count() as u64;
+    Ok(KnowledgeOverviewResponse {
+        total_bases,
+        enabled_bases,
+        total_items,
+        draft_items,
+        reviewed_items,
+        published_items,
+        withdrawn_items,
+        image_count,
+        bases: summaries,
+    })
 }
 
 pub async fn get_base(
@@ -155,6 +237,101 @@ pub async fn get_item(
         .into_iter()
         .next()
         .ok_or(ApiError::Internal)
+}
+
+pub async fn upload_image(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    item_id: &str,
+    upload: AttachmentUpload<'_>,
+    directory: &Path,
+    max_image_bytes: usize,
+) -> Result<KnowledgeImageResponse, ApiError> {
+    require_admin(auth)?;
+    let item = find_item(db, item_id).await?;
+    let (mime_type, _filename, bytes) = normalize_image_upload(upload, max_image_bytes).await?;
+    let image_id = case_service::new_id();
+    let extension = if mime_type == "image/png" {
+        "png"
+    } else {
+        "jpg"
+    };
+    let relative = PathBuf::from("knowledge")
+        .join(item_id)
+        .join(format!("{image_id}.{extension}"));
+    let path = directory.join(&relative);
+    let parent = path.parent().ok_or(ApiError::Internal)?.to_path_buf();
+    let write_path = path.clone();
+    web::block(move || {
+        fs::create_dir_all(parent)?;
+        fs::write(write_path, bytes)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(|_| ApiError::Internal)?;
+    let storage_path = format!("/api/admin/knowledge-items/{item_id}/images/{image_id}");
+    let image = knowledge_images::ActiveModel {
+        id: Set(image_id),
+        knowledge_item_id: Set(item.id),
+        storage_path: Set(storage_path),
+        mime_type: Set(mime_type),
+        width: Set(None),
+        height: Set(None),
+        metadata_json: Set("{}".to_owned()),
+        created_at: Set(now()),
+    }
+    .insert(db)
+    .await;
+    match image {
+        Ok(image) => image_response(image),
+        Err(error) => {
+            let _ = fs::remove_file(path);
+            Err(ApiError::Database(error))
+        }
+    }
+}
+
+pub async fn load_image(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    item_id: &str,
+    image_id: &str,
+    directory: &Path,
+) -> Result<(String, Vec<u8>), ApiError> {
+    let item = find_item(db, item_id).await?;
+    if !auth.global_capabilities.contains(&GlobalCapability::Admin) {
+        let base = find_base(db, &item.knowledge_base_id).await?;
+        if base.status != "enabled"
+            || item.status != "published"
+            || item.effective_at > now()
+            || item.withdrawn_at.is_some()
+            || !visible_to(auth, &base.visibility)
+            || !visible_to(auth, &item.visibility)
+        {
+            return Err(ApiError::NotFound(
+                "knowledge image was not found".to_owned(),
+            ));
+        }
+    }
+    let image = knowledge_images::Entity::find_by_id(image_id)
+        .one(db)
+        .await?
+        .filter(|image| image.knowledge_item_id == item_id)
+        .ok_or_else(|| ApiError::NotFound("knowledge image was not found".to_owned()))?;
+    let extension = if image.mime_type == "image/png" {
+        "png"
+    } else {
+        "jpg"
+    };
+    let path = directory
+        .join("knowledge")
+        .join(item_id)
+        .join(format!("{image_id}.{extension}"));
+    let bytes = web::block(move || fs::read(path))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(|_| ApiError::Internal)?;
+    Ok((image.mime_type, bytes))
 }
 
 pub async fn create_item(
@@ -885,6 +1062,7 @@ async fn results_with_images(
             version: item.version,
             source_name: item.source_name,
             source_url: item.source_url,
+            status: item.status,
             images: images_by_item.remove(&item.id).unwrap_or_default(),
         })
         .collect())
@@ -1340,6 +1518,7 @@ mod tests {
             source_name: "Source".to_owned(),
             source_url: None,
             images: Vec::new(),
+            status: "published".to_owned(),
         };
         let context = build_context(&[result]);
         assert!(context.contains("id: item-1"));

@@ -349,6 +349,33 @@ pub struct KnowledgeSearchRequest {
     pub limit: Option<u32>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct KnowledgeBaseOverviewResponse {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub visibility: String,
+    pub total_items: u64,
+    pub draft_items: u64,
+    pub reviewed_items: u64,
+    pub published_items: u64,
+    pub withdrawn_items: u64,
+    pub image_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeOverviewResponse {
+    pub total_bases: u64,
+    pub enabled_bases: u64,
+    pub total_items: u64,
+    pub draft_items: u64,
+    pub reviewed_items: u64,
+    pub published_items: u64,
+    pub withdrawn_items: u64,
+    pub image_count: u64,
+    pub bases: Vec<KnowledgeBaseOverviewResponse>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct KnowledgeSearchResultResponse {
     pub knowledge_item_id: String,
@@ -360,8 +387,8 @@ pub struct KnowledgeSearchResultResponse {
     pub source_name: String,
     pub source_url: Option<String>,
     pub images: Vec<KnowledgeImageResponse>,
+    pub status: String,
 }
-
 #[derive(Debug, Serialize)]
 pub struct KnowledgeSearchResponse {
     pub results: Vec<KnowledgeSearchResultResponse>,

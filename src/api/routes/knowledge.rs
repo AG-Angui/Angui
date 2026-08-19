@@ -1,5 +1,5 @@
 use actix_multipart::Multipart;
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpResponse, http::header, web};
 use futures_util::StreamExt;
 
 use crate::{
@@ -12,7 +12,6 @@ use crate::{
     },
     services::knowledge_service,
 };
-
 pub fn configure(config: &mut web::ServiceConfig) {
     config
         .service(
@@ -25,7 +24,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{id}/disable", web::post().to(disable_base))
                 .route("/{id}/items", web::get().to(list_items))
                 .route("/{id}/items", web::post().to(create_item))
-                .route("/{id}/imports/preview", web::post().to(preview_import)),
+                .route("/{id}/imports/preview", web::post().to(preview_import))
+                .route("/{id}/overview", web::get().to(overview)),
         )
         .service(
             web::scope("/admin/knowledge-items")
@@ -33,7 +33,9 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{id}", web::patch().to(update_item))
                 .route("/{id}/review", web::post().to(review_item))
                 .route("/{id}/publish", web::post().to(publish_item))
-                .route("/{id}/withdraw", web::post().to(withdraw_item)),
+                .route("/{id}/withdraw", web::post().to(withdraw_item))
+                .route("/{id}/images", web::post().to(upload_image))
+                .route("/{id}/images/{image_id}", web::get().to(load_image)),
         )
         .service(
             web::scope("/knowledge-bases")
@@ -54,6 +56,7 @@ async fn list_bases(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(knowledge_service::list_bases(&state.db, &auth).await?))
 }
+
 async fn create_base(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -62,6 +65,21 @@ async fn create_base(
     Ok(HttpResponse::Created()
         .json(knowledge_service::create_base(&state.db, &auth, request.into_inner()).await?))
 }
+
+async fn overview(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    let overview = knowledge_service::overview(&state.db, &auth).await?;
+    if !overview.bases.iter().any(|base| base.id == *id) {
+        return Err(ApiError::NotFound(
+            "knowledge base was not found".to_owned(),
+        ));
+    }
+    Ok(HttpResponse::Ok().json(overview))
+}
+
 async fn get_base(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -116,6 +134,55 @@ async fn get_item(
     id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(knowledge_service::get_item(&state.db, &auth, &id).await?))
+}
+async fn upload_image(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+    multipart: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    let (filename, content_type, bytes) =
+        crate::services::case_resource_service::read_single_image_upload(
+            multipart,
+            state.attachment_max_image_bytes,
+        )
+        .await?;
+    let image = knowledge_service::upload_image(
+        &state.db,
+        &auth,
+        &id,
+        crate::services::case_resource_service::AttachmentUpload {
+            filename: &filename,
+            declared_content_type: &content_type,
+            bytes: &bytes,
+        },
+        &state.attachment_storage_directory,
+        state.attachment_max_image_bytes,
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(image))
+}
+
+async fn load_image(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (item_id, image_id) = path.into_inner();
+    let (content_type, bytes) = knowledge_service::load_image(
+        &state.db,
+        &auth,
+        &item_id,
+        &image_id,
+        &state.attachment_storage_directory,
+    )
+    .await?;
+    Ok(HttpResponse::Ok()
+        .insert_header((header::CONTENT_TYPE, content_type))
+        .insert_header((header::CONTENT_DISPOSITION, "inline"))
+        .insert_header((header::CACHE_CONTROL, "no-store, private"))
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .body(bytes))
 }
 async fn update_item(
     auth: AuthenticatedUser,

@@ -3,6 +3,7 @@ import { BookOpen, Send, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   askKnowledge,
+  downloadKnowledgeImage,
   getPublicPreventionCard,
   listLearningCategories,
   listLearningQuestions,
@@ -75,6 +76,20 @@ export function LearningCenterPage() {
     Record<string, { isCorrect: boolean; explanation: string }>
   >({});
   const [answeringQuestion, setAnsweringQuestion] = useState("");
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!token || !answer) return;
+    let cancelled = false;
+    const loadImages = async () => {
+      const entries = await Promise.all(answer.sources.flatMap((source) => (source.images ?? []).map(async (image) => {
+        try { const blob = await downloadKnowledgeImage(token, source.knowledge_item_id, image.id); return [image.id, URL.createObjectURL(blob)] as const; } catch { return null; }
+      })));
+      if (!cancelled) setImageUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))));
+    };
+    void loadImages();
+    return () => { cancelled = true; };
+  }, [answer, token]);
 
   const load = useCallback(async () => {
     if (!token) {
@@ -495,7 +510,7 @@ export function LearningCenterPage() {
                       {answer.sources.flatMap((source) => source.images ?? []).map((image) => (
                         <img
                           key={image.id}
-                          src={image.storage_path}
+                          src={imageUrls[image.id] ?? ""}
                           alt="Knowledge source image"
                           className="aspect-video w-full rounded-md border border-slate-200 object-cover"
                           loading="lazy"
