@@ -1,28 +1,51 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{SecondsFormat, Utc};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
     QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 
+use crate::ai_gateway::{
+    AiCapability, AiExecutionResult, AiGateway, AiPurpose, AiRequest, DataLevel,
+};
 use crate::{
-    entities::{knowledge_bases, knowledge_images, knowledge_items},
+    entities::{
+        knowledge_bases, knowledge_images, knowledge_import_batches, knowledge_import_rows,
+        knowledge_items,
+    },
     error::ApiError,
     models::{
         AuthenticatedUser, CreateKnowledgeBaseRequest, CreateKnowledgeItemRequest,
         KnowledgeBaseResponse, KnowledgeChatResponse, KnowledgeChatSourceResponse,
-        KnowledgeImageInput, KnowledgeImageResponse, KnowledgeSearchResponse,
-        KnowledgeSearchResultResponse, UpdateKnowledgeBaseRequest,
+        KnowledgeImageInput, KnowledgeImageResponse, KnowledgeImportBatchResponse,
+        KnowledgeImportRowResponse, KnowledgeSearchResponse, KnowledgeSearchResultResponse,
+        UpdateKnowledgeBaseRequest, UpdateKnowledgeItemRequest,
     },
     roles::{AccountType, GlobalCapability},
     services::case_service,
 };
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 const MAX_QUERY_LENGTH: usize = 1_000;
 const DEFAULT_LIMIT: u32 = 5;
 const MAX_LIMIT: u32 = 20;
+const MAX_IMPORT_BYTES: usize = 5 * 1024 * 1024;
+const MAX_IMPORT_ROWS: usize = 5_000;
+const CSV_HEADERS: [&str; 9] = [
+    "knowledge_base_id",
+    "title",
+    "content",
+    "summary",
+    "category",
+    "keywords",
+    "source_name",
+    "source_url",
+    "visibility",
+];
 
 pub async fn list_bases(
     db: &DatabaseConnection,
@@ -199,6 +222,66 @@ pub async fn create_item(
     get_item(db, auth, &item.id).await
 }
 
+pub async fn update_item(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    id: &str,
+    request: UpdateKnowledgeItemRequest,
+) -> Result<KnowledgeSearchResultResponse, ApiError> {
+    require_admin(auth)?;
+    let existing = find_item(db, id).await?;
+    let base = find_base(db, &existing.knowledge_base_id).await?;
+    let input = merge_item(existing.clone(), request, &base.visibility)?;
+    let hash = content_hash(
+        &input.title,
+        &input.summary,
+        &input.content,
+        &input.keywords,
+    );
+    if knowledge_items::Entity::find()
+        .filter(knowledge_items::Column::KnowledgeBaseId.eq(&existing.knowledge_base_id))
+        .filter(knowledge_items::Column::ContentHash.eq(&hash))
+        .filter(knowledge_items::Column::Id.ne(&existing.id))
+        .one(db)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(
+            "an item with the same content already exists in this knowledge base".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    if let Some(images) = input.images.as_ref() {
+        ensure_unique_images_except(&transaction, images, id).await?;
+        knowledge_images::Entity::delete_many()
+            .filter(knowledge_images::Column::KnowledgeItemId.eq(id))
+            .exec(&transaction)
+            .await?;
+    }
+    let mut active: knowledge_items::ActiveModel = existing.into();
+    active.title = Set(input.title);
+    active.summary = Set(input.summary);
+    active.content = Set(input.content);
+    active.category = Set(input.category);
+    active.category_id = Set(input.category_id);
+    active.keywords_json =
+        Set(serde_json::to_string(&input.keywords).map_err(|_| ApiError::Internal)?);
+    active.source_name = Set(input.source_name);
+    active.source_url = Set(input.source_url);
+    active.visibility = Set(input.visibility);
+    active.content_hash = Set(hash);
+    active.status = Set("draft".to_owned());
+    active.withdrawn_at = Set(None);
+    let timestamp = now();
+    active.updated_at = Set(timestamp.clone());
+    let item = active.update(&transaction).await?;
+    if let Some(images) = input.images {
+        insert_images(&transaction, &item.id, images, &timestamp).await?;
+    }
+    transaction.commit().await?;
+    get_item(db, auth, id).await
+}
+
 pub async fn transition_item(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -336,6 +419,418 @@ pub async fn chat(
     })
 }
 
+pub async fn chat_with_gateway(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+    query: &str,
+    limit: Option<u32>,
+    gateway: &AiGateway,
+) -> Result<KnowledgeChatResponse, ApiError> {
+    let results = search(db, auth, base_id, query, limit).await?.results;
+    let sources = results
+        .iter()
+        .map(|result| KnowledgeChatSourceResponse {
+            knowledge_item_id: result.knowledge_item_id.clone(),
+            title: result.title.clone(),
+            version: result.version,
+            score: result.score,
+            images: result.images.clone(),
+        })
+        .collect::<Vec<_>>();
+    if results.is_empty() {
+        return Ok(KnowledgeChatResponse { answer: "The published knowledge base does not contain enough material to answer this question.".to_owned(), certainty: "insufficient_sources".to_owned(), sources, human_review_notice: review_notice().to_owned() });
+    }
+    let deterministic = results
+        .iter()
+        .map(|result| format!("{} [source:{}]", result.content, result.knowledge_item_id))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let context = build_context(&results);
+    let request = AiRequest {
+        capability: AiCapability::KnowledgeAnswer,
+        data_level: DataLevel::Public,
+        purpose: AiPurpose::KnowledgeAnswer,
+        data_region: "CN".to_owned(),
+        system_instruction: Some("Return JSON only with an answer string. Use only the supplied knowledge sources. Do not invent facts or source IDs. Add citations in the form [source:<knowledge_item_id>] when making factual claims. If the sources are insufficient, say so clearly.".to_owned()),
+        output_schema: Some(json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false})),
+        output_schema_name: Some("knowledge_answer".to_owned()),
+        input: serde_json::to_string(&json!({"context": context, "question": query})).map_err(|_| ApiError::Internal)?,
+        requested_output_tokens: 700,
+        template_version: "knowledge-answer-v1".to_owned(),
+        input_scope_reference: format!("knowledge-base:{}", base_id),
+        redaction_policy_version: "knowledge-public-v1".to_owned(),
+    };
+    match gateway.execute(&request).await {
+        AiExecutionResult::Completed { output, .. } => {
+            #[derive(Deserialize)]
+            struct ModelAnswer {
+                answer: String,
+            }
+            match gateway.decode_json::<ModelAnswer>(&output) {
+                Ok(value) if !value.answer.trim().is_empty() => Ok(KnowledgeChatResponse {
+                    answer: value.answer,
+                    certainty: "source_backed".to_owned(),
+                    sources,
+                    human_review_notice: review_notice().to_owned(),
+                }),
+                _ => Ok(KnowledgeChatResponse {
+                    answer: deterministic,
+                    certainty: "rule_based".to_owned(),
+                    sources,
+                    human_review_notice: review_notice().to_owned(),
+                }),
+            }
+        }
+        AiExecutionResult::Degraded { .. } | AiExecutionResult::Failed { .. } => {
+            Ok(KnowledgeChatResponse {
+                answer: deterministic,
+                certainty: "rule_based".to_owned(),
+                sources,
+                human_review_notice: review_notice().to_owned(),
+            })
+        }
+    }
+}
+
+pub async fn preview_csv(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<KnowledgeImportBatchResponse, ApiError> {
+    require_admin(auth)?;
+    let base = find_base(db, base_id).await?;
+    if bytes.len() > MAX_IMPORT_BYTES {
+        return Err(ApiError::Validation(
+            "CSV file must not exceed 5 MB".to_owned(),
+        ));
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| ApiError::Validation("CSV must be UTF-8".to_owned()))?;
+    let records = parse_csv_records(text)?;
+    let headers = records.first().cloned().unwrap_or_default();
+    if headers != CSV_HEADERS {
+        return Err(ApiError::Validation(format!(
+            "CSV header must be exactly: {}",
+            CSV_HEADERS.join(",")
+        )));
+    }
+    let timestamp = now();
+    let batch_id = case_service::new_id();
+    let transaction = db.begin().await?;
+    let mut rows = Vec::new();
+    let mut seen_hashes = HashSet::new();
+    for (index, record) in records.into_iter().skip(1).enumerate() {
+        if index >= MAX_IMPORT_ROWS {
+            return Err(ApiError::Validation(
+                "CSV must not contain more than 5000 rows".to_owned(),
+            ));
+        }
+        let row_number = (index + 2) as i32;
+        if record.len() != CSV_HEADERS.len() {
+            return Err(ApiError::Validation(format!(
+                "CSV row {row_number} must contain exactly 9 columns"
+            )));
+        }
+        let raw = record.clone();
+        let raw_json = serde_json::to_string(&raw).map_err(|_| ApiError::Internal)?;
+        let cell = |index: usize| record.get(index).map(String::as_str).unwrap_or("").trim();
+        let base_value = cell(0);
+        let title = cell(1);
+        let content = cell(2);
+        let summary = cell(3);
+        let category = cell(4);
+        let keywords = record
+            .get(5)
+            .map(String::as_str)
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let source_name = if cell(6).is_empty() {
+            "CSV Import"
+        } else {
+            cell(6)
+        };
+        let source_url = cell(7);
+        let visibility = if cell(8).is_empty() {
+            base.visibility.as_str()
+        } else {
+            cell(8)
+        };
+        let normalized = json!({"knowledge_base_id": base_value, "title": title, "content": content, "summary": summary, "category": category, "keywords": keywords, "source_name": source_name, "source_url": if source_url.is_empty() { Value::Null } else { json!(source_url) }, "visibility": visibility});
+        let duplicate = if title.is_empty() || content.is_empty() {
+            false
+        } else {
+            let hash = content_hash(title, summary, content, &keywords);
+            !seen_hashes.insert(hash.clone())
+                || knowledge_items::Entity::find()
+                    .filter(knowledge_items::Column::KnowledgeBaseId.eq(base_id))
+                    .filter(knowledge_items::Column::ContentHash.eq(hash))
+                    .one(&transaction)
+                    .await?
+                    .is_some()
+        };
+        let validation = if base_value != base_id {
+            Some("knowledge_base_id does not match the target knowledge base".to_owned())
+        } else if title.is_empty() || content.is_empty() {
+            Some("title and content are required".to_owned())
+        } else if !["public", "authenticated", "volunteer", "learner"].contains(&visibility) {
+            Some("visibility is invalid".to_owned())
+        } else if source_url.starts_with("http://")
+            || (!source_url.is_empty() && !source_url.starts_with("https://"))
+        {
+            Some("source_url must be HTTPS".to_owned())
+        } else if duplicate {
+            Some("duplicate content is not allowed".to_owned())
+        } else {
+            None
+        };
+        let status = if duplicate {
+            "duplicate"
+        } else if validation.is_some() {
+            "invalid"
+        } else {
+            "valid"
+        };
+        knowledge_import_rows::ActiveModel {
+            id: Set(case_service::new_id()),
+            batch_id: Set(batch_id.clone()),
+            row_number: Set(row_number),
+            raw_data_json: Set(raw_json),
+            normalized_data_json: Set(
+                serde_json::to_string(&normalized).map_err(|_| ApiError::Internal)?
+            ),
+            status: Set(status.to_owned()),
+            error_message: Set(validation),
+            knowledge_item_id: Set(None),
+            created_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+        rows.push((row_number, status.to_owned()));
+    }
+    let valid_rows = rows.iter().filter(|(_, status)| status == "valid").count() as i32;
+    let invalid_rows = rows.len() as i32 - valid_rows;
+    knowledge_import_batches::ActiveModel {
+        id: Set(batch_id.clone()),
+        knowledge_base_id: Set(base_id.to_owned()),
+        file_name: Set(file_name),
+        status: Set("previewed".to_owned()),
+        total_rows: Set(rows.len() as i32),
+        valid_rows: Set(valid_rows),
+        invalid_rows: Set(invalid_rows),
+        created_by_user_id: Set(auth.id.clone()),
+        confirmed_by_user_id: Set(None),
+        created_at: Set(timestamp.clone()),
+        confirmed_at: Set(None),
+        updated_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+    transaction.commit().await?;
+    get_import(db, auth, &batch_id).await
+}
+
+pub async fn get_import(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    batch_id: &str,
+) -> Result<KnowledgeImportBatchResponse, ApiError> {
+    require_admin(auth)?;
+    let batch = knowledge_import_batches::Entity::find_by_id(batch_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("knowledge import batch was not found".to_owned()))?;
+    let rows = knowledge_import_rows::Entity::find()
+        .filter(knowledge_import_rows::Column::BatchId.eq(batch_id))
+        .order_by_asc(knowledge_import_rows::Column::RowNumber)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(KnowledgeImportRowResponse {
+                id: row.id,
+                row_number: row.row_number,
+                status: row.status,
+                error_message: row.error_message,
+                normalized_data: serde_json::from_str(&row.normalized_data_json)
+                    .map_err(|_| ApiError::Internal)?,
+                knowledge_item_id: row.knowledge_item_id,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    Ok(KnowledgeImportBatchResponse {
+        id: batch.id,
+        knowledge_base_id: batch.knowledge_base_id,
+        file_name: batch.file_name,
+        status: batch.status,
+        total_rows: batch.total_rows,
+        valid_rows: batch.valid_rows,
+        invalid_rows: batch.invalid_rows,
+        rows,
+        confirmed_at: batch.confirmed_at,
+    })
+}
+
+pub async fn confirm_import(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    batch_id: &str,
+) -> Result<KnowledgeImportBatchResponse, ApiError> {
+    require_admin(auth)?;
+    let batch = knowledge_import_batches::Entity::find_by_id(batch_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("knowledge import batch was not found".to_owned()))?;
+    if batch.status == "confirmed" {
+        return get_import(db, auth, batch_id).await;
+    }
+    if batch.status != "previewed" {
+        return Err(ApiError::Conflict(
+            "only previewed imports can be confirmed".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let rows = knowledge_import_rows::Entity::find()
+        .filter(knowledge_import_rows::Column::BatchId.eq(batch_id))
+        .filter(knowledge_import_rows::Column::Status.eq("valid"))
+        .all(&transaction)
+        .await?;
+    for row in rows {
+        let value: Value =
+            serde_json::from_str(&row.normalized_data_json).map_err(|_| ApiError::Internal)?;
+        let title = value["title"].as_str().unwrap_or_default().to_owned();
+        let summary = value["summary"].as_str().unwrap_or_default().to_owned();
+        let content = value["content"].as_str().unwrap_or_default().to_owned();
+        let keywords: Vec<String> =
+            serde_json::from_value(value["keywords"].clone()).map_err(|_| ApiError::Internal)?;
+        let hash = content_hash(&title, &summary, &content, &keywords);
+        if knowledge_items::Entity::find()
+            .filter(knowledge_items::Column::KnowledgeBaseId.eq(&batch.knowledge_base_id))
+            .filter(knowledge_items::Column::ContentHash.eq(&hash))
+            .one(&transaction)
+            .await?
+            .is_some()
+        {
+            knowledge_import_rows::Entity::update_many()
+                .filter(knowledge_import_rows::Column::Id.eq(&row.id))
+                .col_expr(
+                    knowledge_import_rows::Column::Status,
+                    Expr::value("duplicate"),
+                )
+                .exec(&transaction)
+                .await?;
+            continue;
+        }
+        let timestamp = now();
+        let item_id = case_service::new_id();
+        knowledge_items::ActiveModel {
+            id: Set(item_id.clone()),
+            knowledge_base_id: Set(batch.knowledge_base_id.clone()),
+            title: Set(title),
+            summary: Set(summary),
+            content: Set(content),
+            category: Set(value["category"].as_str().unwrap_or_default().to_owned()),
+            category_id: Set(None),
+            keywords_json: Set(serde_json::to_string(&keywords).map_err(|_| ApiError::Internal)?),
+            metadata_json: Set("{}".to_owned()),
+            source_name: Set(value["source_name"]
+                .as_str()
+                .unwrap_or("CSV Import")
+                .to_owned()),
+            source_url: Set(value["source_url"].as_str().map(str::to_owned)),
+            visibility: Set(value["visibility"].as_str().unwrap_or("learner").to_owned()),
+            status: Set("draft".to_owned()),
+            effective_at: Set(timestamp.clone()),
+            withdrawn_at: Set(None),
+            previous_version_id: Set(None),
+            version: Set(1),
+            content_hash: Set(hash),
+            embedding_json: Set(None),
+            embedding_model: Set(None),
+            embedding_dimension: Set(None),
+            embedding_status: Set("none".to_owned()),
+            embedding_generated_at: Set(None),
+            embedding_content_hash: Set(None),
+            created_by_user_id: Set(auth.id.clone()),
+            created_at: Set(timestamp.clone()),
+            updated_at: Set(timestamp),
+        }
+        .insert(&transaction)
+        .await?;
+        knowledge_import_rows::Entity::update_many()
+            .filter(knowledge_import_rows::Column::Id.eq(&row.id))
+            .col_expr(
+                knowledge_import_rows::Column::Status,
+                Expr::value("imported"),
+            )
+            .col_expr(
+                knowledge_import_rows::Column::KnowledgeItemId,
+                Expr::value(item_id),
+            )
+            .exec(&transaction)
+            .await?;
+    }
+    let timestamp = now();
+    knowledge_import_batches::Entity::update_many()
+        .filter(knowledge_import_batches::Column::Id.eq(batch_id))
+        .col_expr(
+            knowledge_import_batches::Column::Status,
+            Expr::value("confirmed"),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::ConfirmedByUserId,
+            Expr::value(auth.id.clone()),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::ConfirmedAt,
+            Expr::value(timestamp.clone()),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::UpdatedAt,
+            Expr::value(timestamp),
+        )
+        .exec(&transaction)
+        .await?;
+    transaction.commit().await?;
+    get_import(db, auth, batch_id).await
+}
+
+pub async fn cancel_import(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    batch_id: &str,
+) -> Result<KnowledgeImportBatchResponse, ApiError> {
+    require_admin(auth)?;
+    let batch = knowledge_import_batches::Entity::find_by_id(batch_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("knowledge import batch was not found".to_owned()))?;
+    if batch.status == "confirmed" {
+        return Err(ApiError::Conflict(
+            "confirmed imports cannot be cancelled".to_owned(),
+        ));
+    }
+    knowledge_import_batches::Entity::update_many()
+        .filter(knowledge_import_batches::Column::Id.eq(batch_id))
+        .col_expr(
+            knowledge_import_batches::Column::Status,
+            Expr::value("cancelled"),
+        )
+        .col_expr(
+            knowledge_import_batches::Column::UpdatedAt,
+            Expr::value(now()),
+        )
+        .exec(db)
+        .await?;
+    get_import(db, auth, batch_id).await
+}
+
 async fn results_with_images(
     db: &DatabaseConnection,
     items: Vec<knowledge_items::Model>,
@@ -431,6 +926,49 @@ fn visible_to(auth: &AuthenticatedUser, visibility: &str) -> bool {
 }
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, ApiError> {
+    let mut records = Vec::new();
+    let mut row = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut chars = input.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                row.push(field.trim().to_owned());
+                field.clear();
+            }
+            '\n' if !quoted => {
+                row.push(field.trim().to_owned());
+                field.clear();
+                records.push(std::mem::take(&mut row));
+            }
+            '\r' if !quoted => {}
+            _ => field.push(character),
+        }
+    }
+    if quoted {
+        return Err(ApiError::Validation(
+            "CSV contains an unterminated quoted field".to_owned(),
+        ));
+    }
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field.trim().to_owned());
+        records.push(row);
+    }
+    if records.is_empty() {
+        return Err(ApiError::Validation(
+            "CSV must contain a header row".to_owned(),
+        ));
+    }
+    Ok(records)
 }
 fn required(value: &str, field: &str, max: usize) -> Result<String, ApiError> {
     let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -625,6 +1163,55 @@ fn validated_item(
         images: request.images,
     })
 }
+
+struct MergedItem {
+    title: String,
+    summary: String,
+    content: String,
+    category: String,
+    category_id: Option<String>,
+    keywords: Vec<String>,
+    source_name: String,
+    source_url: Option<String>,
+    visibility: String,
+    images: Option<Vec<KnowledgeImageInput>>,
+}
+
+fn merge_item(
+    existing: knowledge_items::Model,
+    request: UpdateKnowledgeItemRequest,
+    default_visibility: &str,
+) -> Result<MergedItem, ApiError> {
+    let keywords = request
+        .keywords
+        .unwrap_or_else(|| serde_json::from_str(&existing.keywords_json).unwrap_or_default());
+    let images = request.images;
+    let input = CreateKnowledgeItemRequest {
+        title: request.title.unwrap_or(existing.title),
+        summary: request.summary.unwrap_or(existing.summary),
+        content: request.content.unwrap_or(existing.content),
+        category: request.category.unwrap_or(existing.category),
+        category_id: request.category_id.or(existing.category_id),
+        keywords,
+        source_name: request.source_name.or(Some(existing.source_name)),
+        source_url: request.source_url.or(existing.source_url),
+        visibility: request.visibility.unwrap_or(existing.visibility),
+        images: images.clone().unwrap_or_default(),
+    };
+    let validated = validated_item(input, default_visibility)?;
+    Ok(MergedItem {
+        title: validated.title,
+        summary: validated.summary,
+        content: validated.content,
+        category: validated.category,
+        category_id: validated.category_id,
+        keywords: validated.keywords,
+        source_name: validated.source_name,
+        source_url: validated.source_url,
+        visibility: validated.visibility,
+        images,
+    })
+}
 async fn ensure_unique_images<C: sea_orm::ConnectionTrait>(
     db: &C,
     images: &[KnowledgeImageInput],
@@ -636,6 +1223,30 @@ async fn ensure_unique_images<C: sea_orm::ConnectionTrait>(
     if !paths.is_empty()
         && knowledge_images::Entity::find()
             .filter(knowledge_images::Column::StoragePath.is_in(paths))
+            .one(db)
+            .await?
+            .is_some()
+    {
+        return Err(ApiError::Conflict(
+            "an image path is already bound to another knowledge item".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn ensure_unique_images_except<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    images: &[KnowledgeImageInput],
+    item_id: &str,
+) -> Result<(), ApiError> {
+    let paths: Vec<_> = images
+        .iter()
+        .map(|image| image.storage_path.trim().to_owned())
+        .collect();
+    if !paths.is_empty()
+        && knowledge_images::Entity::find()
+            .filter(knowledge_images::Column::StoragePath.is_in(paths))
+            .filter(knowledge_images::Column::KnowledgeItemId.ne(item_id))
             .one(db)
             .await?
             .is_some()

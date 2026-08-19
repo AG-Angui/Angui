@@ -1,4 +1,6 @@
+use actix_multipart::Multipart;
 use actix_web::{HttpResponse, web};
+use futures_util::StreamExt;
 
 use crate::{
     app_state::AppState,
@@ -6,6 +8,7 @@ use crate::{
     models::{
         AuthenticatedUser, CreateKnowledgeBaseRequest, CreateKnowledgeItemRequest,
         KnowledgeChatRequest, KnowledgeSearchRequest, UpdateKnowledgeBaseRequest,
+        UpdateKnowledgeItemRequest,
     },
     services::knowledge_service,
 };
@@ -26,6 +29,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .service(
             web::scope("/admin/knowledge-items")
                 .route("/{id}", web::get().to(get_item))
+                .route("/{id}", web::patch().to(update_item))
                 .route("/{id}/review", web::post().to(review_item))
                 .route("/{id}/publish", web::post().to(publish_item))
                 .route("/{id}/withdraw", web::post().to(withdraw_item)),
@@ -34,6 +38,16 @@ pub fn configure(config: &mut web::ServiceConfig) {
             web::scope("/knowledge-bases")
                 .route("/{id}/search", web::post().to(search))
                 .route("/{id}/chat", web::post().to(chat)),
+        )
+        .service(
+            web::scope("/admin/knowledge-imports")
+                .route("/{id}", web::get().to(get_import))
+                .route("/{id}/confirm", web::post().to(confirm_import))
+                .route("/{id}/cancel", web::post().to(cancel_import)),
+        )
+        .service(
+            web::scope("/admin/knowledge-bases/{id}/imports")
+                .route("/preview", web::post().to(preview_import)),
         );
 }
 
@@ -106,6 +120,15 @@ async fn get_item(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(knowledge_service::get_item(&state.db, &auth, &id).await?))
 }
+async fn update_item(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+    request: web::Json<UpdateKnowledgeItemRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(knowledge_service::update_item(&state.db, &auth, &id, request.into_inner()).await?))
+}
 async fn review_item(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -148,6 +171,67 @@ async fn chat(
     request: web::Json<KnowledgeChatRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let request = request.into_inner();
-    Ok(HttpResponse::Ok()
-        .json(knowledge_service::chat(&state.db, &auth, &id, &request.query, request.limit).await?))
+    Ok(HttpResponse::Ok().json(
+        knowledge_service::chat_with_gateway(
+            &state.db,
+            &auth,
+            &id,
+            &request.query,
+            request.limit,
+            &state.ai_gateway,
+        )
+        .await?,
+    ))
+}
+
+async fn preview_import(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+    mut payload: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    let mut bytes = Vec::new();
+    let mut file_name = "import.csv".to_owned();
+    while let Some(field) = payload.next().await {
+        let mut field =
+            field.map_err(|_| ApiError::Validation("invalid multipart upload".to_owned()))?;
+        if let Some(disposition) = field.content_disposition()
+            && let Some(name) = disposition.get_filename()
+        {
+            file_name = name.to_owned();
+        }
+        while let Some(chunk) = field.next().await {
+            let chunk =
+                chunk.map_err(|_| ApiError::Validation("invalid multipart upload".to_owned()))?;
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() > 5 * 1024 * 1024 {
+                return Err(ApiError::Validation(
+                    "CSV file must not exceed 5 MB".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(HttpResponse::Created()
+        .json(knowledge_service::preview_csv(&state.db, &auth, &id, file_name, bytes).await?))
+}
+async fn get_import(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(knowledge_service::get_import(&state.db, &auth, &id).await?))
+}
+async fn confirm_import(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(knowledge_service::confirm_import(&state.db, &auth, &id).await?))
+}
+async fn cancel_import(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(knowledge_service::cancel_import(&state.db, &auth, &id).await?))
 }

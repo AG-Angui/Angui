@@ -9,6 +9,7 @@ const mocked = vi.hoisted(() => ({
   transitionResource: vi.fn(),
   listCategories: vi.fn(),
   transitionCategory: vi.fn(),
+  listKnowledgeBases: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../auth/useAuth", () => ({
@@ -38,6 +39,14 @@ vi.mock("../api/learning", () => ({
   transitionManagedLearningQuestion: vi.fn(),
   createManagedLearningResource: vi.fn(),
   createManagedLearningQuestion: vi.fn(),
+  listKnowledgeBases: (...args: unknown[]) => mocked.listKnowledgeBases(...args),
+  createKnowledgeBase: vi.fn(),
+  previewKnowledgeImport: vi.fn(),
+  confirmKnowledgeImport: vi.fn(),
+  cancelKnowledgeImport: vi.fn(),
+  createKnowledgeItem: vi.fn(),
+  listKnowledgeItems: vi.fn(),
+  transitionKnowledgeItem: vi.fn(),
 }));
 
 function submittedResource(submittedBy = "admin-1") {

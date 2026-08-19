@@ -306,6 +306,44 @@ pub struct CreateKnowledgeItemRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct UpdateKnowledgeItemRequest {
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub content: Option<String>,
+    pub category: Option<String>,
+    pub category_id: Option<String>,
+    pub keywords: Option<Vec<String>>,
+    pub source_name: Option<String>,
+    pub source_url: Option<String>,
+    pub visibility: Option<String>,
+    pub images: Option<Vec<KnowledgeImageInput>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeImportRowResponse {
+    pub id: String,
+    pub row_number: i32,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub normalized_data: Value,
+    pub knowledge_item_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeImportBatchResponse {
+    pub id: String,
+    pub knowledge_base_id: String,
+    pub file_name: String,
+    pub status: String,
+    pub total_rows: i32,
+    pub valid_rows: i32,
+    pub invalid_rows: i32,
+    pub rows: Vec<KnowledgeImportRowResponse>,
+    pub confirmed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KnowledgeSearchRequest {
     pub query: String,
     pub limit: Option<u32>,
