@@ -1,6 +1,6 @@
 import { Button, Input, Spinner } from "@heroui/react";
 import { BookCheck, FilePlus2, ShieldCheck } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createManagedLearningQuestion,
   createManagedLearningResource,
@@ -20,6 +20,7 @@ import {
   transitionKnowledgeItem,
   getKnowledgeOverview,
   uploadKnowledgeImage,
+  downloadKnowledgeImage,
 } from "../api/learning";
 import type {
   CreateLearningQuestionInput,
@@ -225,6 +226,13 @@ export function LearningGovernancePage() {
   const [knowledgeBaseDescription, setKnowledgeBaseDescription] = useState("");
   const [knowledgeImport, setKnowledgeImport] = useState<import("../api/learning").KnowledgeImportBatch | null>(null);
   const [knowledgeItems, setKnowledgeItems] = useState<import("../api/learning").KnowledgeItem[]>([]);
+  const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<Record<string, string>>({});
+  const [knowledgeImageStates, setKnowledgeImageStates] = useState<Record<string, "loading" | "failed">>({});
+  const knowledgeImageQueue = useRef<Array<{ itemId: string; imageId: string }>>([]);
+  const knowledgeImageActive = useRef(0);
+  const knowledgeImageInFlight = useRef(new Set<string>());
+  const knowledgeImageControllers = useRef(new Map<string, AbortController>());
+  const knowledgeImageGeneration = useRef(0);
   const [knowledgeItemBaseId, setKnowledgeItemBaseId] = useState("");
   const [knowledgeItemForm, setKnowledgeItemForm] = useState({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" });
 
@@ -268,6 +276,77 @@ export function LearningGovernancePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    knowledgeImageGeneration.current += 1;
+    knowledgeImageQueue.current = [];
+    knowledgeImageControllers.current.forEach((controller) => controller.abort());
+    knowledgeImageControllers.current.clear();
+    knowledgeImageActive.current = 0;
+    knowledgeImageInFlight.current.clear();
+    setKnowledgeImageStates({});
+    setKnowledgeImageUrls((current) => {
+      Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+      return {};
+    });
+    return () => {
+      knowledgeImageGeneration.current += 1;
+      knowledgeImageQueue.current = [];
+      knowledgeImageControllers.current.forEach((controller) => controller.abort());
+      knowledgeImageControllers.current.clear();
+      knowledgeImageActive.current = 0;
+      knowledgeImageInFlight.current.clear();
+      setKnowledgeImageUrls((current) => {
+        Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+        return {};
+      });
+    };
+  }, [knowledgeItems, token]);
+
+  const drainKnowledgeImageQueue = () => {
+    if (!token) return;
+    const generation = knowledgeImageGeneration.current;
+    while (knowledgeImageActive.current < 2 && knowledgeImageQueue.current.length > 0) {
+      const request = knowledgeImageQueue.current.shift();
+      if (!request) break;
+      const key = request.imageId;
+      if (knowledgeImageInFlight.current.has(key) || knowledgeImageUrls[key]) continue;
+      knowledgeImageActive.current += 1;
+      knowledgeImageInFlight.current.add(key);
+      setKnowledgeImageStates((current) => ({ ...current, [key]: "loading" }));
+      const controller = new AbortController();
+      knowledgeImageControllers.current.set(key, controller);
+      void downloadKnowledgeImage(token, request.itemId, request.imageId, { signal: controller.signal })
+        .then((blob) => {
+          if (knowledgeImageGeneration.current !== generation) return;
+          const url = URL.createObjectURL(blob);
+          setKnowledgeImageUrls((current) => ({ ...current, [key]: url }));
+          setKnowledgeImageStates((current) => {
+            const next = { ...current };
+            delete next[key];
+            return next;
+          });
+        })
+        .catch(() => {
+          if (knowledgeImageGeneration.current === generation) {
+            setKnowledgeImageStates((current) => ({ ...current, [key]: "failed" }));
+          }
+        })
+        .finally(() => {
+          knowledgeImageActive.current -= 1;
+          knowledgeImageInFlight.current.delete(key);
+          knowledgeImageControllers.current.delete(key);
+          drainKnowledgeImageQueue();
+        });
+    }
+  };
+
+  const openKnowledgeImage = (itemId: string, imageId: string) => {
+    if (!token || knowledgeImageUrls[imageId] || knowledgeImageInFlight.current.has(imageId)) return;
+    knowledgeImageQueue.current = knowledgeImageQueue.current.filter((request) => request.imageId !== imageId);
+    knowledgeImageQueue.current.push({ itemId, imageId });
+    drainKnowledgeImageQueue();
+  };
 
   const createBase = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -472,20 +551,64 @@ export function LearningGovernancePage() {
             <Input aria-label="来源链接" placeholder="HTTPS 来源链接" value={knowledgeItemForm.source_url} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, source_url: event.target.value })} />
             <div className="lg:col-span-2"><Button type="submit" isDisabled={busyId === "knowledge-item"}>{busyId === "knowledge-item" ? <Spinner size="sm" /> : "保存知识条目"}</Button></div>
           </form>
-          <div className="mt-5 divide-y divide-slate-100 border-t border-slate-100">
-            {knowledgeItems.map((item) => (
-              <article key={item.knowledge_item_id} className="py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <strong className="text-sm">{item.title}</strong>
-                  <span className="text-xs text-slate-500">v{item.version} · {item.status}</span>
-                  {item.images.length > 0 && <span className="text-xs text-slate-500">{item.images.length} images</span>}
-                  {(item.status === "draft" || item.status === "submitted") && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>Review</Button>}
-                  {item.status === "reviewed" && <Button size="sm" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "publish")}>Publish</Button>}
-                  {item.status === "published" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "withdraw")}>Withdraw</Button>}
-                  <label className="text-xs text-slate-700">Upload images<input className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>
-                </div>
-              </article>
-            ))}
+          <div className="mt-5 overflow-x-auto border-t border-slate-100">
+            <table className="min-w-[1200px] w-full text-left text-sm">
+              <caption className="sr-only">Knowledge items</caption>
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                <tr>
+                  <th scope="col" className="px-3 py-2">Title</th>
+                  <th scope="col" className="px-3 py-2">Source</th>
+                  <th scope="col" className="px-3 py-2">Category</th>
+                  <th scope="col" className="px-3 py-2">Keywords</th>
+                  <th scope="col" className="min-w-56 px-3 py-2">Summary</th>
+                  <th scope="col" className="min-w-72 px-3 py-2">Content</th>
+                  <th scope="col" className="px-3 py-2">Status</th>
+                  <th scope="col" className="px-3 py-2">Images</th>
+                  <th scope="col" className="px-3 py-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {knowledgeItems.length === 0 ? (
+                  <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-500">No knowledge items loaded.</td></tr>
+                ) : knowledgeItems.map((item) => (
+                  <tr key={item.knowledge_item_id} className="align-top">
+                    <td className="max-w-56 px-3 py-3 font-semibold text-slate-950">{item.title}</td>
+                    <td className="max-w-56 px-3 py-3 text-slate-700">
+                      <div>{item.source_name || "-"}</div>
+                      {item.source_url && <a className="mt-1 block break-all text-xs text-brand-700 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.source_url}</a>}
+                    </td>
+                    <td className="max-w-40 px-3 py-3 text-slate-700">{item.category || "-"}</td>
+                    <td className="max-w-56 px-3 py-3 text-slate-700">{item.keywords.length > 0 ? item.keywords.join("、") : "-"}</td>
+                    <td className="max-w-72 whitespace-pre-wrap px-3 py-3 text-slate-700">{item.summary || "-"}</td>
+                    <td className="max-w-96 whitespace-pre-wrap px-3 py-3 text-slate-700">{item.content}</td>
+                    <td className="px-3 py-3 text-xs text-slate-600">v{item.version}<br />{item.status}</td>
+                    <td className="min-w-36 px-3 py-3">
+                      {item.images.length === 0 ? <span className="text-xs text-slate-500">-</span> : (
+                        <div className="flex flex-col gap-2">
+                          {item.images.map((image) => knowledgeImageUrls[image.id] ? (
+                            <a key={image.id} className="text-xs text-brand-700 underline" href={knowledgeImageUrls[image.id]} target="_blank" rel="noreferrer">View image</a>
+                          ) : knowledgeImageStates[image.id] === "failed" ? (
+                            <button key={image.id} type="button" className="text-xs text-rose-700 underline" onClick={() => openKnowledgeImage(item.knowledge_item_id, image.id)}>Unable to load image; retry</button>
+                          ) : knowledgeImageStates[image.id] === "loading" ? (
+                            <span key={image.id} className="text-xs text-slate-500">Loading...</span>
+                          ) : (
+                            <button key={image.id} type="button" className="text-xs text-brand-700 underline" onClick={() => openKnowledgeImage(item.knowledge_item_id, image.id)}>View image</button>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td className="min-w-56 px-3 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(item.status === "draft" || item.status === "submitted") && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>Review</Button>}
+                        {item.status === "reviewed" && <Button size="sm" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "publish")}>Publish</Button>}
+                        {item.status === "published" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "withdraw")}>Withdraw</Button>}
+                        <label className="text-xs text-slate-700">Upload images<input aria-label={`Upload images for ${item.title}`} className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>}
         {knowledgeImport && <div className="border-t border-slate-200 p-5">
