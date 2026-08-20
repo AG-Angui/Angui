@@ -824,7 +824,7 @@ paths:
       tags: [Intake sessions]
       operationId: startIntakeAiInitialReview
       summary: Start the family-visible AI initial review
-      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case. The response is SSE: optional safe `progress` events contain only a stage (`queued`, `preparing`, `generating`, `validating`, or `fallback`), and the final `completed` event contains the review result. Partial streams are not a valid review result.
+      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case. The response is SSE; optional safe `progress` events contain only a stage (`queued`, `preparing`, `generating`, `validating`, or `fallback`), and the final `completed` event contains the review result. Partial streams are not a valid review result.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-data-classification: sensitive
@@ -1732,7 +1732,7 @@ paths:
       x-case-roles: [volunteer]
       x-data-classification: case-restricted
       responses:
-        "200": { description: Published summary history, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { type: object, required: [version, content, published_at], properties: { version: { type: integer }, content: { type: string }, published_at: { type: string, format: date-time } } } } } } } }
+        "200": { description: Published summary history, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { type: object, required: [version, content, published_at], properties: { version: { type: integer }, content: { type: string }, published_at: { type: string, format: date-time } } } } } } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -2821,6 +2821,298 @@ paths:
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+
+  /api/admin/knowledge-bases:
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeBases
+      summary: List knowledge bases
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge bases, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeBase" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeBase
+      summary: Create a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateKnowledgeBaseRequest" } } } }
+      responses:
+        "201": { description: Created knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/knowledge-bases/{base_id}:
+    parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeBase
+      summary: Get a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Knowledge]
+      operationId: updateKnowledgeBase
+      summary: Update a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateKnowledgeBaseRequest" } } } }
+      responses:
+        "200": { description: Updated knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-bases/{base_id}/enable:
+    post:
+      tags: [Knowledge]
+      operationId: enableKnowledgeBase
+      summary: Enable a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Enabled knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-bases/{base_id}/disable:
+    post:
+      tags: [Knowledge]
+      operationId: disableKnowledgeBase
+      summary: Disable a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Disabled knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-bases/{base_id}/items:
+    parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeItems
+      summary: List knowledge items in a base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge items, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeItem" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeItem
+      summary: Create a draft knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateKnowledgeItemRequest" } } } }
+      responses:
+        "201": { description: Created knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-bases/{base_id}/imports/preview:
+    post:
+      tags: [Knowledge]
+      operationId: previewKnowledgeImport
+      summary: Preview a CSV knowledge import
+      description: Accepts one multipart file containing UTF-8 CSV; validates the exact nine-column header and 5 MiB/5000-row limits, then classifies rows without publishing content.
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
+      responses:
+        "201": { description: Import preview, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-items/{item_id}:
+    parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeItem
+      summary: Get a knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Knowledge]
+      operationId: updateKnowledgeItem
+      summary: Update a knowledge item and return it to draft
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateKnowledgeItemRequest" } } } }
+      responses:
+        "200": { description: Updated draft knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-items/{item_id}/review:
+    post:
+      tags: [Knowledge]
+      operationId: reviewKnowledgeItem
+      summary: Review a knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Reviewed knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-items/{item_id}/publish:
+    post:
+      tags: [Knowledge]
+      operationId: publishKnowledgeItem
+      summary: Publish a reviewed knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Published knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-items/{item_id}/withdraw:
+    post:
+      tags: [Knowledge]
+      operationId: withdrawKnowledgeItem
+      summary: Withdraw a published knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Withdrawn knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-imports/{import_id}:
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeImport
+      summary: Get an import batch
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: import_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Import batch, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-imports/{import_id}/confirm:
+    post:
+      tags: [Knowledge]
+      operationId: confirmKnowledgeImport
+      summary: Confirm an import batch
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: import_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Confirmed import batch, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-imports/{import_id}/cancel:
+    post:
+      tags: [Knowledge]
+      operationId: cancelKnowledgeImport
+      summary: Cancel an unconfirmed import batch
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: import_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Cancelled import batch, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/knowledge-bases/{base_id}/search:
+    post:
+      tags: [Knowledge]
+      operationId: searchKnowledgeBase
+      summary: Search published visible knowledge items
+      description: Searches only enabled bases and published, effective, non-withdrawn items visible to the caller. Results are source material, not a factual determination.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: training
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeSearchRequest" } } } }
+      responses:
+        "200": { description: Ranked published knowledge items, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeSearchResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/knowledge-bases/{base_id}/chat:
+    post:
+      tags: [Knowledge]
+      operationId: chatKnowledgeBase
+      summary: Answer from published visible knowledge items
+      description: Returns retrieved sources and an explicit human-review notice; insufficient sources are not a conclusion.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: training
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeChatRequest" } } } }
+      responses:
+        "200": { description: Source-backed or insufficient-sources answer, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeChatResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     bearerAuth:
@@ -5068,6 +5360,177 @@ components:
             - type: "null"
           description: Omitted for non-commanders and when no completed transcript exists.
 
+    KnowledgeBase:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, visibility, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+        status: { type: string, enum: [enabled, disabled] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateKnowledgeBaseRequest:
+      type: object
+      additionalProperties: false
+      required: [name, visibility]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000, default: "" }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+
+    UpdateKnowledgeBaseRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+
+    KnowledgeImage:
+      type: object
+      additionalProperties: false
+      required: [id, storage_path, mime_type, width, height, metadata]
+      properties:
+        id: { type: string, format: uuid }
+        storage_path: { type: string }
+        mime_type: { type: string }
+        width: { type: [integer, "null"] }
+        height: { type: [integer, "null"] }
+        metadata: { type: object }
+
+    KnowledgeImageInput:
+      type: object
+      additionalProperties: false
+      required: [storage_path, mime_type]
+      properties:
+        storage_path: { type: string, minLength: 1 }
+        mime_type: { type: string, minLength: 1 }
+        width: { type: [integer, "null"] }
+        height: { type: [integer, "null"] }
+        metadata: { type: object, default: {} }
+
+    KnowledgeItem:
+      type: object
+      additionalProperties: false
+      required: [knowledge_item_id, title, content, score, knowledge_base_id, version, source_name, source_url, images]
+      properties:
+        knowledge_item_id: { type: string, format: uuid }
+        title: { type: string }
+        content: { type: string }
+        score: { type: number, format: double, minimum: 0 }
+        knowledge_base_id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        source_name: { type: string }
+        source_url: { type: [string, "null"], format: uri }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImage" } }
+
+    CreateKnowledgeItemRequest:
+      type: object
+      additionalProperties: false
+      required: [title, content, visibility]
+      properties:
+        title: { type: string, minLength: 1 }
+        summary: { type: string, default: "" }
+        content: { type: string, minLength: 1 }
+        category: { type: string, default: "" }
+        category_id: { type: [string, "null"] }
+        keywords: { type: array, items: { type: string }, default: [] }
+        source_name: { type: [string, "null"] }
+        source_url: { type: [string, "null"], format: uri }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImageInput" }, default: [] }
+
+    UpdateKnowledgeItemRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1 }
+        summary: { type: string }
+        content: { type: string, minLength: 1 }
+        category: { type: string }
+        category_id: { type: [string, "null"] }
+        keywords: { type: array, items: { type: string } }
+        source_name: { type: [string, "null"] }
+        source_url: { type: [string, "null"], format: uri }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImageInput" } }
+
+    KnowledgeImportRow:
+      type: object
+      additionalProperties: false
+      required: [id, row_number, status, error_message, normalized_data, knowledge_item_id]
+      properties:
+        id: { type: string, format: uuid }
+        row_number: { type: integer, minimum: 2 }
+        status: { type: string, enum: [valid, invalid, duplicate, imported] }
+        error_message: { type: [string, "null"] }
+        normalized_data: { type: object }
+        knowledge_item_id: { type: [string, "null"], format: uuid }
+
+    KnowledgeImportBatch:
+      type: object
+      additionalProperties: false
+      required: [id, knowledge_base_id, file_name, status, total_rows, valid_rows, invalid_rows, rows, confirmed_at]
+      properties:
+        id: { type: string, format: uuid }
+        knowledge_base_id: { type: string, format: uuid }
+        file_name: { type: string }
+        status: { type: string, enum: [previewed, confirmed, cancelled] }
+        total_rows: { type: integer, minimum: 0, maximum: 5000 }
+        valid_rows: { type: integer, minimum: 0 }
+        invalid_rows: { type: integer, minimum: 0 }
+        rows: { type: array, items: { $ref: "#/components/schemas/KnowledgeImportRow" }, maxItems: 5000 }
+        confirmed_at: { type: [string, "null"], format: date-time }
+
+    KnowledgeSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 1000 }
+        limit: { type: [integer, "null"], minimum: 1, maximum: 20, default: 5 }
+
+    KnowledgeSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results: { type: array, items: { $ref: "#/components/schemas/KnowledgeItem" }, maxItems: 20 }
+
+    KnowledgeChatRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 1000 }
+        limit: { type: [integer, "null"], minimum: 1, maximum: 20, default: 5 }
+
+    KnowledgeChatSource:
+      type: object
+      additionalProperties: false
+      required: [knowledge_item_id, title, version, score, images]
+      properties:
+        knowledge_item_id: { type: string, format: uuid }
+        title: { type: string }
+        version: { type: integer, minimum: 1 }
+        score: { type: number, format: double, minimum: 0 }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImage" } }
+
+    KnowledgeChatResponse:
+      type: object
+      additionalProperties: false
+      required: [answer, certainty, sources, human_review_notice]
+      properties:
+        answer: { type: string }
+        certainty: { type: string, enum: [rule_based, model_generated, insufficient_sources] }
+        sources: { type: array, items: { $ref: "#/components/schemas/KnowledgeChatSource" }, maxItems: 20 }
+        human_review_notice: { type: string }
     ErrorResponse:
       type: object
       additionalProperties: false
