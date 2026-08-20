@@ -1,6 +1,6 @@
 import { Button, Input, Spinner } from "@heroui/react";
 import { BookCheck, FilePlus2, ShieldCheck } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createManagedLearningQuestion,
   createManagedLearningResource,
@@ -227,6 +227,12 @@ export function LearningGovernancePage() {
   const [knowledgeImport, setKnowledgeImport] = useState<import("../api/learning").KnowledgeImportBatch | null>(null);
   const [knowledgeItems, setKnowledgeItems] = useState<import("../api/learning").KnowledgeItem[]>([]);
   const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<Record<string, string>>({});
+  const [knowledgeImageStates, setKnowledgeImageStates] = useState<Record<string, "loading" | "failed">>({});
+  const knowledgeImageQueue = useRef<Array<{ itemId: string; imageId: string }>>([]);
+  const knowledgeImageActive = useRef(0);
+  const knowledgeImageInFlight = useRef(new Set<string>());
+  const knowledgeImageControllers = useRef(new Map<string, AbortController>());
+  const knowledgeImageGeneration = useRef(0);
   const [knowledgeItemBaseId, setKnowledgeItemBaseId] = useState("");
   const [knowledgeItemForm, setKnowledgeItemForm] = useState({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" });
 
@@ -272,41 +278,75 @@ export function LearningGovernancePage() {
   }, [load]);
 
   useEffect(() => {
-    if (!token) {
-      setKnowledgeImageUrls({});
-      return;
-    }
-
-    setKnowledgeImageUrls({});
-    let isCurrent = true;
-    const createdUrls: string[] = [];
-    const images = knowledgeItems.flatMap((item) =>
-      item.images.map((image) => ({ itemId: item.knowledge_item_id, image })),
-    );
-
-    void Promise.all(
-      images.map(async ({ itemId, image }) => {
-        try {
-          const blob = await downloadKnowledgeImage(token, itemId, image.id);
-          return [image.id, URL.createObjectURL(blob)] as const;
-        } catch {
-          return null;
-        }
-      }),
-    ).then((entries) => {
-      const nextUrls = Object.fromEntries(
-        entries.filter((entry): entry is readonly [string, string] => entry !== null),
-      );
-      createdUrls.push(...Object.values(nextUrls));
-      if (isCurrent) setKnowledgeImageUrls(nextUrls);
-      else createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    knowledgeImageGeneration.current += 1;
+    knowledgeImageQueue.current = [];
+    knowledgeImageControllers.current.forEach((controller) => controller.abort());
+    knowledgeImageControllers.current.clear();
+    knowledgeImageActive.current = 0;
+    knowledgeImageInFlight.current.clear();
+    setKnowledgeImageStates({});
+    setKnowledgeImageUrls((current) => {
+      Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+      return {};
     });
-
     return () => {
-      isCurrent = false;
-      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+      knowledgeImageGeneration.current += 1;
+      knowledgeImageQueue.current = [];
+      knowledgeImageControllers.current.forEach((controller) => controller.abort());
+      knowledgeImageControllers.current.clear();
+      knowledgeImageActive.current = 0;
+      knowledgeImageInFlight.current.clear();
+      setKnowledgeImageUrls((current) => {
+        Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+        return {};
+      });
     };
   }, [knowledgeItems, token]);
+
+  const drainKnowledgeImageQueue = () => {
+    if (!token) return;
+    const generation = knowledgeImageGeneration.current;
+    while (knowledgeImageActive.current < 2 && knowledgeImageQueue.current.length > 0) {
+      const request = knowledgeImageQueue.current.shift();
+      if (!request) break;
+      const key = request.imageId;
+      if (knowledgeImageInFlight.current.has(key) || knowledgeImageUrls[key]) continue;
+      knowledgeImageActive.current += 1;
+      knowledgeImageInFlight.current.add(key);
+      setKnowledgeImageStates((current) => ({ ...current, [key]: "loading" }));
+      const controller = new AbortController();
+      knowledgeImageControllers.current.set(key, controller);
+      void downloadKnowledgeImage(token, request.itemId, request.imageId, { signal: controller.signal })
+        .then((blob) => {
+          if (knowledgeImageGeneration.current !== generation) return;
+          const url = URL.createObjectURL(blob);
+          setKnowledgeImageUrls((current) => ({ ...current, [key]: url }));
+          setKnowledgeImageStates((current) => {
+            const next = { ...current };
+            delete next[key];
+            return next;
+          });
+        })
+        .catch(() => {
+          if (knowledgeImageGeneration.current === generation) {
+            setKnowledgeImageStates((current) => ({ ...current, [key]: "failed" }));
+          }
+        })
+        .finally(() => {
+          knowledgeImageActive.current -= 1;
+          knowledgeImageInFlight.current.delete(key);
+          knowledgeImageControllers.current.delete(key);
+          drainKnowledgeImageQueue();
+        });
+    }
+  };
+
+  const openKnowledgeImage = (itemId: string, imageId: string) => {
+    if (!token || knowledgeImageUrls[imageId] || knowledgeImageInFlight.current.has(imageId)) return;
+    knowledgeImageQueue.current = knowledgeImageQueue.current.filter((request) => request.imageId !== imageId);
+    knowledgeImageQueue.current.push({ itemId, imageId });
+    drainKnowledgeImageQueue();
+  };
 
   const createBase = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -547,7 +587,13 @@ export function LearningGovernancePage() {
                         <div className="flex flex-col gap-2">
                           {item.images.map((image) => knowledgeImageUrls[image.id] ? (
                             <a key={image.id} className="text-xs text-brand-700 underline" href={knowledgeImageUrls[image.id]} target="_blank" rel="noreferrer">View image</a>
-                          ) : <span key={image.id} className="text-xs text-slate-500">Loading...</span>)}
+                          ) : knowledgeImageStates[image.id] === "failed" ? (
+                            <button key={image.id} type="button" className="text-xs text-rose-700 underline" onClick={() => openKnowledgeImage(item.knowledge_item_id, image.id)}>Unable to load image; retry</button>
+                          ) : knowledgeImageStates[image.id] === "loading" ? (
+                            <span key={image.id} className="text-xs text-slate-500">Loading...</span>
+                          ) : (
+                            <button key={image.id} type="button" className="text-xs text-brand-700 underline" onClick={() => openKnowledgeImage(item.knowledge_item_id, image.id)}>View image</button>
+                          ))}
                         </div>
                       )}
                     </td>
