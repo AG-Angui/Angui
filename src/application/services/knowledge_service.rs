@@ -1130,7 +1130,10 @@ async fn results_with_images(
         .map(|item| KnowledgeSearchResultResponse {
             knowledge_item_id: item.id.clone(),
             title: item.title,
+            summary: item.summary,
             content: item.content,
+            category: item.category,
+            keywords: serde_json::from_str(&item.keywords_json).unwrap_or_default(),
             score: scores
                 .and_then(|value| value.get(&item.id).copied())
                 .unwrap_or(0.0),
@@ -1587,7 +1590,10 @@ mod tests {
         let result = KnowledgeSearchResultResponse {
             knowledge_item_id: "item-1".to_owned(),
             title: "Title".to_owned(),
+            summary: "Summary".to_owned(),
             content: "Body".to_owned(),
+            category: "Category".to_owned(),
+            keywords: Vec::new(),
             score: 1.0,
             knowledge_base_id: "base".to_owned(),
             version: 1,

@@ -378,7 +378,10 @@ pub struct KnowledgeOverviewResponse {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct KnowledgeSearchResultResponse {
+    pub summary: String,
     pub knowledge_item_id: String,
+    pub category: String,
+    pub keywords: Vec<String>,
     pub title: String,
     pub content: String,
     pub score: f64,
