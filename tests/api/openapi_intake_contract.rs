@@ -870,6 +870,95 @@ fn clue_attachment_openapi_contract_keeps_evidence_case_restricted() {
 }
 
 #[test]
+fn knowledge_openapi_contract_covers_registered_rag_routes() {
+    for (path, operation_id, schema_name) in [
+        (
+            "/api/admin/knowledge-bases:\n",
+            "listKnowledgeBases",
+            "KnowledgeBase",
+        ),
+        (
+            "/api/admin/knowledge-bases/{base_id}:\n",
+            "updateKnowledgeBase",
+            "UpdateKnowledgeBaseRequest",
+        ),
+        (
+            "/api/admin/knowledge-bases/{base_id}/items:\n",
+            "createKnowledgeItem",
+            "CreateKnowledgeItemRequest",
+        ),
+        (
+            "/api/admin/knowledge-bases/{base_id}/imports/preview:\n",
+            "previewKnowledgeImport",
+            "KnowledgeImportBatch",
+        ),
+        (
+            "/api/admin/knowledge-items/{item_id}:\n",
+            "updateKnowledgeItem",
+            "UpdateKnowledgeItemRequest",
+        ),
+        (
+            "/api/admin/knowledge-items/{item_id}/publish:\n",
+            "publishKnowledgeItem",
+            "KnowledgeItem",
+        ),
+        (
+            "/api/admin/knowledge-imports/{import_id}/confirm:\n",
+            "confirmKnowledgeImport",
+            "KnowledgeImportBatch",
+        ),
+        (
+            "/api/knowledge-bases/{base_id}/search:\n",
+            "searchKnowledgeBase",
+            "KnowledgeSearchResponse",
+        ),
+        (
+            "/api/knowledge-bases/{base_id}/chat:\n",
+            "chatKnowledgeBase",
+            "KnowledgeChatResponse",
+        ),
+    ] {
+        let operation = operation(path);
+        for expected in [operation_id, schema_name] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI knowledge operation {path} must declare {expected:?}"
+            );
+        }
+    }
+    for path in [
+        "/api/admin/knowledge-bases:\n",
+        "/api/admin/knowledge-items/{item_id}/review:\n",
+        "/api/admin/knowledge-imports/{import_id}/cancel:\n",
+    ] {
+        let operation = operation(path);
+        for expected in ["x-global-capabilities: [admin]", "x-data-classification:"] {
+            assert!(
+                operation.contains(expected),
+                "OpenAPI knowledge operation {path} must declare {expected:?}"
+            );
+        }
+    }
+    for path in [
+        "/api/knowledge-bases/{base_id}/search:\n",
+        "/api/knowledge-bases/{base_id}/chat:\n",
+    ] {
+        let operation = operation(path);
+        assert!(operation.contains("x-account-types: [member, learner]"));
+    }
+    assert_schema_contains(
+        "KnowledgeImportBatch",
+        &["enum: [previewed, confirmed, cancelled]", "maxItems"],
+    );
+    assert_schema_contains(
+        "KnowledgeChatResponse",
+        &[
+            "human_review_notice:",
+            "enum: [rule_based, model_generated, insufficient_sources]",
+        ],
+    );
+}
+#[test]
 fn operation_blocks_stop_before_later_paths_and_top_level_sections() {
     let document = "openapi: 3.0.0\npaths:\n  /current:\n    get:\n      operationId: currentOperation\n  /later:\n    get:\n      operationId: laterOperation\ncomponents:\n  schemas:\n    LaterSchema:\n      type: object\n";
 
