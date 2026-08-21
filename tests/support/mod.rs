@@ -165,6 +165,11 @@ pub fn create_case_request() -> CreateCaseRequest {
         health_notes: Some("仅用于测试的健康备注".to_owned()),
         last_seen_at: Some("2026-07-13T09:00:00Z".to_owned()),
         last_seen_location: Some("测试公园北门".to_owned()),
+        mobility_notes: None,
+        transportation_ability: None,
+        frequent_locations: None,
+        behavior_habits: None,
+        suspicious_motive: None,
     }
 }
 

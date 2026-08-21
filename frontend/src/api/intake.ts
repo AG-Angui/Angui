@@ -340,10 +340,16 @@ export function startIntakeAiInitialReview(
   );
 }
 
+export interface IssueResponseEdit {
+  issue_id: string;
+  user_answer: string;
+}
+
 export function acknowledgeIntakeAiInitialReview(
   token: string,
   sessionId: string,
   confirmedIssueIds: string[],
+  issueResponses?: IssueResponseEdit[],
 ): Promise<IntakeAiInitialReviewResponse> {
   return apiRequest<IntakeAiInitialReviewResponse>(
     `/intake-sessions/${sessionId}/ai-initial-review/acknowledge`,
@@ -352,6 +358,7 @@ export function acknowledgeIntakeAiInitialReview(
       body: JSON.stringify({
         human_confirmed: true,
         confirmed_issue_ids: confirmedIssueIds,
+        issue_responses: issueResponses || [],
       }),
     },
     token,

@@ -692,7 +692,7 @@ fn is_heic_container(bytes: &[u8]) -> bool {
     if box_size < 16 || box_size > bytes.len() {
         return false;
     }
-    bytes[8..box_size].chunks_exact(4).any(|brand| {
+    bytes[8..box_size].as_chunks::<4>().0.iter().any(|brand| {
         matches!(
             brand,
             b"heic" | b"heix" | b"hevc" | b"heim" | b"heis" | b"hevm" | b"hevs"

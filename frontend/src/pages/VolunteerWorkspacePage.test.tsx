@@ -43,6 +43,11 @@ const detail: CaseDetail = {
     health_notes: null,
     last_seen_at: null,
     last_seen_location: null,
+    mobility_notes: null,
+    transportation_ability: null,
+    frequent_locations: null,
+    behavior_habits: null,
+    suspicious_motive: null,
   },
   clues: [
     {

@@ -783,6 +783,21 @@ function CaseDetailView({
         {detail.elder_profile.health_notes && (
           <Info label="健康注意" value={detail.elder_profile.health_notes} />
         )}
+        {detail.elder_profile.mobility_notes && (
+          <Info label="行动能力" value={detail.elder_profile.mobility_notes.summary} />
+        )}
+        {detail.elder_profile.transportation_ability && (
+          <Info label="交通工具使用" value={detail.elder_profile.transportation_ability.summary} />
+        )}
+        {detail.elder_profile.frequent_locations && (
+          <Info label="常去地点" value={detail.elder_profile.frequent_locations.summary} />
+        )}
+        {detail.elder_profile.behavior_habits && (
+          <Info label="行为习惯" value={detail.elder_profile.behavior_habits.summary} />
+        )}
+        {detail.elder_profile.suspicious_motive && (
+          <Info label="疑似动机" value={detail.elder_profile.suspicious_motive.summary} />
+        )}
       </section>
 
       {canEditElderProfile && (
@@ -3998,6 +4013,11 @@ function ElderProfileEditor({
     health_notes: detail.elder_profile.health_notes ?? "",
     last_seen_at: detail.elder_profile.last_seen_at ?? "",
     last_seen_location: detail.elder_profile.last_seen_location ?? "",
+    mobility_notes: detail.elder_profile.mobility_notes?.summary ?? "",
+    transportation_ability: detail.elder_profile.transportation_ability?.summary ?? "",
+    frequent_locations: detail.elder_profile.frequent_locations?.summary ?? "",
+    behavior_habits: detail.elder_profile.behavior_habits?.summary ?? "",
+    suspicious_motive: detail.elder_profile.suspicious_motive?.summary ?? "",
   });
   useEffect(
     () =>
@@ -4013,6 +4033,11 @@ function ElderProfileEditor({
         health_notes: detail.elder_profile.health_notes ?? "",
         last_seen_at: detail.elder_profile.last_seen_at ?? "",
         last_seen_location: detail.elder_profile.last_seen_location ?? "",
+        mobility_notes: detail.elder_profile.mobility_notes?.summary ?? "",
+        transportation_ability: detail.elder_profile.transportation_ability?.summary ?? "",
+        frequent_locations: detail.elder_profile.frequent_locations?.summary ?? "",
+        behavior_habits: detail.elder_profile.behavior_habits?.summary ?? "",
+        suspicious_motive: detail.elder_profile.suspicious_motive?.summary ?? "",
       }),
     [detail],
   );
@@ -4065,6 +4090,11 @@ function ElderProfileEditor({
           health_notes: draft.health_notes,
           last_seen_at: draft.last_seen_at,
           last_seen_location: draft.last_seen_location,
+          mobility_notes: draft.mobility_notes,
+          transportation_ability: draft.transportation_ability,
+          frequent_locations: draft.frequent_locations,
+          behavior_habits: draft.behavior_habits,
+          suspicious_motive: draft.suspicious_motive,
         });
       }}
     >
@@ -4088,7 +4118,12 @@ function ElderProfileEditor({
         {field("last_seen_at", "最后出现时间")}{" "}
         {field("physical_description", "体貌", true)}{" "}
         {field("clothing_description", "衣着", true)}{" "}
-        {field("health_notes", "健康注意", true)}
+        {field("health_notes", "健康注意", true)}{" "}
+        {field("mobility_notes", "行动能力", true)}{" "}
+        {field("transportation_ability", "交通工具使用", true)}{" "}
+        {field("frequent_locations", "常去地点", true)}{" "}
+        {field("behavior_habits", "行为习惯", true)}{" "}
+        {field("suspicious_motive", "疑似动机", true)}
       </div>
       <div className="mt-4 flex justify-end">
         <Button

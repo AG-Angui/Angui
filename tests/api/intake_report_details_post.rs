@@ -233,6 +233,11 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
         health_notes: None,
         last_seen_at: None,
         last_seen_location: "测试小区南门".to_owned(),
+        mobility_notes: None,
+        transportation_ability: None,
+        frequent_locations: None,
+        behavior_habits: None,
+        suspicious_motive: None,
     };
     let empty_photo_review = intake_session_service::start_ai_initial_review(
         &context.database,
@@ -256,7 +261,9 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
                 .iter()
                 .map(|issue| issue.id.clone())
                 .collect(),
+            issue_responses: vec![],
         },
+        &gateway,
     )
     .await
     .expect("family can acknowledge the review for a session without photos");
@@ -291,6 +298,11 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
                 health_notes: None,
                 last_seen_at: None,
                 last_seen_location: "虚构社区南门".to_owned(),
+                mobility_notes: None,
+                transportation_ability: None,
+                frequent_locations: None,
+                behavior_habits: None,
+                suspicious_motive: None,
             },
         },
         &gateway,
@@ -304,7 +316,9 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
         AcknowledgeIntakeAiInitialReviewRequest {
             human_confirmed: true,
             confirmed_issue_ids: review.issues.iter().map(|issue| issue.id.clone()).collect(),
+            issue_responses: vec![],
         },
+        &gateway,
     )
     .await
     .expect("family can acknowledge the corrected review prompts");
@@ -325,6 +339,11 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
                 health_notes: None,
                 last_seen_at: None,
                 last_seen_location: "虚构社区南门".to_owned(),
+                mobility_notes: None,
+                transportation_ability: None,
+                frequent_locations: None,
+                behavior_habits: None,
+                suspicious_motive: None,
             },
         },
     )

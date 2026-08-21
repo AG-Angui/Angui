@@ -35,6 +35,12 @@ export interface CaseListItem {
   updated_at: string;
 }
 
+export interface ElderProfileExtendedField {
+  summary: string | null;
+  source_fields: string[];
+  confidence: "high" | "medium" | "low" | "none";
+}
+
 export interface ElderProfile {
   id: string;
   display_name: string;
@@ -45,6 +51,11 @@ export interface ElderProfile {
   health_notes: string | null;
   last_seen_at: string | null;
   last_seen_location: string | null;
+  mobility_notes: ElderProfileExtendedField | null;
+  transportation_ability: ElderProfileExtendedField | null;
+  frequent_locations: ElderProfileExtendedField | null;
+  behavior_habits: ElderProfileExtendedField | null;
+  suspicious_motive: ElderProfileExtendedField | null;
 }
 
 export interface Clue {
@@ -175,6 +186,11 @@ export interface UpdateElderProfilePayload {
   health_notes?: string;
   last_seen_at?: string;
   last_seen_location?: string;
+  mobility_notes?: string;
+  transportation_ability?: string;
+  frequent_locations?: string;
+  behavior_habits?: string;
+  suspicious_motive?: string;
 }
 
 export interface CaseMember {
