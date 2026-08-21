@@ -850,12 +850,19 @@ export function FamilyIntakeForm({
       const issueResponses = Array.from(issueResponseEdits.entries()).map(
         ([issue_id, user_answer]) => ({ issue_id, user_answer }),
       );
-      const review = await acknowledgeIntakeAiInitialReview(
-        token,
-        session.id,
-        confirmedInitialReviewIssues,
-        issueResponses.length > 0 ? issueResponses : undefined,
-      );
+      const review =
+        issueResponses.length > 0
+          ? await acknowledgeIntakeAiInitialReview(
+              token,
+              session.id,
+              confirmedInitialReviewIssues,
+              issueResponses,
+            )
+          : await acknowledgeIntakeAiInitialReview(
+              token,
+              session.id,
+              confirmedInitialReviewIssues,
+            );
       setInitialReview(review);
       setSession((current) =>
         current ? { ...current, status: review.status } : current,
