@@ -281,6 +281,9 @@ export function FamilyIntakeForm({
   } | null>(null);
   const [confirmedInitialReviewIssues, setConfirmedInitialReviewIssues] =
     useState<string[]>([]);
+  const [issueResponseEdits, setIssueResponseEdits] = useState<
+    Map<string, string>
+  >(new Map());
   const [answerRevisions, setAnswerRevisions] = useState<
     IntakeAnswerRevision[]
   >([]);
@@ -844,15 +847,20 @@ export function FamilyIntakeForm({
     setBusyAction("acknowledge_initial_review");
     setError("");
     try {
+      const issueResponses = Array.from(issueResponseEdits.entries()).map(
+        ([issue_id, user_answer]) => ({ issue_id, user_answer }),
+      );
       const review = await acknowledgeIntakeAiInitialReview(
         token,
         session.id,
         confirmedInitialReviewIssues,
+        issueResponses.length > 0 ? issueResponses : undefined,
       );
       setInitialReview(review);
       setSession((current) =>
         current ? { ...current, status: review.status } : current,
       );
+      setIssueResponseEdits(new Map());
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -866,6 +874,18 @@ export function FamilyIntakeForm({
         ? current.filter((item) => item !== issueId)
         : [...current, issueId],
     );
+  }
+
+  function updateIssueResponse(issueId: string, answer: string) {
+    setIssueResponseEdits((current) => {
+      const updated = new Map(current);
+      if (answer.trim()) {
+        updated.set(issueId, answer);
+      } else {
+        updated.delete(issueId);
+      }
+      return updated;
+    });
   }
 
   function openSourceEditor(source: IntakeProfileDraftFieldMetadata) {
@@ -1406,6 +1426,8 @@ export function FamilyIntakeForm({
               stage={aiReviewStage}
               confirmedIssueIds={confirmedInitialReviewIssues}
               onToggleIssue={toggleInitialReviewIssue}
+              issueResponseEdits={issueResponseEdits}
+              onUpdateIssueResponse={updateIssueResponse}
             />
             {confirmReviewOpen && (
               <div
@@ -1790,12 +1812,16 @@ function InitialReviewPanel({
   stage,
   confirmedIssueIds,
   onToggleIssue,
+  issueResponseEdits,
+  onUpdateIssueResponse,
 }: {
   review: IntakeAiInitialReviewResponse | null;
   isReviewing: boolean;
   stage: AiReviewStage | null;
   confirmedIssueIds: string[];
   onToggleIssue: (issueId: string) => void;
+  issueResponseEdits: Map<string, string>;
+  onUpdateIssueResponse: (issueId: string, answer: string) => void;
 }) {
   if (!review) {
     return (
@@ -1866,28 +1892,46 @@ function InitialReviewPanel({
         <div className="mt-3 grid gap-3">
           {review.issues.map((item) => {
             const checked = confirmedIssueIds.includes(item.id);
+            const editedAnswer = issueResponseEdits.get(item.id);
             return (
-              <label
+              <div
                 key={item.id}
-                className="flex cursor-pointer gap-3 rounded-md border border-amber-200 bg-white p-3 text-sm leading-6 text-slate-700"
+                className="rounded-md border border-amber-200 bg-white p-3 text-sm leading-6 text-slate-700"
               >
-                <input
-                  className="mt-1 h-4 w-4 shrink-0"
-                  type="checkbox"
-                  checked={checked}
-                  disabled={review.ready_for_second_confirmation}
-                  onChange={() => onToggleIssue(item.id)}
-                />
-                <span>
-                  <strong className="block text-slate-950">
-                    {questionLabels[item.field] ?? item.field}
-                  </strong>
-                  <span className="block">{item.evidence_summary}</span>
-                  <span className="mt-1 block text-slate-900">
-                    请确认：{item.clarification_question}
+                <label className="flex cursor-pointer gap-3">
+                  <input
+                    className="mt-1 h-4 w-4 shrink-0"
+                    type="checkbox"
+                    checked={checked}
+                    disabled={review.ready_for_second_confirmation}
+                    onChange={() => onToggleIssue(item.id)}
+                  />
+                  <span>
+                    <strong className="block text-slate-950">
+                      {questionLabels[item.field] ?? item.field}
+                    </strong>
+                    <span className="block">{item.evidence_summary}</span>
+                    <span className="mt-1 block text-slate-900">
+                      请确认：{item.clarification_question}
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+                {!review.ready_for_second_confirmation && (
+                  <div className="mt-3">
+                    <label className="block text-xs font-medium text-slate-700">
+                      修正答案（可选）：
+                    </label>
+                    <TextArea
+                      className="mt-1"
+                      value={editedAnswer ?? ""}
+                      onChange={(event) =>
+                        onUpdateIssueResponse(item.id, event.target.value)
+                      }
+                      placeholder="如需修正此问题的答案，请在此输入新答案"
+                    />
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>

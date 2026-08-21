@@ -30,7 +30,7 @@ vi.mock("../api/cases", () => ({
 
 const detail: CaseDetail = {
   id: "case-1", case_code: "AG-CASE-1", status: "active", access_role: "family",
-  elder_profile: { id: "profile-1", display_name: "王奶奶", age: 82, gender: "女", physical_description: "戴眼镜", clothing_description: "蓝外套", health_notes: null, last_seen_at: "2026-08-10T00:00:00Z", last_seen_location: "南门" },
+  elder_profile: { id: "profile-1", display_name: "王奶奶", age: 82, gender: "女", physical_description: "戴眼镜", clothing_description: "蓝外套", health_notes: null, last_seen_at: "2026-08-10T00:00:00Z", last_seen_location: "南门", mobility_notes: null, transportation_ability: null, frequent_locations: null, behavior_habits: null, suspicious_motive: null },
   clues: [], places: [{ id: "place-1", case_id: "case-1", name: "社区公园", place_type: "frequent", address: "社区公园", longitude: null, latitude: null, source: "family", visibility: "confirmed", review_status: "confirmed", created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:00:00Z", is_own_submission: true }], attachments: [], created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:00:00Z",
 };
 
