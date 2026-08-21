@@ -383,7 +383,11 @@ pub async fn update_elder_profile(
         }
     }
     if let Some(value) = request.mobility_notes {
-        if previous.mobility_notes.as_ref().and_then(|m| m.summary.as_ref()).map(|s| s.as_str())
+        if previous
+            .mobility_notes
+            .as_ref()
+            .and_then(|m| m.summary.as_ref())
+            .map(|s| s.as_str())
             != Some(value.as_str())
         {
             active.mobility_notes = Set(Some(value));

@@ -1841,11 +1841,9 @@ async fn regenerate_profile_with_edited_issues(
                 Err(_) => Err(ApiError::Internal),
             }
         }
-        AiExecutionResult::Degraded { .. } | AiExecutionResult::Failed { .. } => {
-            Err(ApiError::Conflict(
-                "AI profile regeneration is temporarily unavailable".to_owned(),
-            ))
-        }
+        AiExecutionResult::Degraded { .. } | AiExecutionResult::Failed { .. } => Err(
+            ApiError::Conflict("AI profile regeneration is temporarily unavailable".to_owned()),
+        ),
     }
 }
 

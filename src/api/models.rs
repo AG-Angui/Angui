@@ -1990,15 +1990,20 @@ impl From<elder_profiles::Model> for ElderProfileResponse {
             health_notes: model.health_notes,
             last_seen_at: model.last_seen_at,
             last_seen_location: model.last_seen_location,
-            mobility_notes: model.mobility_notes
+            mobility_notes: model
+                .mobility_notes
                 .and_then(|json| serde_json::from_str(&json).ok()),
-            transportation_ability: model.transportation_ability
+            transportation_ability: model
+                .transportation_ability
                 .and_then(|json| serde_json::from_str(&json).ok()),
-            frequent_locations: model.frequent_locations
+            frequent_locations: model
+                .frequent_locations
                 .and_then(|json| serde_json::from_str(&json).ok()),
-            behavior_habits: model.behavior_habits
+            behavior_habits: model
+                .behavior_habits
                 .and_then(|json| serde_json::from_str(&json).ok()),
-            suspicious_motive: model.suspicious_motive
+            suspicious_motive: model
+                .suspicious_motive
                 .and_then(|json| serde_json::from_str(&json).ok()),
         }
     }

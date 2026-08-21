@@ -1,7 +1,7 @@
 use actix_web::{http::StatusCode, test};
 use serde_json::json;
 
-use crate::support::{TestContext, COMMANDER, FAMILY};
+use crate::support::{COMMANDER, FAMILY, TestContext};
 
 #[actix_web::test]
 async fn update_elder_profile_supports_null_to_value_updates() {
@@ -39,7 +39,9 @@ async fn update_elder_profile_supports_null_to_value_updates() {
     let case_id = create_body["id"].as_str().expect("case id");
 
     // Add commander as member so they can access the case
-    context.add_member(case_id, FAMILY, COMMANDER, "commander").await;
+    context
+        .add_member(case_id, FAMILY, COMMANDER, "commander")
+        .await;
 
     // Get initial case detail to verify null fields
     let get_response = test::call_service(
@@ -101,8 +103,14 @@ async fn update_elder_profile_supports_null_to_value_updates() {
     let verify_body: serde_json::Value = test::read_body_json(verify_response).await;
 
     assert_eq!(verify_body["elder_profile"]["gender"], "female");
-    assert_eq!(verify_body["elder_profile"]["clothing_description"], "新增的衣着描述");
-    assert_eq!(verify_body["elder_profile"]["health_notes"], "新增的健康备注");
+    assert_eq!(
+        verify_body["elder_profile"]["clothing_description"],
+        "新增的衣着描述"
+    );
+    assert_eq!(
+        verify_body["elder_profile"]["health_notes"],
+        "新增的健康备注"
+    );
 }
 
 #[actix_web::test]
@@ -143,7 +151,9 @@ async fn update_elder_profile_supports_extended_field_null_updates() {
     let case_id = create_body["id"].as_str().expect("case id");
 
     // Add commander as member
-    context.add_member(case_id, FAMILY, COMMANDER, "commander").await;
+    context
+        .add_member(case_id, FAMILY, COMMANDER, "commander")
+        .await;
 
     // Update null extended fields
     let update_response = test::call_service(
