@@ -1189,6 +1189,16 @@ pub struct UpdateElderProfileRequest {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+    #[serde(default)]
+    pub mobility_notes: Option<String>,
+    #[serde(default)]
+    pub transportation_ability: Option<String>,
+    #[serde(default)]
+    pub frequent_locations: Option<String>,
+    #[serde(default)]
+    pub behavior_habits: Option<String>,
+    #[serde(default)]
+    pub suspicious_motive: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

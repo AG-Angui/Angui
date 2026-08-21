@@ -382,6 +382,62 @@ pub async fn update_elder_profile(
             changed_fields.push("last_seen_location");
         }
     }
+    if let Some(value) = request.mobility_notes {
+        if previous.mobility_notes.as_ref().and_then(|m| m.summary.as_ref()).map(|s| s.as_str())
+            != Some(value.as_str())
+        {
+            active.mobility_notes = Set(Some(value));
+            changed_fields.push("mobility_notes");
+        }
+    }
+    if let Some(value) = request.transportation_ability {
+        if previous
+            .transportation_ability
+            .as_ref()
+            .and_then(|t| t.summary.as_ref())
+            .map(|s| s.as_str())
+            != Some(value.as_str())
+        {
+            active.transportation_ability = Set(Some(value));
+            changed_fields.push("transportation_ability");
+        }
+    }
+    if let Some(value) = request.frequent_locations {
+        if previous
+            .frequent_locations
+            .as_ref()
+            .and_then(|f| f.summary.as_ref())
+            .map(|s| s.as_str())
+            != Some(value.as_str())
+        {
+            active.frequent_locations = Set(Some(value));
+            changed_fields.push("frequent_locations");
+        }
+    }
+    if let Some(value) = request.behavior_habits {
+        if previous
+            .behavior_habits
+            .as_ref()
+            .and_then(|b| b.summary.as_ref())
+            .map(|s| s.as_str())
+            != Some(value.as_str())
+        {
+            active.behavior_habits = Set(Some(value));
+            changed_fields.push("behavior_habits");
+        }
+    }
+    if let Some(value) = request.suspicious_motive {
+        if previous
+            .suspicious_motive
+            .as_ref()
+            .and_then(|s| s.summary.as_ref())
+            .map(|s_val| s_val.as_str())
+            != Some(value.as_str())
+        {
+            active.suspicious_motive = Set(Some(value));
+            changed_fields.push("suspicious_motive");
+        }
+    }
     if changed_fields.is_empty() {
         return Err(ApiError::Validation(
             "at least one changed elder profile field is required".to_owned(),
@@ -1328,6 +1384,11 @@ fn validate_elder_profile_update(request: &UpdateElderProfileRequest) -> Result<
         && request.health_notes.is_none()
         && request.last_seen_at.is_none()
         && request.last_seen_location.is_none()
+        && request.mobility_notes.is_none()
+        && request.transportation_ability.is_none()
+        && request.frequent_locations.is_none()
+        && request.behavior_habits.is_none()
+        && request.suspicious_motive.is_none()
     {
         return Err(ApiError::Validation(
             "at least one elder profile field is required".to_owned(),

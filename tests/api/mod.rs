@@ -19,6 +19,7 @@ mod case_summary_get;
 mod cases_create_post;
 mod cases_list_get;
 mod clue_review_patch;
+mod elder_profile_update;
 mod health_get;
 mod intake_report_details_post;
 mod intake_session_ai_follow_up_get;
