@@ -261,7 +261,9 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
                 .iter()
                 .map(|issue| issue.id.clone())
                 .collect(),
+            issue_responses: vec![],
         },
+        &gateway,
     )
     .await
     .expect("family can acknowledge the review for a session without photos");
@@ -314,7 +316,9 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
         AcknowledgeIntakeAiInitialReviewRequest {
             human_confirmed: true,
             confirmed_issue_ids: review.issues.iter().map(|issue| issue.id.clone()).collect(),
+            issue_responses: vec![],
         },
+        &gateway,
     )
     .await
     .expect("family can acknowledge the corrected review prompts");

@@ -466,6 +466,7 @@ async fn acknowledge_ai_initial_review(
             &auth,
             &session_id,
             request.into_inner(),
+            &state.ai_gateway,
         )
         .await?,
     ))

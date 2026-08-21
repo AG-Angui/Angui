@@ -830,6 +830,14 @@ pub struct StartIntakeAiInitialReviewRequest {
 pub struct AcknowledgeIntakeAiInitialReviewRequest {
     pub confirmed_issue_ids: Vec<String>,
     pub human_confirmed: bool,
+    #[serde(default)]
+    pub issue_responses: Vec<IssueResponseEdit>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IssueResponseEdit {
+    pub issue_id: String,
+    pub user_answer: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
