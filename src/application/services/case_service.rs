@@ -1215,6 +1215,11 @@ pub(crate) async fn insert_case_records<C: ConnectionTrait>(
         health_notes: Set(trim_optional(request.health_notes.clone())),
         last_seen_at: Set(trim_optional(request.last_seen_at.clone())),
         last_seen_location: Set(trim_optional(request.last_seen_location.clone())),
+        mobility_notes: Set(request.mobility_notes.clone()),
+        transportation_ability: Set(request.transportation_ability.clone()),
+        frequent_locations: Set(request.frequent_locations.clone()),
+        behavior_habits: Set(request.behavior_habits.clone()),
+        suspicious_motive: Set(request.suspicious_motive.clone()),
         created_at: Set(timestamp.to_owned()),
         updated_at: Set(timestamp.to_owned()),
     }
@@ -1569,6 +1574,11 @@ mod tests {
                 health_notes: Some("模拟认知障碍信息".to_owned()),
                 last_seen_at: Some("2026-07-13T09:00:00Z".to_owned()),
                 last_seen_location: Some("模拟公园北门".to_owned()),
+                mobility_notes: None,
+                transportation_ability: None,
+                frequent_locations: None,
+                behavior_habits: None,
+                suspicious_motive: None,
             },
         )
         .await

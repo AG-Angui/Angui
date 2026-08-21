@@ -1947,6 +1947,11 @@ fn case_request_from_confirmed_profile(request: ConfirmIntakeSessionRequest) -> 
         health_notes: request.profile.health_notes,
         last_seen_at: request.profile.last_seen_at,
         last_seen_location: Some(request.profile.last_seen_location),
+        mobility_notes: request.profile.mobility_notes,
+        transportation_ability: request.profile.transportation_ability,
+        frequent_locations: request.profile.frequent_locations,
+        behavior_habits: request.profile.behavior_habits,
+        suspicious_motive: request.profile.suspicious_motive,
     }
 }
 

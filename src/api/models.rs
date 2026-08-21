@@ -747,6 +747,16 @@ pub struct CreateCaseRequest {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobility_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transportation_ability: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequent_locations: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_habits: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspicious_motive: Option<String>,
 }
 
 /// Starts a family-owned intake session. These values remain unconfirmed
@@ -833,6 +843,16 @@ pub struct ConfirmedIntakeProfile {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobility_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transportation_ability: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequent_locations: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_habits: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspicious_motive: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1386,6 +1406,23 @@ pub struct ElderProfileResponse {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobility_notes: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transportation_ability: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequent_locations: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_habits: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspicious_motive: Option<ElderProfileExtendedField>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ElderProfileExtendedField {
+    pub summary: Option<String>,
+    pub source_fields: Vec<String>,
+    pub confidence: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1935,6 +1972,16 @@ impl From<elder_profiles::Model> for ElderProfileResponse {
             health_notes: model.health_notes,
             last_seen_at: model.last_seen_at,
             last_seen_location: model.last_seen_location,
+            mobility_notes: model.mobility_notes
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            transportation_ability: model.transportation_ability
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            frequent_locations: model.frequent_locations
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            behavior_habits: model.behavior_habits
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            suspicious_motive: model.suspicious_motive
+                .and_then(|json| serde_json::from_str(&json).ok()),
         }
     }
 }

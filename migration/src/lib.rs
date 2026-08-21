@@ -48,6 +48,7 @@ mod m0045_create_auth_access_and_message_delivery;
 mod m0046_create_collaboration_spaces;
 mod m0047_add_collaboration_activity;
 mod m0048_create_knowledge_rag_v0;
+mod m0049_add_elder_profile_extended_fields;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -105,6 +106,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0046_create_collaboration_spaces::Migration),
             Box::new(m0047_add_collaboration_activity::Migration),
             Box::new(m0048_create_knowledge_rag_v0::Migration),
+            Box::new(m0049_add_elder_profile_extended_fields::Migration),
         ]
     }
 }
