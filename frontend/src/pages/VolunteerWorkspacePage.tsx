@@ -15,7 +15,6 @@ import {
   applyForTask,
   createClue,
   getCase,
-  getCaseMapView,
   getCasePoiRoute,
   getCaseSummary,
   getTaskNavigation,
@@ -32,7 +31,6 @@ import {
 } from "../api/cases";
 import type {
   CaseDetail,
-  CaseMapView,
   CasePoi,
   CasePoiRoute,
   CasePois,
@@ -1146,43 +1144,13 @@ function VolunteerMapViewSection({
   detail: CaseDetail;
   token: string | null;
 }) {
-  const [mapView, setMapView] = useState<CaseMapView | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!token) return;
-    setIsLoading(true);
-    setError("");
-    getCaseMapView(token, detail.id)
-      .then((data) => setMapView(data))
-      .catch((err) => setError(messageFrom(err)))
-      .finally(() => setIsLoading(false));
-  }, [token, detail.id]);
-
-  if (isLoading) {
+  if (!token) {
     return (
       <div className="py-8 text-center text-sm text-slate-500">
-        正在加载地图数据...
+        需要登录后才能查看地图
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="py-4 text-center text-sm text-red-600">
-        地图加载失败：{error}
-      </div>
-    );
-  }
-
-  if (!mapView || mapView.items.length === 0) {
-    return (
-      <div className="py-8 text-center text-sm text-slate-500">
-        暂无可查看的地图数据
-      </div>
-    );
-  }
-
-  return <ClueMapView items={mapView.items} className="h-[500px]" />;
+  return <ClueMapView caseId={detail.id} token={token} className="h-[500px]" />;
 }

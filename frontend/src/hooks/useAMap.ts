@@ -32,13 +32,13 @@ export function useAMap(options: UseAMapOptions): UseAMapReturn {
 
     // 配置安全密钥（生产环境应使用代理）
     window._AMapSecurityConfig = {
-      securityJsCode: import.meta.env.VITE_AMAP_SECURITY_KEY || import.meta.env.VITE_AMAP_JS_API_SECURITY_CODE || '',
+      securityJsCode: import.meta.env.VITE_AMAP_JS_API_SECURITY_CODE || '',
       serviceHost: import.meta.env.VITE_AMAP_JS_API_SERVICE_HOST,
     };
 
     // 加载高德地图 JSAPI
     AMapLoader.load({
-      key: import.meta.env.VITE_AMAP_KEY || import.meta.env.VITE_AMAP_JS_API_KEY || '',
+      key: import.meta.env.VITE_AMAP_JS_API_KEY || '',
       version: '2.0',
       plugins: ['AMap.Marker', 'AMap.InfoWindow'],
     })

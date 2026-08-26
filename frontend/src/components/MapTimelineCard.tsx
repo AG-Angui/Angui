@@ -54,9 +54,9 @@ export function MapTimelineCard({
           ? 'bg-teal-50 border-teal-300 shadow-md'
           : 'bg-white/70 border-transparent hover:border-teal-200 hover:shadow-sm'
       }`}
-      variant="flat"
+      variant="ghost"
       onClick={hasCoordinates ? onClick : undefined}
-      disabled={!hasCoordinates}
+      isDisabled={!hasCoordinates}
       style={{ borderWidth: '1px', borderRadius: '16px' }}
     >
       <div className="grid grid-cols-[40px_1fr] gap-3 w-full">
@@ -75,7 +75,7 @@ export function MapTimelineCard({
           </h3>
 
           <div className="flex items-center gap-2 flex-wrap">
-            <Chip size="sm" variant="flat" color="primary">
+            <Chip size="sm" variant="soft" color="default">
               {typeLabels[item.object_type] || item.object_type}
             </Chip>
             {item.occurred_at && (

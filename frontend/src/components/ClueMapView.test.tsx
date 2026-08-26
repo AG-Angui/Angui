@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { ClueMapView } from './ClueMapView';
-import type { CaseMapItem } from './ClueMapView';
 
 // Mock 高德地图加载器
 vi.mock('@amap/amap-jsapi-loader', () => ({
@@ -52,45 +51,12 @@ vi.mock('@amap/amap-jsapi-loader', () => ({
 }));
 
 describe('ClueMapView', () => {
-  const mockItems: CaseMapItem[] = [
-    {
-      id: 'clue-1',
-      object_type: 'clue',
-      display_name: '测试线索1',
-      longitude: 116.397428,
-      latitude: 39.90923,
-      location_text: '北京市东城区',
-      location_precision: 'exact',
-      source: 'family',
-      occurred_at: '2024-01-01T10:00:00Z',
-      reported_at: '2024-01-01T11:00:00Z',
-      review_status: 'confirmed',
-      related_task_id: null,
-      updated_at: '2024-01-01T12:00:00Z',
-    },
-    {
-      id: 'task-1',
-      object_type: 'task',
-      display_name: '测试任务',
-      longitude: 116.407428,
-      latitude: 39.91923,
-      location_text: '北京市朝阳区',
-      location_precision: 'exact',
-      source: 'commander',
-      occurred_at: null,
-      reported_at: '2024-01-02T10:00:00Z',
-      review_status: 'pending_review',
-      related_task_id: null,
-      updated_at: '2024-01-02T10:00:00Z',
-    },
-  ];
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('应该渲染地图容器', async () => {
-    render(<ClueMapView items={mockItems} />);
+    render(<ClueMapView caseId="test-case-1" token="test-token" />);
 
     await waitFor(() => {
       const mapContainer = document.getElementById('clue-map-container');
@@ -99,7 +65,7 @@ describe('ClueMapView', () => {
   });
 
   it('应该渲染时间线卡片', async () => {
-    render(<ClueMapView items={mockItems} />);
+    render(<ClueMapView caseId="test-case-1" token="test-token" />);
 
     await waitFor(() => {
       expect(screen.getByText('测试线索1')).toBeDefined();
@@ -108,28 +74,20 @@ describe('ClueMapView', () => {
   });
 
   it('应该显示重置按钮', async () => {
-    render(<ClueMapView items={mockItems} />);
+    render(<ClueMapView caseId="test-case-1" token="test-token" />);
 
     await waitFor(() => {
-      expect(screen.getByText('回到总览')).toBeDefined();
+      expect(screen.getByText('重置视图')).toBeDefined();
     });
   });
 
   it('空数据时应该显示空状态提示', () => {
-    render(<ClueMapView items={[]} />);
+    render(<ClueMapView caseId="test-case-1" token="test-token" />);
     expect(screen.getByText(/暂无/)).toBeDefined();
   });
 
   it('应该过滤出有坐标的项目', async () => {
-    const itemsWithoutCoords: CaseMapItem[] = [
-      {
-        ...mockItems[0],
-        longitude: null,
-        latitude: null,
-      },
-    ];
-
-    render(<ClueMapView items={itemsWithoutCoords} />);
+    render(<ClueMapView caseId="test-case-1" token="test-token" />);
 
     await waitFor(() => {
       // 应该显示卡片但标记为仅文字位置

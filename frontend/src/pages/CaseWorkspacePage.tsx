@@ -962,7 +962,9 @@ function CaseDetailView({
         >
           地图视图
         </h3>
-        <CaseMapViewSection detail={detail} token={token} />
+        <div className="h-[600px]">
+          <ClueMapView caseId={detail.id} token={token} />
+        </div>
       </section>
 
       <section

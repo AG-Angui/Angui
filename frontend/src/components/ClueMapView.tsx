@@ -5,25 +5,11 @@ import { useAMap } from '../hooks/useAMap';
 import { MapTimelineCard } from './MapTimelineCard';
 import type { AMap as AMapType } from '../types/amap';
 import { LoadingState, ErrorState, EmptyState } from './ContentState';
-
-export interface CaseMapItem {
-  id: string;
-  object_type: 'clue' | 'task' | 'place' | 'last_seen';
-  display_name: string | null;
-  longitude: number | null;
-  latitude: number | null;
-  location_text: string | null;
-  location_precision: string;
-  source: string;
-  occurred_at: string | null;
-  reported_at: string | null;
-  review_status: string;
-  related_task_id: string | null;
-  updated_at: string;
-}
+import { getCaseMapView, type CaseMapItem } from '../api/cases';
 
 export interface ClueMapViewProps {
-  items: CaseMapItem[];
+  caseId: string;
+  token: string | null;
   className?: string;
 }
 
@@ -39,7 +25,29 @@ const markerColors: Record<string, string> = {
  * 线索地图视图组件
  * 使用高德地图展示线索、任务和地点，支持卡片与地图标记的交互同步
  */
-export function ClueMapView({ items, className = '' }: ClueMapViewProps) {
+export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps) {
+  const [items, setItems] = useState<CaseMapItem[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<Error | null>(null);
+
+  // 获取地图数据
+  useEffect(() => {
+    if (!token) return;
+
+    setDataLoading(true);
+    setDataError(null);
+
+    getCaseMapView(token, caseId)
+      .then((response) => {
+        setItems(response.items as CaseMapItem[]);
+      })
+      .catch((err) => {
+        setDataError(err);
+      })
+      .finally(() => {
+        setDataLoading(false);
+      });
+  }, [caseId, token]);
   const mapContainerId = 'clue-map-container';
   const { map, AMap, loading, error } = useAMap({
     container: mapContainerId,
@@ -207,22 +215,21 @@ export function ClueMapView({ items, className = '' }: ClueMapViewProps) {
     infoWindowRef.current?.close();
   }, [map, itemsWithCoords.length]);
 
-  if (loading) {
-    return <LoadingState message="正在加载地图..." />;
+  if (dataLoading || loading) {
+    return <LoadingState label="正在加载地图..." />;
   }
 
-  if (error) {
+  if (dataError || error) {
     return (
       <ErrorState
         message="地图加载失败"
-        details={error.message}
         onRetry={() => window.location.reload()}
       />
     );
   }
 
   if (items.length === 0) {
-    return <EmptyState message="暂无地图数据" />;
+    return <EmptyState title="暂无地图数据" />;
   }
 
   return (
@@ -242,13 +249,12 @@ export function ClueMapView({ items, className = '' }: ClueMapViewProps) {
         </div>
 
         <Button
-          color="primary"
-          variant="flat"
-          startContent={<RotateCcw className="w-4 h-4" />}
+          variant="ghost"
           onClick={handleResetView}
-          className="flex-shrink-0"
+          className="flex items-center gap-2 flex-shrink-0"
         >
-          回到总览
+          <RotateCcw className="w-4 h-4" />
+          重置视图
         </Button>
       </aside>
 

@@ -825,7 +825,7 @@ export interface CaseMapItem {
   longitude: number | null;
   latitude: number | null;
   location_text: string | null;
-  location_precision: string;
+  location_precision: MapLocationPrecision;
   source: string;
   occurred_at: string | null;
   reported_at: string | null;
