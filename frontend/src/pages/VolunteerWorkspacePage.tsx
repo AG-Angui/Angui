@@ -15,6 +15,7 @@ import {
   applyForTask,
   createClue,
   getCase,
+  getCaseMapView,
   getCasePoiRoute,
   getCaseSummary,
   getTaskNavigation,
@@ -31,6 +32,7 @@ import {
 } from "../api/cases";
 import type {
   CaseDetail,
+  CaseMapView,
   CasePoi,
   CasePoiRoute,
   CasePois,
@@ -44,6 +46,7 @@ import type {
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
+import { ClueMapView } from "../components/ClueMapView";
 import {
   EmptyState,
   ErrorState,
@@ -736,6 +739,17 @@ export function VolunteerWorkspacePage() {
                     </p>
                   </section>
                 )}
+                <section className="mt-4 border-t border-slate-200 pt-4">
+                  <h3 className="m-0 text-sm font-semibold text-slate-950">
+                    任务地图
+                  </h3>
+                  <div className="mt-3">
+                    <VolunteerMapViewSection
+                      detail={workspace.detail}
+                      token={token}
+                    />
+                  </div>
+                </section>
                 <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
                   <h3 className="m-0 text-sm font-semibold text-slate-950">
                     已审核关键地点（含家属提供）
@@ -1122,4 +1136,53 @@ export function VolunteerWorkspacePage() {
       )}
     </main>
   );
+}
+
+// 志愿者地图视图组件
+function VolunteerMapViewSection({
+  detail,
+  token,
+}: {
+  detail: CaseDetail;
+  token: string | null;
+}) {
+  const [mapView, setMapView] = useState<CaseMapView | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!token) return;
+    setIsLoading(true);
+    setError("");
+    getCaseMapView(token, detail.id)
+      .then((data) => setMapView(data))
+      .catch((err) => setError(messageFrom(err)))
+      .finally(() => setIsLoading(false));
+  }, [token, detail.id]);
+
+  if (isLoading) {
+    return (
+      <div className="py-8 text-center text-sm text-slate-500">
+        正在加载地图数据...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="py-4 text-center text-sm text-red-600">
+        地图加载失败：{error}
+      </div>
+    );
+  }
+
+  if (!mapView || mapView.items.length === 0) {
+    return (
+      <div className="py-8 text-center text-sm text-slate-500">
+        暂无可查看的地图数据
+      </div>
+    );
+  }
+
+  return <ClueMapView items={mapView.items} className="h-[500px]" />;
 }

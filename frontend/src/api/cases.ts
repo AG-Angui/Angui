@@ -814,6 +814,26 @@ export interface CaseSourceRecord {
   created_at: string;
 }
 
+export interface CaseMapView {
+  items: CaseMapItem[];
+}
+
+export interface CaseMapItem {
+  id: string;
+  object_type: "clue" | "task" | "place" | "last_seen";
+  display_name: string | null;
+  longitude: number | null;
+  latitude: number | null;
+  location_text: string | null;
+  location_precision: string;
+  source: string;
+  occurred_at: string | null;
+  reported_at: string | null;
+  review_status: string;
+  related_task_id: string | null;
+  updated_at: string;
+}
+
 export function createCaseSourceRecord(
   token: string,
   caseId: string,
