@@ -44,6 +44,7 @@ import type {
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
+import { ClueMapView } from "../components/ClueMapView";
 import {
   EmptyState,
   ErrorState,
@@ -736,6 +737,17 @@ export function VolunteerWorkspacePage() {
                     </p>
                   </section>
                 )}
+                <section className="mt-4 border-t border-slate-200 pt-4">
+                  <h3 className="m-0 text-sm font-semibold text-slate-950">
+                    任务地图
+                  </h3>
+                  <div className="mt-3">
+                    <VolunteerMapViewSection
+                      detail={workspace.detail}
+                      token={token}
+                    />
+                  </div>
+                </section>
                 <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
                   <h3 className="m-0 text-sm font-semibold text-slate-950">
                     已审核关键地点（含家属提供）
@@ -1122,4 +1134,23 @@ export function VolunteerWorkspacePage() {
       )}
     </main>
   );
+}
+
+// 志愿者地图视图组件
+function VolunteerMapViewSection({
+  detail,
+  token,
+}: {
+  detail: CaseDetail;
+  token: string | null;
+}) {
+  if (!token) {
+    return (
+      <div className="py-8 text-center text-sm text-slate-500">
+        需要登录后才能查看地图
+      </div>
+    );
+  }
+
+  return <ClueMapView caseId={detail.id} token={token} className="h-[500px]" />;
 }
