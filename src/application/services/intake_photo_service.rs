@@ -3,8 +3,8 @@ use std::{fs, path::Path};
 use actix_web::web;
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel,
+    PaginatorTrait, QueryFilter, Set, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -166,6 +166,130 @@ pub async fn load_photo(
     )
 }
 
+pub async fn delete_photo(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    photo_id: &str,
+    directory: &Path,
+) -> Result<(), ApiError> {
+    let transaction = db.begin().await?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_creator(&session, auth)?;
+    if !matches!(
+        session.status.as_str(),
+        "collecting" | "ready_for_confirmation"
+    ) {
+        return Err(ApiError::Conflict(
+            "intake session is not accepting photo changes".to_owned(),
+        ));
+    }
+    let photo = intake_session_photos::Entity::find_by_id(photo_id)
+        .one(&transaction)
+        .await?
+        .filter(|photo| photo.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("intake photo was not found".to_owned()))?;
+    let storage_path = directory.join(&photo.storage_key);
+    intake_session_photos::Entity::delete_by_id(&photo.id)
+        .exec(&transaction)
+        .await?;
+    intake_session_service::write_attachment_audit(
+        &transaction,
+        auth,
+        "intake_session.photo_deleted",
+        session_id,
+        &photo.id,
+        &photo.content_type,
+    )
+    .await?;
+    transaction.commit().await?;
+    remove_file_best_effort(storage_path).await;
+    Ok(())
+}
+pub async fn replace_photo(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    photo_id: &str,
+    upload: AttachmentUpload<'_>,
+    directory: &Path,
+    max_image_bytes: usize,
+) -> Result<IntakePhotoResponse, ApiError> {
+    let (content_type, original_filename, normalized) =
+        normalize_image_upload(upload, max_image_bytes).await?;
+    let transaction = db.begin().await?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_creator(&session, auth)?;
+    if !matches!(
+        session.status.as_str(),
+        "collecting" | "ready_for_confirmation"
+    ) {
+        return Err(ApiError::Conflict(
+            "intake session is not accepting photo changes".to_owned(),
+        ));
+    }
+    let photo = intake_session_photos::Entity::find_by_id(photo_id)
+        .one(&transaction)
+        .await?
+        .filter(|photo| photo.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("intake photo was not found".to_owned()))?;
+    let extension = match content_type.as_str() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        _ => return Err(ApiError::Internal),
+    };
+    let new_storage_key = format!("intake/{}.{}", Uuid::new_v4(), extension);
+    let new_path = directory.join(&new_storage_key);
+    let parent = new_path.parent().ok_or(ApiError::Internal)?.to_path_buf();
+    let path_for_write = new_path.clone();
+    let bytes_for_write = normalized.clone();
+    web::block(move || {
+        fs::create_dir_all(parent)?;
+        fs::write(path_for_write, bytes_for_write)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(|_| ApiError::Internal)?;
+    let old_path = directory.join(&photo.storage_key);
+    let mut active = photo.clone().into_active_model();
+    active.storage_key = Set(new_storage_key);
+    active.original_filename = Set(original_filename);
+    active.content_type = Set(content_type.clone());
+    active.byte_size = Set(normalized.len() as i64);
+    active.sha256 = Set(hex::encode(Sha256::digest(&normalized)));
+    let model = match active.update(&transaction).await {
+        Ok(value) => value,
+        Err(error) => {
+            remove_file_best_effort(new_path).await;
+            return Err(ApiError::Database(error));
+        }
+    };
+    if let Err(error) = intake_session_service::write_attachment_audit(
+        &transaction,
+        auth,
+        "intake_session.photo_replaced",
+        session_id,
+        &model.id,
+        &model.content_type,
+    )
+    .await
+    {
+        remove_file_best_effort(new_path).await;
+        return Err(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        remove_file_best_effort(new_path).await;
+        return Err(ApiError::Database(error));
+    }
+    remove_file_best_effort(old_path).await;
+    Ok(response(model))
+}
 fn response(model: intake_session_photos::Model) -> IntakePhotoResponse {
     IntakePhotoResponse {
         id: model.id,

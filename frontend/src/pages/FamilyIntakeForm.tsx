@@ -26,6 +26,8 @@ import {
   restoreIntakeAnswerRevision,
   listIntakePhotos,
   downloadIntakePhoto,
+  deleteIntakePhoto,
+  replaceIntakePhoto,
   startIntakeAiInitialReview,
   submitIntakeAnswer,
   uploadIntakePhoto,
@@ -145,11 +147,19 @@ function IntakePhotoPreview({
     return <span className="text-xs text-amber-800" role="status">照片预览暂时无法加载，请稍后重试。</span>;
   }
   return source ? (
-    <img
-      src={source}
-      alt={`已上传照片：${photo.original_filename}`}
-      className="h-16 w-16 shrink-0 rounded border border-slate-200 bg-slate-100 object-cover"
-    />
+    <button
+      type="button"
+      className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+      title="查看大图"
+      aria-label={`查看照片：${photo.original_filename}`}
+      onClick={() => window.open(source, "_blank", "noopener,noreferrer")}
+    >
+      <img
+        src={source}
+        alt={`已上传照片：${photo.original_filename}`}
+        className="h-16 w-16 rounded border border-slate-200 bg-slate-100 object-cover"
+      />
+    </button>
   ) : null;
 }
 
@@ -288,11 +298,23 @@ export function FamilyIntakeForm({
     IntakeAnswerRevision[]
   >([]);
   const [profileVersions, setProfileVersions] = useState<IntakeDraft[]>([]);
+  const [comparisonError, setComparisonError] = useState("");
   const [comparison, setComparison] = useState<{
     from: string;
     to: string;
-    fields: string[];
+    fields: string[] | null;
   } | null>(null);
+  const profileFieldLabels: Record<string, string> = {
+    physical_description: "体貌特征",
+    clothing_description: "衣着描述",
+    health_notes: "健康情况",
+    mobility_notes: "行动能力",
+    transportation_ability: "出行方式",
+    frequent_locations: "常去地点",
+    last_seen_information: "最后出现信息",
+    behavior_habits: "行为习惯",
+    suspicious_motive: "可疑动机",
+  };
   const [isReviewingBasicInformation, setIsReviewingBasicInformation] =
     useState(false);
   const [isFetchingAiFollowUp, setIsFetchingAiFollowUp] = useState(false);
@@ -305,6 +327,7 @@ export function FamilyIntakeForm({
     | "acknowledge_initial_review"
     | "confirm"
     | "photo"
+    | "compare"
     | null
   >(null);
   const [error, setError] = useState("");
@@ -759,6 +782,37 @@ export function FamilyIntakeForm({
     }
   }
 
+  async function replacePhoto(photo: IntakePhoto, file: File | undefined) {
+    if (!token || !session || !file) return;
+    if (!isSupportedPhotoFile(file)) {
+      setError("请上传支持的照片格式。");
+      return;
+    }
+    setBusyAction("photo");
+    setError("");
+    try {
+      const updated = await replaceIntakePhoto(token, session.id, photo.id, file);
+      setPhotos((current) => current.map((item) => item.id === photo.id ? updated : item));
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function deletePhoto(photo: IntakePhoto) {
+    if (!token || !session) return;
+    setBusyAction("photo");
+    setError("");
+    try {
+      await deleteIntakePhoto(token, session.id, photo.id);
+      setPhotos((current) => current.filter((item) => item.id !== photo.id));
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
   async function restoreRevision(revision: IntakeAnswerRevision) {
     if (!token || !session) return;
     setBusyAction("replace");
@@ -1136,11 +1190,11 @@ export function FamilyIntakeForm({
                             : current?.to === version.id
                               ? { ...current, to: "" }
                               : !current?.from
-                                ? { from: version.id, to: "", fields: [] }
+                                ? { from: version.id, to: "", fields: null }
                                 : {
                                     from: current.from,
                                     to: version.id,
-                                    fields: [],
+                                    fields: null,
                                   },
                         )
                       }
@@ -1216,37 +1270,46 @@ export function FamilyIntakeForm({
               }
               onPress={() =>
                 void (async () => {
-                  if (
-                    !token ||
-                    !session ||
-                    !comparison?.from ||
-                    !comparison?.to
-                  )
-                    return;
-                  const diff = await diffIntakeDraftVersions(
-                    token,
-                    session.id,
-                    comparison.from,
-                    comparison.to,
-                  );
-                  setComparison({
-                    from: comparison.from,
-                    to: comparison.to,
-                    fields: diff.changed_fields,
-                  });
+                  if (!token || !session || !comparison?.from || !comparison?.to) return;
+                  setBusyAction("compare");
+                  setComparisonError("");
+                  try {
+                    const diff = await diffIntakeDraftVersions(
+                      token,
+                      session.id,
+                      comparison.from,
+                      comparison.to,
+                    );
+                    setComparison({ from: comparison.from, to: comparison.to, fields: diff.changed_fields });
+                  } catch (cause) {
+                    setComparisonError(messageFrom(cause));
+                  } finally {
+                    setBusyAction(null);
+                  }
                 })()
               }
             >
-              比较所选版本
+              {busyAction === "compare" ? "正在比较…" : "比较所选版本"}
             </Button>
-            {comparison?.fields.length ? (
-              <p className="mb-0 mt-2 text-xs text-slate-700">
-                变化字段：{comparison.fields.join("、")}
-              </p>
+            {comparisonError ? (
+              <p className="mb-0 mt-2 text-xs text-rose-700">{comparisonError}</p>
+            ) : comparison?.fields?.length ? (
+              <div className="mt-3 space-y-1 text-xs text-slate-700">
+                <p className="mb-1 font-semibold">v{profileVersions.find((item) => item.id === comparison.from)?.version} → v{profileVersions.find((item) => item.id === comparison.to)?.version} 的变更</p>
+                <ul className="m-0 space-y-1 pl-4">
+                  {comparison.fields.map((field) => (
+                    <li key={field} className="space-y-1">
+                      <p className="m-0 font-medium">{profileFieldLabels[field] ?? field}</p>
+                      <p className="m-0">v{profileVersions.find((item) => item.id === comparison.from)?.version}：{profileVersions.find((item) => item.id === comparison.from)?.profile[field as keyof IntakeDraftProfile] || "未填写"}</p>
+                      <p className="m-0">v{profileVersions.find((item) => item.id === comparison.to)?.version}：{profileVersions.find((item) => item.id === comparison.to)?.profile[field as keyof IntakeDraftProfile] || "未填写"}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : comparison?.from && comparison?.to && comparison.fields !== null ? (
+              <p className="mb-0 mt-2 text-xs text-slate-500">所选两个版本的画像字段值一致。</p>
             ) : comparison?.from && comparison?.to ? (
-              <p className="mb-0 mt-2 text-xs text-slate-500">
-                选择比较后将显示变更字段；无结果表示字段值一致。
-              </p>
+              <p className="mb-0 mt-2 text-xs text-slate-500">点击“比较所选版本”查看字段变更。</p>
             ) : null}
           </section>
         )}
@@ -1653,6 +1716,24 @@ export function FamilyIntakeForm({
               <li key={photo.id} className="flex items-center gap-3 rounded border border-slate-200 bg-white p-2">
                 <IntakePhotoPreview token={token ?? ""} sessionId={session.id} photo={photo} />
                 <span className="min-w-0 break-all">已上传：{photo.original_filename}（{Math.ceil(photo.byte_size / 1024)} KB）</span>
+                <div className="ml-auto flex shrink-0 gap-1">
+                  <label className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
+                    替换
+                    <input
+                      type="file"
+                      className="sr-only"
+                      accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif"
+                      disabled={isBusy}
+                      onChange={(event) => {
+                        void replacePhoto(photo, event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  <Button size="sm" variant="ghost" isDisabled={isBusy} onPress={() => void deletePhoto(photo)}>
+                    删除
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>

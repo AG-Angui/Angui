@@ -193,6 +193,27 @@ export function downloadIntakePhoto(
   return apiBlobRequest(`/intake-sessions/${sessionId}/photos/${photoId}`, {}, token);
 }
 
+export function deleteIntakePhoto(
+  token: string,
+  sessionId: string,
+  photoId: string,
+): Promise<void> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/photos/${photoId}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+export function replaceIntakePhoto(
+  token: string,
+  sessionId: string,
+  photoId: string,
+  file: File,
+): Promise<IntakePhoto> {
+  const body = new FormData();
+  body.append("file", file);
+  return apiRequest(`/intake-sessions/${sessionId}/photos/${photoId}`, { method: "PUT", body }, token);
+}
 export function submitIntakeAnswer(
   token: string,
   sessionId: string,
