@@ -44,6 +44,7 @@ import type {
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
+import { ClueMapView } from "../components/ClueMapView";
 import {
   EmptyState,
   ErrorState,
@@ -85,6 +86,21 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
 }
 
+function emptyCaseSummary(caseId: string): CaseSummary {
+  return {
+    case_id: caseId,
+    access_role: "volunteer",
+    generated_at: new Date(0).toISOString(),
+    source_scope: [],
+    last_confirmed_information: null,
+    confirmed_clues: [],
+    pending_verification: [],
+    excluded_directions: [],
+    current_focus: [],
+    task_status: [],
+    safety_reminders: [],
+  };
+}
 function poiListErrorMessage(cause: unknown) {
   if (cause instanceof ApiClientError && cause.status === 409)
     return "当前中心不能用于附近资源检索。可改用本人的当前位置，或联系指挥确认任务区域和公开地点。";
@@ -178,24 +194,36 @@ export function VolunteerWorkspacePage() {
       const volunteerCases = memberships.filter(
         (item) => item.access_role === "volunteer",
       );
-      const workspaces = await Promise.all(
+      const workspaceResults = await Promise.allSettled(
         volunteerCases.map(async (item) => {
-          const [detail, summary, publishedSummaryVersions, taskPage] = await Promise.all([
-            getCase(token, item.id),
-            getCaseSummary(token, item.id),
-            listVolunteerPublishedSummaryVersions(token, item.id),
-            listCaseTasks(token, item.id),
-          ]);
+          const detail = await getCase(token, item.id);
+          const [summaryResult, publishedSummaryResult, taskResult] =
+            await Promise.allSettled([
+              getCaseSummary(token, item.id),
+              listVolunteerPublishedSummaryVersions(token, item.id),
+              listCaseTasks(token, item.id),
+            ]);
           return {
             detail,
-            summary,
-            publishedSummaries: publishedSummaryVersions.items,
-            tasks: taskPage.items,
+            summary:
+              summaryResult.status === "fulfilled"
+                ? summaryResult.value
+                : emptyCaseSummary(item.id),
+            publishedSummaries:
+              publishedSummaryResult.status === "fulfilled"
+                ? publishedSummaryResult.value.items
+                : [],
+            tasks: taskResult.status === "fulfilled" ? taskResult.value.items : [],
           };
         }),
       );
-      setCases(workspaces);
-      setMyTasks(assigned);
+      const workspaces = workspaceResults.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      if (workspaces.length < volunteerCases.length) {
+        setNotice("部分案件暂时无法加载，其他案件仍可正常协作。");
+      }
+      setCases(workspaces);      setMyTasks(assigned);
     } catch (cause) {
       setFailure({ message: messageFrom(cause), retry: () => void load() });
     } finally {
@@ -736,6 +764,17 @@ export function VolunteerWorkspacePage() {
                     </p>
                   </section>
                 )}
+                <section className="mt-4 border-t border-slate-200 pt-4">
+                  <h3 className="m-0 text-sm font-semibold text-slate-950">
+                    任务地图
+                  </h3>
+                  <div className="mt-3">
+                    <VolunteerMapViewSection
+                      detail={workspace.detail}
+                      token={token}
+                    />
+                  </div>
+                </section>
                 <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
                   <h3 className="m-0 text-sm font-semibold text-slate-950">
                     已审核关键地点（含家属提供）
@@ -1122,4 +1161,23 @@ export function VolunteerWorkspacePage() {
       )}
     </main>
   );
+}
+
+// 志愿者地图视图组件
+function VolunteerMapViewSection({
+  detail,
+  token,
+}: {
+  detail: CaseDetail;
+  token: string | null;
+}) {
+  if (!token) {
+    return (
+      <div className="py-8 text-center text-sm text-slate-500">
+        需要登录后才能查看地图
+      </div>
+    );
+  }
+
+  return <ClueMapView caseId={detail.id} token={token} className="h-[500px]" />;
 }
