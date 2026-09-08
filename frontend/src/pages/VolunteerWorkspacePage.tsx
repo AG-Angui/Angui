@@ -86,6 +86,21 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
 }
 
+function emptyCaseSummary(caseId: string): CaseSummary {
+  return {
+    case_id: caseId,
+    access_role: "volunteer",
+    generated_at: new Date(0).toISOString(),
+    source_scope: [],
+    last_confirmed_information: null,
+    confirmed_clues: [],
+    pending_verification: [],
+    excluded_directions: [],
+    current_focus: [],
+    task_status: [],
+    safety_reminders: [],
+  };
+}
 function poiListErrorMessage(cause: unknown) {
   if (cause instanceof ApiClientError && cause.status === 409)
     return "当前中心不能用于附近资源检索。可改用本人的当前位置，或联系指挥确认任务区域和公开地点。";
@@ -179,24 +194,36 @@ export function VolunteerWorkspacePage() {
       const volunteerCases = memberships.filter(
         (item) => item.access_role === "volunteer",
       );
-      const workspaces = await Promise.all(
+      const workspaceResults = await Promise.allSettled(
         volunteerCases.map(async (item) => {
-          const [detail, summary, publishedSummaryVersions, taskPage] = await Promise.all([
-            getCase(token, item.id),
-            getCaseSummary(token, item.id),
-            listVolunteerPublishedSummaryVersions(token, item.id),
-            listCaseTasks(token, item.id),
-          ]);
+          const detail = await getCase(token, item.id);
+          const [summaryResult, publishedSummaryResult, taskResult] =
+            await Promise.allSettled([
+              getCaseSummary(token, item.id),
+              listVolunteerPublishedSummaryVersions(token, item.id),
+              listCaseTasks(token, item.id),
+            ]);
           return {
             detail,
-            summary,
-            publishedSummaries: publishedSummaryVersions.items,
-            tasks: taskPage.items,
+            summary:
+              summaryResult.status === "fulfilled"
+                ? summaryResult.value
+                : emptyCaseSummary(item.id),
+            publishedSummaries:
+              publishedSummaryResult.status === "fulfilled"
+                ? publishedSummaryResult.value.items
+                : [],
+            tasks: taskResult.status === "fulfilled" ? taskResult.value.items : [],
           };
         }),
       );
-      setCases(workspaces);
-      setMyTasks(assigned);
+      const workspaces = workspaceResults.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      if (workspaces.length < volunteerCases.length) {
+        setNotice("部分案件暂时无法加载，其他案件仍可正常协作。");
+      }
+      setCases(workspaces);      setMyTasks(assigned);
     } catch (cause) {
       setFailure({ message: messageFrom(cause), retry: () => void load() });
     } finally {

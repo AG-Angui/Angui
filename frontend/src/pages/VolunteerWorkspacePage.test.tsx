@@ -13,6 +13,11 @@ const mocked = vi.hoisted(() => ({
   listCaseTasks: vi.fn(),
 }));
 
+vi.mock("../components/CollaborationSpacePanel", () => ({
+  CollaborationSpacePanel: ({ caseId }: { caseId: string }) => (
+    <div>{`collaboration-space-${caseId}`}</div>
+  ),
+}));
 vi.mock("../auth/useAuth", () => ({
   useAuth: () => ({ token: "test-session" }),
 }));
@@ -160,4 +165,45 @@ describe("VolunteerWorkspacePage", () => {
     expect(screen.getByText("Family-approved meeting point")).toBeVisible();
     expect(screen.getByText("Family-approved location text")).toBeVisible();
   });
-});
+
+  it("keeps a loaded case and its collaboration space available when another case cannot load", async () => {
+    vi.clearAllMocks();
+    mocked.listCases.mockResolvedValue([
+      {
+        id: "case-unavailable",
+        case_code: "AG-UNAVAILABLE",
+        status: "active",
+        access_role: "volunteer",
+        display_name: "Unavailable case",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-08-14T08:00:00Z",
+        updated_at: "2026-08-14T09:00:00Z",
+      },
+      {
+        id: "case-volunteer",
+        case_code: "AG-VOLUNTEER",
+        status: "active",
+        access_role: "volunteer",
+        display_name: "Test volunteer case",
+        last_seen_at: null,
+        last_seen_location: null,
+        created_at: "2026-08-14T08:00:00Z",
+        updated_at: "2026-08-14T09:00:00Z",
+      },
+    ]);
+    mocked.listMyTasks.mockResolvedValue([]);
+    mocked.getCase.mockImplementation((_token: string, caseId: string) =>
+      caseId === "case-unavailable"
+        ? Promise.reject(new Error("case unavailable"))
+        : Promise.resolve(detail),
+    );
+    mocked.getCaseSummary.mockResolvedValue(summary);
+    mocked.listVolunteerPublishedSummaryVersions.mockResolvedValue({ items: [] });
+    mocked.listCaseTasks.mockResolvedValue({ items: [], page: 1, page_size: 25, total: 0 });
+
+    render(<VolunteerWorkspacePage />);
+
+    expect(await screen.findByText("collaboration-space-case-volunteer")).toBeVisible();
+    expect(screen.getByText("部分案件暂时无法加载，其他案件仍可正常协作。")).toBeVisible();
+  });});
