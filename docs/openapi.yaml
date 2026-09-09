@@ -4002,7 +4002,7 @@ components:
     IntakeAiInitialReviewResponse:
       type: object
       additionalProperties: false
-      required: [session_id, status, degradation_status, issues, blocking_assessments, generated_at, requires_family_acknowledgement, ready_for_second_confirmation]
+      required: [session_id, status, degradation_status, issues, blocking_assessments, reviewed_profile, generated_at, requires_family_acknowledgement, ready_for_second_confirmation]
       properties:
         session_id: { type: string, format: uuid }
         status: { type: string, enum: [collecting, ready_for_confirmation, awaiting_family_review, ready_for_second_confirmation, confirmed, closed] }
@@ -4013,6 +4013,11 @@ components:
         blocking_assessments:
           type: array
           items: { $ref: "#/components/schemas/IntakeAssessment" }
+        reviewed_profile:
+          oneOf:
+            - $ref: "#/components/schemas/ConfirmedIntakeProfile"
+            - type: "null"
+          description: Exact profile snapshot currently held by the initial review. The family must submit this snapshot for second confirmation.
         generated_at: { type: string, format: date-time }
         requires_family_acknowledgement: { type: boolean }
         ready_for_second_confirmation: { type: boolean }

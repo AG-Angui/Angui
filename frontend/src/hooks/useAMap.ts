@@ -3,7 +3,7 @@ import AMapLoader from '@amap/amap-jsapi-loader';
 import type { AMap } from '../types/amap';
 
 interface UseAMapOptions {
-  container: string | HTMLElement;
+  container: HTMLElement | null;
   center?: [number, number];
   zoom?: number;
   viewMode?: '2D' | '3D';
@@ -28,53 +28,64 @@ export function useAMap(options: UseAMapOptions): UseAMapReturn {
   const mapInstanceRef = useRef<AMap.Map | null>(null);
 
   useEffect(() => {
-    let mounted = true;
+    const container = options.container;
+    if (!container) return;
 
-    // 配置安全密钥（生产环境应使用代理）
+    let active = true;
+    let animationFrameId: number | null = null;
+    let mapInstance: AMap.Map | null = null;
+    setLoading(true);
+    setError(null);
+
     window._AMapSecurityConfig = {
       securityJsCode: import.meta.env.VITE_AMAP_JS_API_SECURITY_CODE || '',
       serviceHost: import.meta.env.VITE_AMAP_JS_API_SERVICE_HOST,
     };
 
-    // 加载高德地图 JSAPI
     AMapLoader.load({
       key: import.meta.env.VITE_AMAP_JS_API_KEY || '',
       version: '2.0',
       plugins: ['AMap.Marker', 'AMap.InfoWindow'],
     })
       .then((AMap) => {
-        if (!mounted) return;
+        // Give React one paint to finish a concurrent route, tab, or case switch.
+        // The container may still be connected when the loader resolves but be
+        // replaced before the browser paints the next frame.
+        animationFrameId = window.requestAnimationFrame(() => {
+          if (!active || !container.isConnected || !document.contains(container)) {
+            return;
+          }
 
-        setAMapClass(AMap);
-
-        // 创建地图实例
-        const mapInstance = new AMap.Map(options.container, {
-          viewMode: options.viewMode || '3D',
-          zoom: options.zoom || 12,
-          center: options.center || [116.397428, 39.90923],
-          mapStyle: 'amap://styles/normal',
+          setAMapClass(AMap);
+          mapInstance = new AMap.Map(container, {
+            viewMode: options.viewMode || '3D',
+            zoom: options.zoom || 12,
+            center: options.center || [116.397428, 39.90923],
+            mapStyle: 'amap://styles/normal',
+          });
+          mapInstanceRef.current = mapInstance;
+          setMap(mapInstance);
+          setLoading(false);
         });
-
-        mapInstanceRef.current = mapInstance;
-        setMap(mapInstance);
-        setLoading(false);
       })
-      .catch((err) => {
-        if (!mounted) return;
-        console.error('高德地图加载失败:', err);
-        setError(err);
+      .catch((cause: Error) => {
+        if (!active) return;
+        console.error('高德地图加载失败:', cause);
+        setError(cause);
         setLoading(false);
       });
 
-    // 清理函数：组件卸载时销毁地图实例
     return () => {
-      mounted = false;
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.destroy();
+      active = false;
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      mapInstance?.destroy();
+      if (mapInstanceRef.current === mapInstance) {
         mapInstanceRef.current = null;
+        setMap(null);
       }
     };
-  }, [options.container]); // 仅在容器变化时重新初始化
-
+  }, [options.container]);
   return { map, AMap: AMapClass, loading, error };
 }

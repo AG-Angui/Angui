@@ -881,6 +881,8 @@ pub struct IntakeAiInitialReviewResponse {
     pub degradation_status: String,
     pub issues: Vec<IntakeAiInitialReviewIssue>,
     pub blocking_assessments: Vec<IntakeAssessment>,
+    /// Exact profile snapshot that the later second confirmation must submit.
+    pub reviewed_profile: Option<ConfirmedIntakeProfile>,
     pub generated_at: String,
     pub requires_family_acknowledgement: bool,
     pub ready_for_second_confirmation: bool,

@@ -152,6 +152,11 @@ export interface ConfirmedIntakeProfile {
   health_notes: string | null;
   last_seen_at: string | null;
   last_seen_location: string;
+  mobility_notes?: string | null;
+  transportation_ability?: string | null;
+  frequent_locations?: string | null;
+  behavior_habits?: string | null;
+  suspicious_motive?: string | null;
 }
 
 export interface ConfirmIntakeResponse {
@@ -312,6 +317,7 @@ export interface IntakeAiInitialReviewResponse {
   degradation_status: "available" | "rule_based_fallback" | "not_started";
   issues: IntakeAiInitialReviewIssue[];
   blocking_assessments: IntakeAssessment[];
+  reviewed_profile?: ConfirmedIntakeProfile | null;
   generated_at: string;
   requires_family_acknowledgement: boolean;
   ready_for_second_confirmation: boolean;

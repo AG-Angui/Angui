@@ -1736,12 +1736,19 @@ fn initial_review_response(
     } else {
         "available"
     };
+    let reviewed_profile = session
+        .ai_initial_review_profile_json
+        .as_deref()
+        .map(serde_json::from_str::<ConfirmedIntakeProfile>)
+        .transpose()
+        .map_err(|_| ApiError::Internal)?;
     Ok(IntakeAiInitialReviewResponse {
         session_id: session.id.clone(),
         status: session.status.clone(),
         degradation_status: degradation_status.to_owned(),
         issues,
         blocking_assessments,
+        reviewed_profile,
         generated_at: session
             .ai_initial_reviewed_at
             .clone()

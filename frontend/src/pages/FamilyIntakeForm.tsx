@@ -466,6 +466,9 @@ export function FamilyIntakeForm({
         void getIntakeAiInitialReview(token, stored.session.id)
           .then((review) => {
             setInitialReview(review);
+            if (review.reviewed_profile) {
+              setProfile(review.reviewed_profile);
+            }
             setConfirmedInitialReviewIssues(
               review.ready_for_second_confirmation
                 ? review.issues.map((item) => item.id)
@@ -544,7 +547,10 @@ export function FamilyIntakeForm({
           const review = await getIntakeAiInitialReview(sessionToken, sessionId);
           if (!cancelled) {
             setInitialReview(review);
-            setConfirmedInitialReviewIssues([]);
+      if (review.reviewed_profile) {
+        setProfile(review.reviewed_profile);
+      }
+      setConfirmedInitialReviewIssues([]);
             setSession((current) =>
               current ? { ...current, status: review.status } : current,
             );
@@ -856,6 +862,9 @@ export function FamilyIntakeForm({
         updateAiReviewStage,
       );
       setInitialReview(review);
+      if (review.reviewed_profile) {
+        setProfile(review.reviewed_profile);
+      }
       setConfirmedInitialReviewIssues([]);
       setSession((current) =>
         current ? { ...current, status: review.status } : current,
@@ -918,6 +927,9 @@ export function FamilyIntakeForm({
               confirmedInitialReviewIssues,
             );
       setInitialReview(review);
+      if (review.reviewed_profile) {
+        setProfile(review.reviewed_profile);
+      }
       setSession((current) =>
         current ? { ...current, status: review.status } : current,
       );
