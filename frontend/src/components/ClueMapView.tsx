@@ -221,7 +221,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
       {/* 侧边栏：时间线卡片列表 */}
       <aside className="flex flex-col gap-4 overflow-hidden">
         <div className="flex-1 overflow-y-auto space-y-2 pr-2">
-          {dataLoading ? <LoadingState label="正在加载地图数据" /> : dataError ? <ErrorState message="地图数据加载失败" onRetry={() => window.location.reload()} /> : items.length === 0 ? <EmptyState title="暂无地图数据" /> : items.map((item, index) => (
+          {dataLoading ? <LoadingState label="正在加载地图数据" /> : dataError ? <ErrorState message="地图数据加载失败" onRetry={() => window.location.reload()} /> : itemsWithCoords.length === 0 ? <EmptyState title="暂无地图数据" /> : itemsWithCoords.map((item, index) => (
             <MapTimelineCard
               key={item.id}
               item={item}
