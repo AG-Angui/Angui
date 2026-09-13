@@ -531,6 +531,19 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/intake-sessions:
+    get:
+      tags: [Intake sessions]
+      operationId: listIntakeSessions
+      summary: List the current member's unfinished intake sessions
+      description: Only the authenticated member's unconfirmed sessions are returned, ordered by latest update, so the family home page can provide a safe resume entry.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Owner-scoped unfinished sessions, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/IntakeSession" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Intake sessions]
       operationId: createIntakeSession
@@ -685,6 +698,42 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/intake-sessions/{session_id}:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    get:
+      tags: [Intake sessions]
+      operationId: getIntakeSession
+      summary: Get one owner-scoped intake session for resume
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Owner-scoped intake session, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeSession" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/intake-sessions/{session_id}/photos/{photo_id}/primary:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+      - name: photo_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Intake sessions]
+      operationId: setPrimaryIntakeSessionPhoto
+      summary: Set an owner-scoped intake photo as the primary portrait
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Updated photo metadata, content: { application/json: { schema: { $ref: "#/components/schemas/IntakePhoto" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/intake-sessions/{session_id}/profile-draft:
     parameters:
@@ -3720,13 +3769,14 @@ components:
     IntakePhoto:
       type: object
       additionalProperties: false
-      required: [id, original_filename, content_type, byte_size, created_at]
+      required: [id, original_filename, content_type, byte_size, created_at, is_primary]
       properties:
         id: { type: string, format: uuid }
         original_filename: { type: string, maxLength: 255 }
         content_type: { type: string, enum: [image/jpeg, image/png] }
         byte_size: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }
+        is_primary: { type: boolean }
 
     SubmitIntakeAnswerRequest:
       type: object

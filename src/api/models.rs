@@ -937,6 +937,7 @@ pub struct IntakePhotoResponse {
     pub content_type: String,
     pub byte_size: i64,
     pub created_at: String,
+    pub is_primary: bool,
 }
 
 impl IntakeSessionResponse {
