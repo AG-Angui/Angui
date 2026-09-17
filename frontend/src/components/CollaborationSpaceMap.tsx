@@ -35,7 +35,7 @@ export function CollaborationSpaceMap({ members, locations }: { members: SpaceMe
     const latestByUser = new Map(locations.map((location) => [location.user_id, location]));
     const activeMembers = members.filter((member) => member.status === "active");
     void loadAmap().then((api) => {
-      if (cancelled || !element.current) return;
+      if (cancelled || !element.current || !element.current.isConnected || !document.contains(element.current)) return;
       const first = locations[0];
       const nextMap = new api.Map(element.current, { center: first ? [first.longitude, first.latitude] : [116.397428, 39.90923], zoom: first ? 13 : 5 });
       map.current = nextMap;

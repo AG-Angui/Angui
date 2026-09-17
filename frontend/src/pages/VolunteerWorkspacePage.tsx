@@ -191,8 +191,12 @@ export function VolunteerWorkspacePage() {
         listCases(token),
         listMyTasks(token),
       ]);
-      const volunteerCases = memberships.filter(
-        (item) => item.access_role === "volunteer",
+      const volunteerCases = Array.from(
+        new Map(
+          memberships
+            .filter((item) => item.access_role === "volunteer")
+            .map((item) => [item.id, item]),
+        ).values(),
       );
       const workspaceResults = await Promise.allSettled(
         volunteerCases.map(async (item) => {
@@ -213,7 +217,14 @@ export function VolunteerWorkspacePage() {
               publishedSummaryResult.status === "fulfilled"
                 ? publishedSummaryResult.value.items
                 : [],
-            tasks: taskResult.status === "fulfilled" ? taskResult.value.items : [],
+            tasks:
+              taskResult.status === "fulfilled"
+                ? Array.from(
+                    new Map(
+                      taskResult.value.items.map((task) => [task.id, task]),
+                    ).values(),
+                  )
+                : [],
           };
         }),
       );
@@ -287,6 +298,7 @@ export function VolunteerWorkspacePage() {
     return (
       <article
         key={task.id}
+        data-testid="volunteer-task-card"
         className="rounded-md border border-slate-200 bg-white p-4 shadow-sm"
       >
         <div className="flex flex-wrap items-start justify-between gap-3">

@@ -99,7 +99,7 @@ describe('ClueMapView', () => {
     render(<ClueMapView caseId="test-case-1" token="test-token" />);
 
     await waitFor(() => {
-      const mapContainer = document.getElementById('clue-map-container');
+      const mapContainer = screen.getByTestId('clue-map-container');
       expect(mapContainer).toBeDefined();
     });
   });

@@ -27,8 +27,13 @@ test("a volunteer can apply for an open task and the application is persisted", 
   const volunteerToken = await tokenFor(request, accounts.volunteer);
 
   await useAccount(page, volunteerToken, "/volunteer");
-  await expect(page.getByText(task.title)).toBeVisible();
-  await page.getByRole("button", { name: "申请协作" }).click();
+  const taskCard = page
+    .getByTestId("volunteer-task-card")
+    .filter({ hasText: task.title });
+  await expect(
+    taskCard.getByRole("heading", { name: task.title }),
+  ).toBeVisible();
+  await taskCard.getByRole("button", { name: "申请协作" }).click();
   await expect(page.getByText("任务申请已提交，等待指挥人员审核。")).toBeVisible();
 
   const commanderToken = await tokenFor(request, accounts.commander);

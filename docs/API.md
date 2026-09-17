@@ -35,9 +35,12 @@ This deployment deliberately has no configured ASR adapter. A successfully store
 | `GET` | `/api/auth/me` | `200` | 获取当前认证用户 |
 | `POST` | `/api/auth/logout` | `204` | 撤销当前服务端会话 |
 | `POST` | `/api/intake-sessions` | `201` | 创建成员的未确认走失信息问询会话 |
+| `GET` | `/api/intake-sessions` | `200` | 列出当前家属本人可恢复的未完成建案会话 |
+| `GET` | `/api/intake-sessions/{session_id}` | `200` | 读取当前家属本人建案会话，供跨设备恢复 |
 | `GET` | `/api/intake-sessions/{session_id}/photos` | `200` | 列出创建者受控上传的走失者照片元数据 |
 | `POST` | `/api/intake-sessions/{session_id}/photos` | `201` | 上传一张受控处理的 JPEG/PNG/HEIC/HEIF 走失者照片 |
 | `GET` | `/api/intake-sessions/{session_id}/photos/{photo_id}` | `200` | 读取创建者受控照片，不返回公共 URL |
+| `PATCH` | `/api/intake-sessions/{session_id}/photos/{photo_id}/primary` | `200` | 将本人上传照片设为建案主图 |
 | `POST` | `/api/intake-sessions/{session_id}/answers` | `201` | 追加一个未确认答案并获取下一问 |
 | `GET` | `/api/intake-sessions/{session_id}/profile-draft` | `200` | 获取家属专属、待确认的标准化画像草稿 |
 | `PATCH` | `/api/intake-sessions/{session_id}/profile-draft/{draft_id}/review` | `200` | 家属确认或拒绝一个画像草稿版本并返回真实审核状态 |

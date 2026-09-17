@@ -49,6 +49,7 @@ mod m0046_create_collaboration_spaces;
 mod m0047_add_collaboration_activity;
 mod m0048_create_knowledge_rag_v0;
 mod m0049_add_elder_profile_extended_fields;
+mod m0050_add_intake_primary_photo;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -107,6 +108,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0047_add_collaboration_activity::Migration),
             Box::new(m0048_create_knowledge_rag_v0::Migration),
             Box::new(m0049_add_elder_profile_extended_fields::Migration),
+            Box::new(m0050_add_intake_primary_photo::Migration),
         ]
     }
 }

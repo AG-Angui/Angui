@@ -8,19 +8,22 @@ import {
   MapPin,
   UserRound,
 } from "lucide-react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { FamilyIntakeForm } from "./FamilyIntakeForm";
 
 const intakeSteps = [
   { label: "基本信息", detail: "姓名、年龄与照片", icon: UserRound },
   { label: "身体情况", detail: "特征、衣着与照护", icon: HeartHandshake },
-  { label: "最后出现", detail: "时间、地点与同行情况", icon: MapPin },
-  { label: "习惯线索", detail: "常去地点与日常习惯", icon: CircleHelp },
+  { label: "走失情况", detail: "时间、地点与来源", icon: MapPin },
+  { label: "行为习惯", detail: "常去地点与日常习惯", icon: CircleHelp },
   { label: "联系方式", detail: "便于人工核对", icon: FileText },
+  { label: "确认提交", detail: "核对资料后进入审核", icon: Check },
 ];
 
 export function FamilyIntakePage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const resumeSessionId = searchParams.get("session_id") ?? undefined;
 
   return (
     <main className="min-h-[calc(100vh-3.5rem)] bg-[#f2f4f3] text-[#183330]">
@@ -66,6 +69,7 @@ export function FamilyIntakePage() {
             ))}
           </div>
           <FamilyIntakeForm
+            initialSessionId={resumeSessionId}
             onCancel={() => navigate("/family")}
             onConfirmed={async (caseId) => {
               navigate(`/family/cases/${caseId}`, { replace: true });
