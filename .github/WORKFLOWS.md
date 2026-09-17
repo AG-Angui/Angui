@@ -122,10 +122,10 @@ sudo ./svc.sh status
 The `angui-ci` label runs the CI workflow. The `angui-preview` label deploys
 previews locally on this server and builds release images only when a `v*` tag
 is pushed. A runner used for CI or previews needs Docker Engine and Docker
-Compose v2. The database CI job starts PostgreSQL and MySQL service containers,
-so Docker must be available to the runner service account. CI jobs force
-external fork pull requests back to `ubuntu-latest`, because they checkout and
-execute untrusted PR code.
+Compose v2. The database CI job starts PostgreSQL and MySQL containers, so
+Docker must be available to the runner service account. CI jobs force external
+fork pull requests back to `ubuntu-latest`, because they checkout and execute
+untrusted PR code.
 
 This intentionally places internal CI and preview deployment on one Docker-capable
 host. Anyone who can push a branch in this repository can make CI execute code
@@ -134,11 +134,16 @@ permission only to trusted maintainers; use a separate, non-deployment runner
 if that trust boundary changes.
 
 CI dependency downloads use the repository-managed Chinese mirrors: Rustup and
-Cargo use `rsproxy.cn`, while Node.js and Yarn use `npmmirror.com`. Docker image
-pulls remain governed by the Docker daemon configuration on the server. The
-self-hosted runner must still be able to reach GitHub Actions and GHCR through
-direct Internet access or a standard HTTPS proxy; URL-prefix download
-accelerators are not sufficient for a runner.
+Cargo use `rsproxy.cn`, while Node.js and Yarn use `npmmirror.com`. Provision
+each self-hosted `angui-ci` runner with `postgres:17-alpine` and `mysql:8.4`.
+The database job starts those cached images with Docker's `never` pull policy,
+because GitHub Actions service containers otherwise force a registry request
+even when the image is already present. External-fork jobs run on GitHub-hosted
+runners and use the `missing` policy instead. Other Docker image pulls remain
+governed by the daemon configuration on the server. The self-hosted runner must
+still be able to reach GitHub Actions and GHCR through direct Internet access or
+a standard HTTPS proxy; URL-prefix download accelerators are not sufficient for
+a runner.
 
 ## Preview domains and releases
 

@@ -120,35 +120,12 @@ jobs:
     env:
       RUSTUP_DIST_SERVER: https://rsproxy.cn
       RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
-    services:
-      postgres:
-        # Bypass the self-hosted runner's unreliable Docker Hub mirror.
-        image: public.ecr.aws/docker/library/postgres:17-alpine
-        env:
-          POSTGRES_DB: angui
-          POSTGRES_USER: angui
-          POSTGRES_PASSWORD: angui
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U angui -d angui"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      mysql:
-        image: public.ecr.aws/docker/library/mysql:8.4
-        env:
-          MYSQL_DATABASE: angui
-          MYSQL_USER: angui
-          MYSQL_PASSWORD: angui
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping --silent"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+      POSTGRES_CONTAINER: angui-postgres-${{ github.run_id }}-${{ github.run_attempt }}
+      MYSQL_CONTAINER: angui-mysql-${{ github.run_id }}-${{ github.run_attempt }}
+      # Service containers always pull, even when an image is cached. Internal
+      # runners use provisioned images so a registry outage cannot block CI;
+      # GitHub-hosted external-fork jobs may pull a missing image normally.
+      DATABASE_IMAGE_PULL_POLICY: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'missing' || 'never' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -156,6 +133,57 @@ jobs:
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Start database containers
+        run: |
+          docker run --detach \
+            --pull="$DATABASE_IMAGE_PULL_POLICY" \
+            --name "$POSTGRES_CONTAINER" \
+            --publish 5432:5432 \
+            --env POSTGRES_DB=angui \
+            --env POSTGRES_USER=angui \
+            --env POSTGRES_PASSWORD=angui \
+            --health-cmd "pg_isready -U angui -d angui" \
+            --health-interval 5s \
+            --health-timeout 5s \
+            --health-retries 10 \
+            postgres:17-alpine
+
+          docker run --detach \
+            --pull="$DATABASE_IMAGE_PULL_POLICY" \
+            --name "$MYSQL_CONTAINER" \
+            --publish 3306:3306 \
+            --env MYSQL_DATABASE=angui \
+            --env MYSQL_USER=angui \
+            --env MYSQL_PASSWORD=angui \
+            --env MYSQL_ROOT_PASSWORD=root \
+            --health-cmd "mysqladmin ping --silent" \
+            --health-interval 5s \
+            --health-timeout 5s \
+            --health-retries 20 \
+            mysql:8.4
+
+          wait_for_healthy() {
+            container="$1"
+            max_attempts="$2"
+            attempt=1
+            while [ "$attempt" -le "$max_attempts" ]; do
+              status="$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || true)"
+              if [ "$status" = "healthy" ]; then
+                return 0
+              fi
+              if [ -z "$status" ] || [ "$status" = "unhealthy" ]; then
+                break
+              fi
+              sleep 2
+              attempt=$((attempt + 1))
+            done
+            docker logs "$container" || true
+            return 1
+          }
+
+          wait_for_healthy "$POSTGRES_CONTAINER" 30
+          wait_for_healthy "$MYSQL_CONTAINER" 45
 
       - name: Exercise PostgreSQL migrations
         env:
@@ -174,6 +202,10 @@ jobs:
           cargo run --locked -p migration -- status
           cargo run --locked -p migration -- refresh
           cargo run --locked -p migration -- status
+
+      - name: Stop database containers
+        if: always()
+        run: docker rm --force "$POSTGRES_CONTAINER" "$MYSQL_CONTAINER" 2>/dev/null || true
 
   frontend:
     name: Frontend checks
