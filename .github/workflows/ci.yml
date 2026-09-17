@@ -122,7 +122,8 @@ jobs:
       RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
     services:
       postgres:
-        image: postgres:17-alpine
+        # Bypass the self-hosted runner's unreliable Docker Hub mirror.
+        image: public.ecr.aws/docker/library/postgres:17-alpine
         env:
           POSTGRES_DB: angui
           POSTGRES_USER: angui
@@ -135,7 +136,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       mysql:
-        image: mysql:8.4
+        image: public.ecr.aws/docker/library/mysql:8.4
         env:
           MYSQL_DATABASE: angui
           MYSQL_USER: angui
