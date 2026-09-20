@@ -1,0 +1,25 @@
+name: Configure Rust environment
+description: Reuse the runner user's Rust installation and expose Cargo binaries to later steps
+runs:
+  using: composite
+  steps:
+    - name: Configure Cargo and rustup paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
+        rustup_home="${RUSTUP_HOME:-${HOME}/.rustup}"
+        echo "CARGO_HOME=${cargo_home}" >> "${GITHUB_ENV}"
+        echo "RUSTUP_HOME=${rustup_home}" >> "${GITHUB_ENV}"
+        echo "${cargo_home}/bin" >> "${GITHUB_PATH}"
+        export CARGO_HOME="${cargo_home}"
+        export RUSTUP_HOME="${rustup_home}"
+        export PATH="${cargo_home}/bin:${PATH}"
+        if [[ -x "${cargo_home}/bin/rustup" ]]; then
+          "${cargo_home}/bin/rustup" --version
+          if "${cargo_home}/bin/rustup" toolchain list | grep -Eq '^stable($|[- ])'; then
+            echo 'Existing stable Rust toolchain detected; the toolchain action will reuse it.'
+          fi
+        else
+          echo "rustup not found at ${cargo_home}/bin/rustup; the toolchain action will install it"
+        fi

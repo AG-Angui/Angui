@@ -80,11 +80,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure Rust environment
+        uses: ./.github/actions/configure-rust
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt, clippy
-          
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -153,9 +159,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure Rust environment
+        uses: ./.github/actions/configure-rust
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
       - name: Exercise PostgreSQL migrations
         env:
           DATABASE_URL: postgres://angui:angui@127.0.0.1:5432/angui
@@ -238,9 +250,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure Rust environment
+        uses: ./.github/actions/configure-rust
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
