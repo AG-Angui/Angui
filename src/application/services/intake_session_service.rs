@@ -2150,8 +2150,11 @@ fn duplicate_answer_conflict() -> ApiError {
 fn is_unique_constraint_error(error: &DbErr) -> bool {
     matches!(
         error,
-        DbErr::Exec(RuntimeErr::SqlxError(SqlxError::Database(database_error)))
-            if database_error.is_unique_violation()
+        DbErr::Exec(RuntimeErr::SqlxError(sqlx_error))
+            if matches!(
+                sqlx_error.as_ref(),
+                SqlxError::Database(database_error) if database_error.is_unique_violation()
+            )
     )
 }
 
