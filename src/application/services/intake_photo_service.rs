@@ -96,6 +96,14 @@ pub async fn store_photo(
             return Err(ApiError::Database(error));
         }
     };
+    let mut primary_photo_id = session.primary_photo_id.clone();
+    if primary_photo_id.is_none() {
+        let mut active_session = session.clone().into_active_model();
+        active_session.primary_photo_id = Set(Some(model.id.clone()));
+        active_session.updated_at = Set(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+        active_session.update(&transaction).await?;
+        primary_photo_id = Some(model.id.clone());
+    }
     if let Err(error) = intake_session_service::write_attachment_audit(
         &transaction,
         auth,
@@ -113,7 +121,7 @@ pub async fn store_photo(
         remove_file_best_effort(storage_path).await;
         return Err(ApiError::Database(error));
     }
-    Ok(response(model))
+    Ok(response(model, primary_photo_id.as_deref()))
 }
 
 pub async fn list_photos(
@@ -126,13 +134,47 @@ pub async fn list_photos(
         .await?
         .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
     require_creator(&session, auth)?;
+    let primary_photo_id = session.primary_photo_id.as_deref();
     Ok(intake_session_photos::Entity::find()
         .filter(intake_session_photos::Column::SessionId.eq(session_id))
         .all(db)
         .await?
         .into_iter()
-        .map(response)
+        .map(|photo| response(photo, primary_photo_id))
         .collect())
+}
+
+pub async fn set_primary_photo(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+    photo_id: &str,
+) -> Result<IntakePhotoResponse, ApiError> {
+    let transaction = db.begin().await?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_creator(&session, auth)?;
+    if !matches!(
+        session.status.as_str(),
+        "collecting" | "ready_for_confirmation"
+    ) {
+        return Err(ApiError::Conflict(
+            "intake session is not accepting photo changes".to_owned(),
+        ));
+    }
+    let photo = intake_session_photos::Entity::find_by_id(photo_id)
+        .one(&transaction)
+        .await?
+        .filter(|photo| photo.session_id == session_id)
+        .ok_or_else(|| ApiError::NotFound("intake photo was not found".to_owned()))?;
+    let mut active_session = session.clone().into_active_model();
+    active_session.primary_photo_id = Set(Some(photo.id.clone()));
+    active_session.updated_at = Set(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+    active_session.update(&transaction).await?;
+    transaction.commit().await?;
+    Ok(response(photo, Some(photo_id)))
 }
 
 pub async fn load_photo(
@@ -196,6 +238,12 @@ pub async fn delete_photo(
     intake_session_photos::Entity::delete_by_id(&photo.id)
         .exec(&transaction)
         .await?;
+    if session.primary_photo_id.as_deref() == Some(photo.id.as_str()) {
+        let mut active_session = session.clone().into_active_model();
+        active_session.primary_photo_id = Set(None);
+        active_session.updated_at = Set(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+        active_session.update(&transaction).await?;
+    }
     intake_session_service::write_attachment_audit(
         &transaction,
         auth,
@@ -288,15 +336,20 @@ pub async fn replace_photo(
         return Err(ApiError::Database(error));
     }
     remove_file_best_effort(old_path).await;
-    Ok(response(model))
+    Ok(response(model, session.primary_photo_id.as_deref()))
 }
-fn response(model: intake_session_photos::Model) -> IntakePhotoResponse {
+fn response(
+    model: intake_session_photos::Model,
+    primary_photo_id: Option<&str>,
+) -> IntakePhotoResponse {
+    let is_primary = primary_photo_id == Some(model.id.as_str());
     IntakePhotoResponse {
         id: model.id,
         original_filename: model.original_filename,
         content_type: model.content_type,
         byte_size: model.byte_size,
         created_at: model.created_at,
+        is_primary,
     }
 }
 fn require_creator(

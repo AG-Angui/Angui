@@ -48,9 +48,9 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
         setDataLoading(false);
       });
   }, [caseId, token]);
-  const mapContainerId = 'clue-map-container';
+  const [mapContainer, setMapContainer] = useState<HTMLDivElement | null>(null);
   const { map, AMap, loading, error } = useAMap({
-    container: mapContainerId,
+    container: mapContainer,
     zoom: 12,
     viewMode: '3D',
   });
@@ -215,29 +215,13 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
     infoWindowRef.current?.close();
   }, [map, itemsWithCoords.length]);
 
-  if (dataLoading || loading) {
-    return <LoadingState label="正在加载地图..." />;
-  }
-
-  if (dataError || error) {
-    return (
-      <ErrorState
-        message="地图加载失败"
-        onRetry={() => window.location.reload()}
-      />
-    );
-  }
-
-  if (items.length === 0) {
-    return <EmptyState title="暂无地图数据" />;
-  }
 
   return (
     <div className={`grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-full ${className}`}>
       {/* 侧边栏：时间线卡片列表 */}
       <aside className="flex flex-col gap-4 overflow-hidden">
         <div className="flex-1 overflow-y-auto space-y-2 pr-2">
-          {items.map((item, index) => (
+          {dataLoading ? <LoadingState label="正在加载地图数据" /> : dataError ? <ErrorState message="地图数据加载失败" onRetry={() => window.location.reload()} /> : itemsWithCoords.length === 0 ? <EmptyState title="暂无地图数据" /> : itemsWithCoords.map((item, index) => (
             <MapTimelineCard
               key={item.id}
               item={item}
@@ -251,6 +235,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
         <Button
           variant="ghost"
           onClick={handleResetView}
+          isDisabled={dataLoading || itemsWithCoords.length === 0}
           className="flex items-center gap-2 flex-shrink-0"
         >
           <RotateCcw className="w-4 h-4" />
@@ -259,10 +244,15 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
       </aside>
 
       {/* 地图容器 */}
-      <div
-        id={mapContainerId}
-        className="w-full h-full min-h-[500px] rounded-2xl overflow-hidden shadow-lg"
-      />
+      <div className="relative min-h-[500px] overflow-hidden rounded-2xl shadow-lg">
+        <div
+          ref={setMapContainer}
+          data-testid="clue-map-container"
+          className="h-full min-h-[500px] w-full"
+        />
+        {loading && !error && <div className="absolute inset-0 grid place-items-center bg-white/80"><LoadingState label="正在加载地图" /></div>}
+        {error && <div className="absolute inset-0 grid place-items-center bg-white/90 p-4"><ErrorState message="地图加载失败" onRetry={() => window.location.reload()} /></div>}
+      </div>
     </div>
   );
 }

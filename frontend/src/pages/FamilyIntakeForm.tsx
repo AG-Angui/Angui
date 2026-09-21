@@ -14,6 +14,7 @@ import {
   acknowledgeIntakeAiInitialReview,
   confirmIntakeSession,
   createIntakeSession,
+  getIntakeSession,
   getIntakeAiInitialReview,
   getIntakeAiFollowUp,
   getIntakeDraft,
@@ -28,6 +29,7 @@ import {
   downloadIntakePhoto,
   deleteIntakePhoto,
   replaceIntakePhoto,
+  setPrimaryIntakePhoto,
   startIntakeAiInitialReview,
   submitIntakeAnswer,
   uploadIntakePhoto,
@@ -262,9 +264,11 @@ function shouldRequestAiFollowUp(field: string, next: IntakeSession) {
 export function FamilyIntakeForm({
   onCancel,
   onConfirmed,
+  initialSessionId,
 }: {
   onCancel: () => void;
   onConfirmed: (caseId: string, caseCode: string) => Promise<void>;
+  initialSessionId?: string;
 }) {
   const { token, user } = useAuth();
   const storageKey = `angui:intake-tab-draft:${user?.id ?? "anonymous"}`;
@@ -466,6 +470,9 @@ export function FamilyIntakeForm({
         void getIntakeAiInitialReview(token, stored.session.id)
           .then((review) => {
             setInitialReview(review);
+            if (review.reviewed_profile) {
+              setProfile(review.reviewed_profile);
+            }
             setConfirmedInitialReviewIssues(
               review.ready_for_second_confirmation
                 ? review.issues.map((item) => item.id)
@@ -476,7 +483,18 @@ export function FamilyIntakeForm({
       }
     }
     setHasHydrated(true);
-  }, [loadDraft, storageKey, token]);
+    if (initialSessionId && !stored) {
+      void getIntakeSession(token, initialSessionId)
+        .then((remote) => {
+          setSession(remote);
+          setBasicInformation(readBasicInformation(remote.initial_answers?.basic_information));
+          if (["ready_for_confirmation", "awaiting_family_review", "ready_for_second_confirmation"].includes(remote.status)) {
+            void loadDraft(remote.id, true, basicInformationRef.current);
+          }
+        })
+        .catch((cause) => setError(messageFrom(cause)));
+    }
+  }, [initialSessionId, loadDraft, storageKey, token]);
 
   useEffect(() => {
     if (!hasHydrated || typeof window === "undefined") return;
@@ -544,7 +562,10 @@ export function FamilyIntakeForm({
           const review = await getIntakeAiInitialReview(sessionToken, sessionId);
           if (!cancelled) {
             setInitialReview(review);
-            setConfirmedInitialReviewIssues([]);
+      if (review.reviewed_profile) {
+        setProfile(review.reviewed_profile);
+      }
+      setConfirmedInitialReviewIssues([]);
             setSession((current) =>
               current ? { ...current, status: review.status } : current,
             );
@@ -813,6 +834,20 @@ export function FamilyIntakeForm({
       setBusyAction(null);
     }
   }
+
+  async function setPrimaryPhoto(photo: IntakePhoto) {
+    if (!token || !session) return;
+    setBusyAction("photo");
+    setError("");
+    try {
+      const updated = await setPrimaryIntakePhoto(token, session.id, photo.id);
+      setPhotos((current) => current.map((item) => ({ ...item, is_primary: item.id === updated.id })));
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusyAction(null);
+    }
+  }
   async function restoreRevision(revision: IntakeAnswerRevision) {
     if (!token || !session) return;
     setBusyAction("replace");
@@ -856,6 +891,9 @@ export function FamilyIntakeForm({
         updateAiReviewStage,
       );
       setInitialReview(review);
+      if (review.reviewed_profile) {
+        setProfile(review.reviewed_profile);
+      }
       setConfirmedInitialReviewIssues([]);
       setSession((current) =>
         current ? { ...current, status: review.status } : current,
@@ -918,6 +956,9 @@ export function FamilyIntakeForm({
               confirmedInitialReviewIssues,
             );
       setInitialReview(review);
+      if (review.reviewed_profile) {
+        setProfile(review.reviewed_profile);
+      }
       setSession((current) =>
         current ? { ...current, status: review.status } : current,
       );
@@ -1717,6 +1758,9 @@ export function FamilyIntakeForm({
                 <IntakePhotoPreview token={token ?? ""} sessionId={session.id} photo={photo} />
                 <span className="min-w-0 break-all">已上传：{photo.original_filename}（{Math.ceil(photo.byte_size / 1024)} KB）</span>
                 <div className="ml-auto flex shrink-0 gap-1">
+                  <Button size="sm" variant={photo.is_primary ? "primary" : "ghost"} isDisabled={isBusy || photo.is_primary} onPress={() => void setPrimaryPhoto(photo)}>
+                    {photo.is_primary ? "主图" : "设为主图"}
+                  </Button>
                   <label className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
                     替换
                     <input

@@ -9,8 +9,8 @@ use actix_web::web;
 use chrono::{SecondsFormat, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbBackend, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 

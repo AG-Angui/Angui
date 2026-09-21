@@ -11,6 +11,7 @@ import {
 import { Link } from "react-router";
 import { useEffect, useState } from "react";
 import { listCases, type CaseListItem } from "../api/cases";
+import { listIntakeSessions, type IntakeSession } from "../api/intake";
 import { useAuth } from "../auth/useAuth";
 
 const statusLabels: Record<CaseListItem["status"], string> = {
@@ -22,6 +23,7 @@ const statusLabels: Record<CaseListItem["status"], string> = {
 export function FamilyHomePage() {
   const { token } = useAuth();
   const [cases, setCases] = useState<CaseListItem[]>([]);
+  const [draftSession, setDraftSession] = useState<IntakeSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -29,9 +31,13 @@ export function FamilyHomePage() {
     if (!token) return;
     let active = true;
     setIsLoading(true);
-    listCases(token)
-      .then((items) => {
-        if (active) setCases(items.filter((item) => item.access_role === "family"));
+    Promise.allSettled([listCases(token), listIntakeSessions(token)])
+      .then(([casesResult, sessionsResult]) => {
+        if (!active) return;
+        if (casesResult.status === "fulfilled") {
+          setCases(casesResult.value.filter((item) => item.access_role === "family"));
+        } else setError("暂时无法读取案件，请稍后重试。");
+        if (sessionsResult.status === "fulfilled") setDraftSession(sessionsResult.value[0] ?? null);
       })
       .catch(() => {
         if (active) setError("暂时无法读取案件，请稍后重试。");
@@ -83,8 +89,8 @@ export function FamilyHomePage() {
               不确定的内容可以标记为“不知道”。先完成关键问题，之后仍然可以补充照片、常去地点和新的线索。
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
-              <Link to="/family/intake" className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#0d5b56] px-5 py-3 text-base font-semibold text-white transition-colors hover:bg-[#1e7d74] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0d5b56]">
-                <ClipboardPlus size={18} aria-hidden="true" /> 开始求助 <ArrowRight size={17} aria-hidden="true" />
+              <Link to={draftSession ? `/family/intake?session_id=${encodeURIComponent(draftSession.id)}` : "/family/intake"} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-[#0d5b56] px-5 py-3 text-base font-semibold text-white transition-colors hover:bg-[#1e7d74] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0d5b56]">
+                <ClipboardPlus size={18} aria-hidden="true" /> {draftSession ? "继续填写草稿" : "开始求助"} <ArrowRight size={17} aria-hidden="true" />
               </Link>
               {cases.length > 0 && (
                 <Link to={`/family/cases/${cases[0].id}`} className="inline-flex min-h-11 items-center rounded-lg px-4 py-3 text-base font-semibold text-[#0d5b56] hover:bg-[#eef7f5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0d5b56]">
@@ -97,6 +103,12 @@ export function FamilyHomePage() {
               <span>提交前由您再次确认</span>
               <span>公开内容经过人工审核</span>
             </div>
+            {draftSession && draftSession.missing_fields.length > 0 && (
+              <div className="mt-5 rounded-lg border border-[#f0d9a6] bg-[#fffaf0] px-4 py-3 text-sm text-[#6d5421]" aria-label="待补信息">
+                <p className="font-semibold">还有 {draftSession.missing_fields.length} 项待补信息</p>
+                <p className="mt-1">继续填写草稿即可完成：{draftSession.missing_fields.slice(0, 3).join("、")}</p>
+              </div>
+            )}
           </div>
 
           <aside className="border border-[#d8e3e0] bg-[#fbfcfc] p-5">

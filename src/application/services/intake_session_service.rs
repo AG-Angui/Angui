@@ -71,6 +71,7 @@ pub async fn create_intake_session(
         id: Set(session_id.clone()),
         created_by_user_id: Set(auth.id.clone()),
         case_id: Set(None),
+        primary_photo_id: Set(None),
         question_set_version: Set(question_set_version),
         status: Set(status.to_owned()),
         answers_json: Set(answers_json),
@@ -101,6 +102,54 @@ pub async fn create_intake_session(
 
     transaction.commit().await?;
     Ok(response_for(session, answers, &questions))
+}
+
+/// Lists the caller's unfinished intake sessions so the family home page can
+/// offer a cross-device resume entry. Only the session owner can see these
+/// unconfirmed answers.
+pub async fn list_intake_sessions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<IntakeSessionResponse>, ApiError> {
+    require_operational_member(auth)?;
+    let sessions = intake_sessions::Entity::find()
+        .filter(intake_sessions::Column::CreatedByUserId.eq(auth.id.clone()))
+        .filter(intake_sessions::Column::Status.is_in([
+            "collecting",
+            "ready_for_confirmation",
+            "awaiting_family_review",
+            "ready_for_second_confirmation",
+        ]))
+        .order_by_desc(intake_sessions::Column::UpdatedAt)
+        .all(db)
+        .await?;
+    let mut responses = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        let questions = questions_for_version(db, session.question_set_version).await?;
+        let answers = parse_answers(&session)?;
+        responses.push(response_for(session, answers, &questions));
+    }
+    Ok(responses)
+}
+
+/// Loads one family-owned intake session for an explicit resume link.
+pub async fn get_intake_session(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<IntakeSessionResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let questions = questions_for_version(db, session.question_set_version).await?;
+    Ok(response_for(
+        session.clone(),
+        parse_answers(&session)?,
+        &questions,
+    ))
 }
 
 pub async fn submit_intake_answer(
@@ -1624,6 +1673,12 @@ pub async fn confirm_intake_session(
             "upload at least one missing-person photo before confirming the case".to_owned(),
         ));
     }
+    if session.question_set_version >= 3 && session.primary_photo_id.is_none() {
+        return Err(ApiError::Conflict(
+            "choose one missing-person photo as the primary portrait before confirming the case"
+                .to_owned(),
+        ));
+    }
 
     let timestamp = now();
     let case_model =
@@ -1736,12 +1791,19 @@ fn initial_review_response(
     } else {
         "available"
     };
+    let reviewed_profile = session
+        .ai_initial_review_profile_json
+        .as_deref()
+        .map(serde_json::from_str::<ConfirmedIntakeProfile>)
+        .transpose()
+        .map_err(|_| ApiError::Internal)?;
     Ok(IntakeAiInitialReviewResponse {
         session_id: session.id.clone(),
         status: session.status.clone(),
         degradation_status: degradation_status.to_owned(),
         issues,
         blocking_assessments,
+        reviewed_profile,
         generated_at: session
             .ai_initial_reviewed_at
             .clone()
@@ -2088,8 +2150,11 @@ fn duplicate_answer_conflict() -> ApiError {
 fn is_unique_constraint_error(error: &DbErr) -> bool {
     matches!(
         error,
-        DbErr::Exec(RuntimeErr::SqlxError(SqlxError::Database(database_error)))
-            if database_error.is_unique_violation()
+        DbErr::Exec(RuntimeErr::SqlxError(sqlx_error))
+            if matches!(
+                sqlx_error.as_ref(),
+                SqlxError::Database(database_error) if database_error.is_unique_violation()
+            )
     )
 }
 
