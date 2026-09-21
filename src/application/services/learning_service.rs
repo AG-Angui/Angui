@@ -175,7 +175,7 @@ pub async fn propose_category(
             .do_nothing()
             .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(&transaction)
     .await?;
     let (id, name, audit_action) = if matches!(inserted, TryInsertResult::Inserted(_)) {
@@ -643,7 +643,7 @@ async fn create_resource_inner(
             .do_nothing()
             .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(&transaction)
     .await?;
     if !matches!(insert, TryInsertResult::Inserted(_)) {
@@ -820,7 +820,7 @@ pub async fn create_question(
             .do_nothing()
             .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(&transaction)
     .await?;
     if !matches!(insert, TryInsertResult::Inserted(_)) {
@@ -1289,7 +1289,7 @@ async fn append_lifecycle_event(
         .do_nothing()
         .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(transaction)
     .await?;
     if matches!(result, TryInsertResult::Inserted(_)) {

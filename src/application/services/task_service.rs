@@ -787,7 +787,7 @@ pub async fn review_task_application(
             .do_nothing()
             .to_owned(),
         )
-        .do_nothing()
+        .try_insert()
         .exec(&transaction)
         .await?;
         tasks::Entity::update_many()
@@ -1109,7 +1109,7 @@ async fn claim_idempotency_key(
         },
     ])
     .on_conflict(conflict_target)
-    .do_nothing()
+    .try_insert()
     .exec(transaction)
     .await?;
     Ok(matches!(result, TryInsertResult::Inserted(_)))
