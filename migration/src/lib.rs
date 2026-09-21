@@ -1086,7 +1086,7 @@ mod tests {
 
     async fn intake_question_prompt(database: &impl ConnectionTrait, id: &str) -> String {
         database
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT prompt FROM intake_question_definitions WHERE id = ?",
                 [id.into()],
@@ -1139,7 +1139,7 @@ mod tests {
             .await
             .expect("existing user should remain a valid foreign-key target");
         let migrated = database
-            .query_all(Statement::from_string(
+            .query_all_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT id, account_type FROM users ORDER BY id",
             ))
@@ -1167,7 +1167,7 @@ mod tests {
             "member"
         );
         let capabilities = database
-            .query_all(Statement::from_string(
+            .query_all_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT user_id, capability FROM user_global_capabilities ORDER BY user_id",
             ))
