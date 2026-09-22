@@ -374,7 +374,7 @@ export function LearningGovernancePage() {
   const loadKnowledgeItems = (baseId: string) => { if (!token || !baseId) return; setKnowledgeItemBaseId(baseId); void Promise.all([listKnowledgeItems(token, baseId), getKnowledgeOverview(token, baseId)]).then(([items, overview]) => { setKnowledgeItems(items); setKnowledgeOverview(overview); }).catch((cause) => setOperationError(errorMessage(cause))); };
   const uploadItemImages = (itemId: string, files: FileList | null) => { if (!token || !files?.length) return; setBusyId(itemId); void Promise.all(Array.from(files).map((file) => uploadKnowledgeImage(token, itemId, file))).then(() => loadKnowledgeItems(knowledgeItemBaseId)).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
   const createItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId) return; setBusyId("knowledge-item"); const images: { storage_path: string; mime_type: string; width: number | null; height: number | null; metadata: Record<string, unknown> }[] = []; void createKnowledgeItem(token, knowledgeItemBaseId, { title: knowledgeItemForm.title, summary: knowledgeItemForm.summary, content: knowledgeItemForm.content, category: knowledgeItemForm.category, category_id: null, keywords: parseTags(knowledgeItemForm.keywords), source_name: knowledgeItemForm.source_name, source_url: knowledgeItemForm.source_url.trim() || null, visibility: "learner", images }).then(() => { setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const transitionItem = (itemId: string, action: "review" | "publish" | "withdraw") => { if (!token) return; setBusyId(itemId); void transitionKnowledgeItem(token, itemId, action).then(() => listKnowledgeItems(token, knowledgeItemBaseId)).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const transitionItem = (itemId: string, action: "deidentify" | "review" | "publish" | "withdraw") => { if (!token) return; setBusyId(itemId); void transitionKnowledgeItem(token, itemId, action).then(() => listKnowledgeItems(token, knowledgeItemBaseId)).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
   if (isLoading) return <LoadingState label="正在加载学习内容治理记录" />;
   if (loadError)
     return <ErrorState message={loadError} onRetry={() => void load()} />;
@@ -599,7 +599,7 @@ export function LearningGovernancePage() {
                     </td>
                     <td className="min-w-56 px-3 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        {(item.status === "draft" || item.status === "submitted") && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>Review</Button>}
+                        {(item.status === "draft" || item.status === "submitted") && <><Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "deidentify")}>确认脱敏</Button><Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>审核</Button></>}
                         {item.status === "reviewed" && <Button size="sm" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "publish")}>Publish</Button>}
                         {item.status === "published" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "withdraw")}>Withdraw</Button>}
                         <label className="text-xs text-slate-700">Upload images<input aria-label={`Upload images for ${item.title}`} className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>
@@ -965,21 +965,7 @@ export function LearningGovernancePage() {
           </label>
           <label className="grid gap-1 text-sm text-slate-700">
             题目类型
-            <select
-              className="h-10 rounded-md border border-slate-300 bg-white px-3"
-              value={questionForm.question_type}
-              onChange={(event) =>
-                setQuestionForm({
-                  ...questionForm,
-                  question_type: event.target
-                    .value as CreateLearningQuestionInput["question_type"],
-                })
-              }
-            >
-              <option value="single_choice">选择题</option>
-              <option value="true_false">判断题</option>
-              <option value="scenario">情景题</option>
-            </select>
+            <Input value="单选题" readOnly aria-label="题目类型" />
           </label>
           <label className="grid gap-1 text-sm text-slate-700">
             难度

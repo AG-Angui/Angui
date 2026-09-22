@@ -20,6 +20,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
                     web::get().to(public_prevention_card),
                 )
                 .route("/resources", web::get().to(list_resources))
+                .route("/resources/search", web::get().to(search_resources))
+                .route("/resources/{resource_id}", web::get().to(get_resource))
                 .route("/resources/drafts", web::post().to(submit_resource_draft))
                 .route("/categories", web::get().to(list_enabled_categories))
                 .route("/categories/proposals", web::post().to(propose_category))
@@ -103,6 +105,33 @@ async fn list_resources(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok()
         .json(learning_service::list_resources(&state.db, &auth, query.into_inner()).await?))
+}
+async fn search_resources(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    query: web::Query<crate::models::LearningResourceQuery>,
+) -> Result<HttpResponse, ApiError> {
+    let query = query.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::knowledge_service::search_learning_materials(
+            &state.db,
+            &auth,
+            query.query.as_deref(),
+            query.category_id.as_deref(),
+            query.tag.as_deref(),
+        )
+        .await?,
+    ))
+}
+async fn get_resource(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    resource_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::knowledge_service::get_learning_material(&state.db, &auth, &resource_id)
+            .await?,
+    ))
 }
 
 async fn list_enabled_categories(

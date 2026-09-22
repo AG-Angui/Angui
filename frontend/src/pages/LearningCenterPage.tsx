@@ -1,23 +1,24 @@
 import { Button, Chip, Input, Spinner } from "@heroui/react";
-import { BookOpen, Send, WifiOff } from "lucide-react";
+import { BookOpen, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
-  askKnowledge,
-  downloadKnowledgeImage,
   getPublicPreventionCard,
   listLearningCategories,
   listLearningQuestions,
   listLearningResources,
+  searchLearningKnowledge,
+  askKnowledge,
   submitLearningCategoryProposal,
   submitLearningAnswer,
   submitLearningResourceDraft,
 } from "../api/learning";
 import type {
-  KnowledgeAnswer,
   CreateLearningResourceInput,
   LearningCategory,
   LearningQuestion,
   LearningResource,
+  KnowledgeAnswer,
+  KnowledgeSearchResult,
 } from "../api/learning";
 import { ApiClientError } from "../api/client";
 import { useAuth } from "../auth/useAuth";
@@ -68,28 +69,29 @@ export function LearningCenterPage() {
   );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [answer, setAnswer] = useState<KnowledgeAnswer | null>(null);
-  const [knowledgeError, setKnowledgeError] = useState("");
-  const [isAsking, setIsAsking] = useState(false);
   const [results, setResults] = useState<
-    Record<string, { isCorrect: boolean; explanation: string }>
+    Record<string, { isCorrect: boolean; explanation: string; score: number; maxScore: number }>
   >({});
   const [answeringQuestion, setAnsweringQuestion] = useState("");
-  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const [knowledgeResults, setKnowledgeResults] = useState<KnowledgeSearchResult[]>([]);
+  const [knowledgeAnswer, setKnowledgeAnswer] = useState<KnowledgeAnswer | null>(null);
+  const [knowledgeBusy, setKnowledgeBusy] = useState(false);
+  const [knowledgeMessage, setKnowledgeMessage] = useState("");
 
-  useEffect(() => {
-    if (!token || !answer) return;
-    let cancelled = false;
-    const loadImages = async () => {
-      const entries = await Promise.all(answer.sources.flatMap((source) => (source.images ?? []).map(async (image) => {
-        try { const blob = await downloadKnowledgeImage(token, source.knowledge_item_id, image.id); return [image.id, URL.createObjectURL(blob)] as const; } catch { return null; }
-      })));
-      if (!cancelled) setImageUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))));
-    };
-    void loadImages();
-    return () => { cancelled = true; };
-  }, [answer, token]);
+  const searchKnowledge = () => {
+    if (!token || !knowledgeQuery.trim()) return;
+    setKnowledgeBusy(true); setKnowledgeAnswer(null); setKnowledgeMessage("");
+    void searchLearningKnowledge(token, { query: knowledgeQuery }).then((response) => {
+      setKnowledgeResults(response.results);
+      if (response.results.length === 0) setKnowledgeMessage("没有匹配资料。可尝试更具体的关键词或切换分类。");
+    }).catch((cause) => setKnowledgeMessage(messageFrom(cause))).finally(() => setKnowledgeBusy(false));
+  };
+  const askFromKnowledge = () => {
+    if (!token || !knowledgeQuery.trim()) return;
+    setKnowledgeBusy(true); setKnowledgeMessage("");
+    void askKnowledge(token, knowledgeQuery).then(setKnowledgeAnswer).catch((cause) => setKnowledgeMessage(messageFrom(cause))).finally(() => setKnowledgeBusy(false));
+  };
 
   const load = useCallback(async () => {
     if (!token) {
@@ -146,6 +148,8 @@ export function LearningCenterPage() {
           [questionId]: {
             isCorrect: result.is_correct,
             explanation: result.explanation,
+            score: result.score,
+            maxScore: result.max_score,
           },
         })),
       )
@@ -204,6 +208,13 @@ export function LearningCenterPage() {
           </p>
         </div>
       </header>
+      <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="knowledge-search-title">
+        <header className="border-b border-slate-200 px-5 py-4"><h2 id="knowledge-search-title" className="m-0 text-base font-bold text-slate-950">知识检索与问答</h2><p className="mb-0 mt-1 text-sm text-slate-600">仅匹配已发布、已脱敏的知识标题、正文、分类和标签；AI 回答只引用匹配资料。</p></header>
+        <div className="flex gap-2 p-5"><Input aria-label="搜索知识" value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} placeholder="输入关键词或问题" maxLength={1000} /><Button onPress={searchKnowledge} isDisabled={knowledgeBusy || !knowledgeQuery.trim()}>{knowledgeBusy ? <Spinner size="sm" /> : "搜索"}</Button><Button variant="secondary" onPress={askFromKnowledge} isDisabled={knowledgeBusy || !knowledgeQuery.trim()}>基于资料问答</Button></div>
+        {knowledgeMessage && <p className="m-0 px-5 pb-4 text-sm text-amber-800" role="status">{knowledgeMessage}</p>}
+        {knowledgeResults.length > 0 && <div className="divide-y divide-slate-100">{knowledgeResults.map((result) => <article key={result.knowledge_item_id} className="px-5 py-4"><h3 className="m-0 text-sm font-semibold">{result.title}</h3><p className="mb-0 mt-1 text-sm text-slate-600">{result.summary}</p><p className="mb-0 mt-2 text-xs text-slate-500">匹配字段：标题、正文、分类或标签 · #{result.category} · {result.keywords.map((tag) => `#${tag}`).join(" ")}</p></article>)}</div>}
+        {knowledgeAnswer && <div className="m-5 rounded-md border border-slate-200 bg-slate-50 p-4"><p className="m-0 whitespace-pre-wrap text-sm leading-6">{knowledgeAnswer.answer}</p><p className="mb-0 mt-3 text-xs text-slate-600">来源：{knowledgeAnswer.sources.map((source) => `${source.title} v${source.version}`).join("、") || "资料不足"}</p></div>}
+      </section>
       <section
         className="mb-7 border-y border-emerald-200 bg-emerald-50"
         aria-labelledby="offline-prevention-title"
@@ -424,6 +435,7 @@ export function LearningCenterPage() {
                       {results[question.id].isCorrect
                         ? "回答正确。"
                         : "回答不正确。"}{" "}
+                      得分 {results[question.id].score}/{results[question.id].maxScore}。{" "}
                       {results[question.id].explanation}
                     </p>
                   )}
@@ -432,100 +444,16 @@ export function LearningCenterPage() {
             </div>
           )}
         </section>
-        <section
-          className="border-y border-slate-200 bg-white"
-          aria-labelledby="knowledge-ask-title"
-        >
+        <section className="border-y border-slate-200 bg-white" aria-labelledby="practice-help-title">
           <header className="border-b border-slate-200 px-5 py-4">
-            <h2
-              id="knowledge-ask-title"
-              className="m-0 text-base font-bold text-slate-950"
-            >
-              新人问答
+            <h2 id="practice-help-title" className="m-0 text-base font-bold text-slate-950">
+              练习说明
             </h2>
           </header>
-          <form
-            className="flex gap-2 p-5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!token || !prompt.trim()) return;
-              setIsAsking(true);
-              setAnswer(null);
-              setKnowledgeError("");
-              void askKnowledge(token, prompt)
-                .then(setAnswer)
-                .catch((cause) => setKnowledgeError(messageFrom(cause)))
-                .finally(() => setIsAsking(false));
-            }}
-          >
-            <Input
-              aria-label="输入学习问题"
-              value={prompt}
-              maxLength={1000}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="输入一个和已审核教材有关的问题"
-            />
-            <Button
-              type="submit"
-              isIconOnly
-              aria-label="提交问题"
-              isDisabled={isAsking || !prompt.trim()}
-            >
-              {isAsking ? (
-                <Spinner size="sm" />
-              ) : (
-                <Send size={16} aria-hidden="true" />
-              )}
-            </Button>
-          </form>
-          {knowledgeError && (
-            <p className="m-0 px-5 pb-4 text-sm text-amber-800" role="status">
-              问答暂时不可用，已发布资料仍可查看。请稍后重试。
-            </p>
-          )}
-          {answer ? (
-            <div className="mx-5 mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
-              <p className="m-0 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {answer.answer}
-              </p>
-              <p className="mb-0 mt-3 text-xs text-slate-500">
-                资料状态：
-                {answer.certainty === "source_backed"
-                  ? "已审核资料支持"
-                  : "资料不足，无法形成行动建议"}
-              </p>
-              <p className="mb-0 mt-2 text-xs text-slate-500">
-                {answer.human_review_notice}
-              </p>
-              {answer.sources.length > 0 && (
-                <div className="mt-3 grid gap-3">
-                  <p className="m-0 text-xs text-slate-500">
-                    引用来源（均为已审核发布）：
-                    {answer.sources
-                      .map((source) => `${source.title} v${source.version}`)
-                      .join("、")}
-                  </p>
-                  {answer.sources.flatMap((source) => source.images ?? []).length > 0 && (
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {answer.sources.flatMap((source) => source.images ?? []).map((image) => (
-                        <img
-                          key={image.id}
-                          src={imageUrls[image.id] ?? ""}
-                          alt="Knowledge source image"
-                          className="aspect-video w-full rounded-md border border-slate-200 object-cover"
-                          loading="lazy"
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="m-0 px-5 pb-8 text-sm text-slate-500">
-              答案只来自当前账号可见的已发布资源。
-            </p>
-          )}
+          <div className="px-5 py-6 text-sm leading-6 text-slate-600">
+            <p className="m-0">提交前不会显示答案或解析。完成作答后可查看解析与关联的已发布资料。</p>
+            <p className="mb-0 mt-3">练习可以重复进行；学习进度以当前题目版本的最新一次结果为准。</p>
+          </div>
         </section>
       </div>
     </main>
