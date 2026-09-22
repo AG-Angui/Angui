@@ -203,10 +203,10 @@ async fn upload_attachment(
     if let Some(field) = multipart.next().await {
         let mut field =
             field.map_err(|_| ApiError::Validation("invalid attachment upload".to_owned()))?;
-        if let Some(disposition) = field.content_disposition() {
-            if let Some(name) = disposition.get_filename() {
-                file_name = name.to_owned();
-            }
+        if let Some(disposition) = field.content_disposition()
+            && let Some(name) = disposition.get_filename()
+        {
+            file_name = name.to_owned();
         }
         content_type = field
             .content_type()

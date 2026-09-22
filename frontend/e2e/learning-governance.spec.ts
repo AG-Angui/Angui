@@ -132,7 +132,7 @@ test("learner category governance carries a draft through publication and filter
   await page.getByLabel("提交理由").fill("E2E verifies the learner draft workflow.");
   await draftSection.locator("select").selectOption(categoryId);
   await page.getByRole("button", { name: "提交草稿" }).click();
-  await expect(page.getByRole("status")).toContainText("草稿已提交");
+  await expect(page.getByText("草稿已提交，等待独立去标识、审核与发布流程。")).toBeVisible();
 
   const managedResources = await apiGet(
     request,

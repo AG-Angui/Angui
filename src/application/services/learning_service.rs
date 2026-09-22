@@ -1677,12 +1677,12 @@ fn single_choice_answer_payload(request: SubmitLearningAnswerRequest) -> Result<
         .ok_or_else(|| {
             ApiError::Validation("answer_payload.selected_option_id is required".to_owned())
         })?;
-    if let Some(legacy) = legacy.filter(|value| !value.is_empty()) {
-        if legacy != selected {
-            return Err(ApiError::Validation(
-                "selected_option_id and answer_payload must agree".to_owned(),
-            ));
-        }
+    if let Some(legacy) = legacy.filter(|value| !value.is_empty())
+        && legacy != selected
+    {
+        return Err(ApiError::Validation(
+            "selected_option_id and answer_payload must agree".to_owned(),
+        ));
     }
     if selected.chars().count() > 128 {
         return Err(ApiError::Validation(

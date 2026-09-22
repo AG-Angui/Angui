@@ -335,6 +335,7 @@ pub async fn load_image(
 }
 
 /// Stores a governed PDF outside the web root; it is always served through authorization.
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_pdf_attachment(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
