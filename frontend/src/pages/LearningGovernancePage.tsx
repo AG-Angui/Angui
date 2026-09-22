@@ -16,6 +16,7 @@ import {
   confirmKnowledgeImport,
   cancelKnowledgeImport,
   createKnowledgeItem,
+  updateKnowledgeItem,
   listKnowledgeItems,
   transitionKnowledgeItem,
   getKnowledgeOverview,
@@ -100,6 +101,17 @@ function transitionLabel(state: LearningContentLifecycle["state"]) {
     unmanaged: "未纳入治理",
   };
   return labels[state];
+}
+
+function knowledgeStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    draft: "草稿，待脱敏",
+    submitted: "已脱敏，待审核",
+    reviewed: "已审核，待发布",
+    published: "已发布",
+    withdrawn: "已撤回",
+  };
+  return labels[status] ?? status;
 }
 
 function LifecycleActions({
@@ -235,6 +247,7 @@ export function LearningGovernancePage() {
   const knowledgeImageGeneration = useRef(0);
   const [knowledgeItemBaseId, setKnowledgeItemBaseId] = useState("");
   const [knowledgeItemForm, setKnowledgeItemForm] = useState({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" });
+  const [editingKnowledgeItemId, setEditingKnowledgeItemId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -373,7 +386,8 @@ export function LearningGovernancePage() {
   };
   const loadKnowledgeItems = (baseId: string) => { if (!token || !baseId) return; setKnowledgeItemBaseId(baseId); void Promise.all([listKnowledgeItems(token, baseId), getKnowledgeOverview(token, baseId)]).then(([items, overview]) => { setKnowledgeItems(items); setKnowledgeOverview(overview); }).catch((cause) => setOperationError(errorMessage(cause))); };
   const uploadItemImages = (itemId: string, files: FileList | null) => { if (!token || !files?.length) return; setBusyId(itemId); void Promise.all(Array.from(files).map((file) => uploadKnowledgeImage(token, itemId, file))).then(() => loadKnowledgeItems(knowledgeItemBaseId)).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const createItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId) return; setBusyId("knowledge-item"); const images: { storage_path: string; mime_type: string; width: number | null; height: number | null; metadata: Record<string, unknown> }[] = []; void createKnowledgeItem(token, knowledgeItemBaseId, { title: knowledgeItemForm.title, summary: knowledgeItemForm.summary, content: knowledgeItemForm.content, category: knowledgeItemForm.category, category_id: null, keywords: parseTags(knowledgeItemForm.keywords), source_name: knowledgeItemForm.source_name, source_url: knowledgeItemForm.source_url.trim() || null, visibility: "learner", images }).then(() => { setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const createItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId) return; setBusyId("knowledge-item"); const input = { title: knowledgeItemForm.title, summary: knowledgeItemForm.summary, content: knowledgeItemForm.content, category: knowledgeItemForm.category, category_id: null, keywords: parseTags(knowledgeItemForm.keywords), source_name: knowledgeItemForm.source_name, source_url: knowledgeItemForm.source_url.trim() || null, visibility: "learner" }; const operation = editingKnowledgeItemId ? updateKnowledgeItem(token, editingKnowledgeItemId, input) : createKnowledgeItem(token, knowledgeItemBaseId, { ...input, images: [] }); void operation.then(() => { setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); setEditingKnowledgeItemId(null); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const editKnowledgeItem = (item: import("../api/learning").KnowledgeItem) => { setEditingKnowledgeItemId(item.knowledge_item_id); setKnowledgeItemForm({ title: item.title, summary: item.summary, content: item.content, category: item.category, keywords: item.keywords.join(", "), source_name: item.source_name, source_url: item.source_url ?? "" }); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const transitionItem = (itemId: string, action: "deidentify" | "review" | "publish" | "withdraw") => { if (!token) return; setBusyId(itemId); void transitionKnowledgeItem(token, itemId, action).then(() => listKnowledgeItems(token, knowledgeItemBaseId)).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
   if (isLoading) return <LoadingState label="正在加载学习内容治理记录" />;
   if (loadError)
@@ -549,7 +563,7 @@ export function LearningGovernancePage() {
             <Input className="lg:col-span-2" aria-label="摘要" placeholder="摘要" value={knowledgeItemForm.summary} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, summary: event.target.value })} />
             <textarea aria-label="正文" className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm lg:col-span-2" placeholder="正文" value={knowledgeItemForm.content} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, content: event.target.value })} required />
             <Input aria-label="来源链接" placeholder="HTTPS 来源链接" value={knowledgeItemForm.source_url} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, source_url: event.target.value })} />
-            <div className="lg:col-span-2"><Button type="submit" isDisabled={busyId === "knowledge-item"}>{busyId === "knowledge-item" ? <Spinner size="sm" /> : "保存知识条目"}</Button></div>
+            <div className="flex gap-2 lg:col-span-2"><Button type="submit" isDisabled={busyId === "knowledge-item"}>{busyId === "knowledge-item" ? <Spinner size="sm" /> : editingKnowledgeItemId ? "保存草稿修改" : "保存知识条目"}</Button>{editingKnowledgeItemId && <Button type="button" variant="secondary" onPress={() => { setEditingKnowledgeItemId(null); setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); }}>取消编辑</Button>}</div>
           </form>
           <div className="mt-5 overflow-x-auto border-t border-slate-100">
             <table className="min-w-[1200px] w-full text-left text-sm">
@@ -581,7 +595,7 @@ export function LearningGovernancePage() {
                     <td className="max-w-56 px-3 py-3 text-slate-700">{item.keywords.length > 0 ? item.keywords.join("、") : "-"}</td>
                     <td className="max-w-72 whitespace-pre-wrap px-3 py-3 text-slate-700">{item.summary || "-"}</td>
                     <td className="max-w-96 whitespace-pre-wrap px-3 py-3 text-slate-700">{item.content}</td>
-                    <td className="px-3 py-3 text-xs text-slate-600">v{item.version}<br />{item.status}</td>
+                    <td className="px-3 py-3 text-xs text-slate-600">v{item.version}<br />{knowledgeStatusLabel(item.status)}</td>
                     <td className="min-w-36 px-3 py-3">
                       {item.images.length === 0 ? <span className="text-xs text-slate-500">-</span> : (
                         <div className="flex flex-col gap-2">
@@ -599,10 +613,12 @@ export function LearningGovernancePage() {
                     </td>
                     <td className="min-w-56 px-3 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        {(item.status === "draft" || item.status === "submitted") && <><Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "deidentify")}>确认脱敏</Button><Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>审核</Button></>}
+                        {item.status === "draft" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "deidentify")}>确认脱敏</Button>}
+                        {item.status === "draft" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => editKnowledgeItem(item)}>编辑</Button>}
+                        {item.status === "submitted" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>审核</Button>}
                         {item.status === "reviewed" && <Button size="sm" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "publish")}>Publish</Button>}
                         {item.status === "published" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "withdraw")}>Withdraw</Button>}
-                        <label className="text-xs text-slate-700">Upload images<input aria-label={`Upload images for ${item.title}`} className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>
+                        {item.status !== "withdrawn" && item.status !== "published" && <label className="text-xs text-slate-700">Upload images<input aria-label={`Upload images for ${item.title}`} className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>}
                       </div>
                     </td>
                   </tr>

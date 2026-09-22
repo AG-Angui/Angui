@@ -22,6 +22,7 @@ pub const COMMANDER: &str = "commander@demo.invalid";
 pub const VOLUNTEER: &str = "volunteer@demo.invalid";
 pub const LEARNER: &str = "learner@demo.invalid";
 pub const ADMIN: &str = "admin@demo.invalid";
+pub const ADMIN2: &str = "admin2@demo.invalid";
 
 pub struct TestContext {
     pub(crate) database: DatabaseConnection,

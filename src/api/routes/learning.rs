@@ -186,8 +186,10 @@ async fn ask_knowledge(
     state: web::Data<AppState>,
     request: web::Json<KnowledgeAskRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok()
-        .json(learning_service::ask_knowledge(&state.db, &auth, request.into_inner()).await?))
+    Ok(HttpResponse::Ok().json(
+        learning_service::ask_knowledge(&state.db, &auth, request.into_inner(), &state.ai_gateway)
+            .await?,
+    ))
 }
 
 async fn list_managed_resources(

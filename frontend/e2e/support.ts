@@ -4,9 +4,13 @@ export const demoPassword = "e2e-demo-password";
 export const accounts = {
   family: "family@demo.invalid",
   commander: "commander@demo.invalid",
+  commander2: "commander2@demo.invalid",
   volunteer: "volunteer@demo.invalid",
+  volunteer2: "volunteer2@demo.invalid",
+  volunteer3: "volunteer3@demo.invalid",
   learner: "learner@demo.invalid",
   admin: "admin@demo.invalid",
+  admin2: "admin2@demo.invalid",
 } as const;
 
 const localRunId = `local-${process.pid}-${Date.now()}`;
