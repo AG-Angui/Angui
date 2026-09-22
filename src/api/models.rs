@@ -146,6 +146,8 @@ pub struct LearningResourceQuery {
     pub resource_type: Option<String>,
     pub tag: Option<String>,
     pub category_id: Option<String>,
+    /// Keyword query against the governed knowledge title, body, category and tags.
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +198,8 @@ pub struct LearningQuestionResponse {
     pub difficulty: String,
     pub tags: Vec<String>,
     pub options: Value,
+    /// Public, renderer-facing question data. It never contains the answer key.
+    pub definition: Value,
     pub source_resource_id: String,
     pub previous_version_id: Option<String>,
     pub version: i32,
@@ -204,13 +208,18 @@ pub struct LearningQuestionResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmitLearningAnswerRequest {
-    pub selected_option_id: String,
+    /// Compatibility input for the original single-choice endpoint.
+    pub selected_option_id: Option<String>,
+    /// Type-specific answer data. New clients must use this field.
+    pub answer_payload: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SubmitLearningAnswerResponse {
     pub question_id: String,
     pub is_correct: bool,
+    pub score: i32,
+    pub max_score: i32,
     pub explanation: String,
     pub source: LearningAnswerSource,
 }
@@ -283,6 +292,16 @@ pub struct KnowledgeImageResponse {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub metadata: Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeAttachmentResponse {
+    pub id: String,
+    pub file_name: String,
+    pub storage_path: String,
+    pub mime_type: String,
+    pub byte_size: i64,
+    pub created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -390,6 +409,7 @@ pub struct KnowledgeSearchResultResponse {
     pub source_name: String,
     pub source_url: Option<String>,
     pub images: Vec<KnowledgeImageResponse>,
+    pub attachments: Vec<KnowledgeAttachmentResponse>,
     pub status: String,
 }
 #[derive(Debug, Serialize)]
@@ -465,6 +485,8 @@ pub struct CreateLearningQuestionRequest {
     pub tags: Vec<String>,
     pub options: Value,
     pub correct_option_id: String,
+    #[serde(default)]
+    pub supplemental_resource_ids: Vec<String>,
     pub explanation: String,
     pub previous_version_id: Option<String>,
     pub visibility: String,
@@ -510,6 +532,8 @@ pub struct ManagedLearningResourceResponse {
 pub struct ManagedLearningQuestionResponse {
     #[serde(flatten)]
     pub question: LearningQuestionResponse,
+    /// Only governance endpoints expose the answer key.
+    pub answer_key: Value,
     pub lifecycle: LearningContentLifecycleResponse,
 }
 

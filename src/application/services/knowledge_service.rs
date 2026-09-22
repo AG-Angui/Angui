@@ -19,17 +19,17 @@ use crate::ai_gateway::{
 };
 use crate::{
     entities::{
-        knowledge_bases, knowledge_images, knowledge_import_batches, knowledge_import_rows,
-        knowledge_items,
+        audit_events, knowledge_attachments, knowledge_bases, knowledge_content_review_events,
+        knowledge_images, knowledge_import_batches, knowledge_import_rows, knowledge_items,
     },
     error::ApiError,
     models::{
         AuthenticatedUser, CreateKnowledgeBaseRequest, CreateKnowledgeItemRequest,
-        KnowledgeBaseOverviewResponse, KnowledgeBaseResponse, KnowledgeChatResponse,
-        KnowledgeChatSourceResponse, KnowledgeImageInput, KnowledgeImageResponse,
-        KnowledgeImportBatchResponse, KnowledgeImportRowResponse, KnowledgeOverviewResponse,
-        KnowledgeSearchResponse, KnowledgeSearchResultResponse, UpdateKnowledgeBaseRequest,
-        UpdateKnowledgeItemRequest,
+        KnowledgeAttachmentResponse, KnowledgeBaseOverviewResponse, KnowledgeBaseResponse,
+        KnowledgeChatResponse, KnowledgeChatSourceResponse, KnowledgeImageInput,
+        KnowledgeImageResponse, KnowledgeImportBatchResponse, KnowledgeImportRowResponse,
+        KnowledgeOverviewResponse, KnowledgeSearchResponse, KnowledgeSearchResultResponse,
+        UpdateKnowledgeBaseRequest, UpdateKnowledgeItemRequest,
     },
     roles::{AccountType, GlobalCapability},
     services::{
@@ -334,6 +334,103 @@ pub async fn load_image(
     Ok((image.mime_type, bytes))
 }
 
+/// Stores a governed PDF outside the web root; it is always served through authorization.
+pub async fn upload_pdf_attachment(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    item_id: &str,
+    file_name: &str,
+    content_type: &str,
+    bytes: Vec<u8>,
+    directory: &Path,
+    max_bytes: usize,
+) -> Result<KnowledgeAttachmentResponse, ApiError> {
+    require_admin(auth)?;
+    if content_type != "application/pdf" || !bytes.starts_with(b"%PDF") {
+        return Err(ApiError::Validation(
+            "only PDF attachments are allowed".to_owned(),
+        ));
+    }
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err(ApiError::Validation(
+            "attachment size is invalid".to_owned(),
+        ));
+    }
+    let item = find_item(db, item_id).await?;
+    let attachment_id = case_service::new_id();
+    let relative = PathBuf::from("knowledge")
+        .join(item_id)
+        .join(format!("{attachment_id}.pdf"));
+    let path = directory.join(&relative);
+    let parent = path.parent().ok_or(ApiError::Internal)?.to_path_buf();
+    let write_path = path.clone();
+    web::block(move || {
+        fs::create_dir_all(parent)?;
+        fs::write(write_path, bytes)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(|_| ApiError::Internal)?;
+    let attachment = knowledge_attachments::ActiveModel {
+        id: Set(attachment_id.clone()),
+        knowledge_item_id: Set(item.id),
+        file_name: Set(required(file_name, "file_name", 255)?),
+        storage_path: Set(format!(
+            "/api/admin/knowledge-items/{item_id}/attachments/{attachment_id}"
+        )),
+        mime_type: Set("application/pdf".to_owned()),
+        byte_size: Set(fs::metadata(&path).map_err(|_| ApiError::Internal)?.len() as i64),
+        created_at: Set(now()),
+    }
+    .insert(db)
+    .await;
+    match attachment {
+        Ok(value) => attachment_response(value),
+        Err(error) => {
+            let _ = fs::remove_file(path);
+            Err(ApiError::Database(error))
+        }
+    }
+}
+
+pub async fn load_pdf_attachment(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    item_id: &str,
+    attachment_id: &str,
+    directory: &Path,
+) -> Result<(String, Vec<u8>), ApiError> {
+    let item = find_item(db, item_id).await?;
+    if !auth.global_capabilities.contains(&GlobalCapability::Admin) {
+        let base = find_base(db, &item.knowledge_base_id).await?;
+        if base.status != "enabled"
+            || item.status != "published"
+            || item.effective_at > now()
+            || item.withdrawn_at.is_some()
+            || !visible_to(auth, &base.visibility)
+            || !visible_to(auth, &item.visibility)
+        {
+            return Err(ApiError::NotFound(
+                "knowledge attachment was not found".to_owned(),
+            ));
+        }
+    }
+    let attachment = knowledge_attachments::Entity::find_by_id(attachment_id)
+        .one(db)
+        .await?
+        .filter(|attachment| attachment.knowledge_item_id == item_id)
+        .ok_or_else(|| ApiError::NotFound("knowledge attachment was not found".to_owned()))?;
+    let path = directory
+        .join("knowledge")
+        .join(item_id)
+        .join(format!("{attachment_id}.pdf"));
+    let bytes = web::block(move || fs::read(path))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(|_| ApiError::Internal)?;
+    Ok((attachment.file_name, bytes))
+}
+
 pub async fn create_item(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -435,6 +532,7 @@ pub async fn update_item(
             .exec(&transaction)
             .await?;
     }
+    let next_version = existing.version + 1;
     let mut active: knowledge_items::ActiveModel = existing.into();
     active.title = Set(input.title);
     active.summary = Set(input.summary);
@@ -449,6 +547,7 @@ pub async fn update_item(
     active.content_hash = Set(hash);
     active.status = Set("draft".to_owned());
     active.withdrawn_at = Set(None);
+    active.version = Set(next_version);
     let timestamp = now();
     active.updated_at = Set(timestamp.clone());
     let item = active.update(&transaction).await?;
@@ -468,7 +567,12 @@ pub async fn transition_item(
     require_admin(auth)?;
     let item = find_item(db, id).await?;
     let target = match (action, item.status.as_str()) {
-        ("review", "draft" | "submitted") => "reviewed",
+        ("deidentify", "draft" | "submitted") => "draft",
+        ("review", "draft" | "submitted")
+            if has_review_event(db, id, item.version, "deidentified").await? =>
+        {
+            "reviewed"
+        }
         ("publish", "reviewed") => "published",
         ("withdraw", "published") => "withdrawn",
         _ => {
@@ -478,12 +582,130 @@ pub async fn transition_item(
         }
     };
     let timestamp = now();
+    let item_version = item.version;
     let mut active: knowledge_items::ActiveModel = item.into();
     active.status = Set(target.to_owned());
     active.withdrawn_at = Set((target == "withdrawn").then_some(timestamp.clone()));
-    active.updated_at = Set(timestamp);
+    active.updated_at = Set(timestamp.clone());
     active.update(db).await?;
+    let event_type = match action {
+        "deidentify" => "deidentified",
+        "review" => "reviewed",
+        "publish" => "published",
+        "withdraw" => "withdrawn",
+        _ => unreachable!(),
+    };
+    knowledge_content_review_events::ActiveModel {
+        id: Set(case_service::new_id()),
+        knowledge_item_id: Set(id.to_owned()),
+        content_version: Set(item_version),
+        event_type: Set(event_type.to_owned()),
+        actor_user_id: Set(auth.id.clone()),
+        reason: Set("knowledge governance transition".to_owned()),
+        created_at: Set(timestamp),
+    }
+    .insert(db)
+    .await?;
     get_item(db, auth, id).await
+}
+
+/// Lists only the governed `learning-materials` knowledge base for learner-facing search.
+pub async fn search_learning_materials(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    query: Option<&str>,
+    category: Option<&str>,
+    tag: Option<&str>,
+) -> Result<KnowledgeSearchResponse, ApiError> {
+    let base = find_base(db, "learning-materials").await?;
+    if base.status != "enabled" || !visible_to(auth, &base.visibility) {
+        return Err(ApiError::NotFound(
+            "learning materials are not available".to_owned(),
+        ));
+    }
+    let now = now();
+    let query = query.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(value) = query {
+        validate_query(value)?;
+    }
+    let mut scored = Vec::new();
+    for item in knowledge_items::Entity::find()
+        .filter(knowledge_items::Column::KnowledgeBaseId.eq("learning-materials"))
+        .filter(knowledge_items::Column::Status.eq("published"))
+        .filter(knowledge_items::Column::EffectiveAt.lte(now.clone()))
+        .filter(knowledge_items::Column::WithdrawnAt.is_null())
+        .all(db)
+        .await?
+    {
+        if !visible_to(auth, &item.visibility) {
+            continue;
+        }
+        let tags: Vec<String> = serde_json::from_str(&item.keywords_json).unwrap_or_default();
+        if category.is_some_and(|value| !item.category.eq_ignore_ascii_case(value.trim())) {
+            continue;
+        }
+        if tag.is_some_and(|value| {
+            !tags
+                .iter()
+                .any(|tag| tag.eq_ignore_ascii_case(value.trim()))
+        }) {
+            continue;
+        }
+        let score = match query {
+            Some(value) => match score_item(&item, value) {
+                Some(score) => score,
+                None => continue,
+            },
+            None => 0.0,
+        };
+        scored.push((item, score));
+    }
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.title.cmp(&b.0.title)));
+    let scores = scored
+        .iter()
+        .map(|(item, score)| (item.id.clone(), *score))
+        .collect::<HashMap<_, _>>();
+    let results = results_with_images(
+        db,
+        scored.into_iter().map(|(item, _)| item).collect(),
+        Some(&scores),
+    )
+    .await?;
+    // Never retain the user query itself: audit only the operation's minimal metadata.
+    audit_events::ActiveModel {
+        id: Set(case_service::new_id()), case_id: Set(None), actor: Set(auth.id.clone()),
+        action: Set("knowledge.search".to_owned()), entity_type: Set("knowledge_base".to_owned()),
+        entity_id: Set("learning-materials".to_owned()),
+        metadata_json: Set(Some(json!({"result_count": results.len(), "has_category_filter": category.is_some(), "has_tag_filter": tag.is_some(), "has_query": query.is_some()}).to_string())),
+        created_at: Set(now.clone()),
+    }.insert(db).await?;
+    Ok(KnowledgeSearchResponse { results })
+}
+
+pub async fn get_learning_material(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    id: &str,
+) -> Result<KnowledgeSearchResultResponse, ApiError> {
+    let item = find_item(db, id).await?;
+    let base = find_base(db, &item.knowledge_base_id).await?;
+    if item.knowledge_base_id != "learning-materials"
+        || base.status != "enabled"
+        || item.status != "published"
+        || item.effective_at > now()
+        || item.withdrawn_at.is_some()
+        || !visible_to(auth, &base.visibility)
+        || !visible_to(auth, &item.visibility)
+    {
+        return Err(ApiError::NotFound(
+            "learning material was not found".to_owned(),
+        ));
+    }
+    results_with_images(db, vec![item], None)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(ApiError::Internal)
 }
 
 pub async fn search(
@@ -1114,7 +1336,7 @@ async fn results_with_images(
         Vec::new()
     } else {
         knowledge_images::Entity::find()
-            .filter(knowledge_images::Column::KnowledgeItemId.is_in(ids))
+            .filter(knowledge_images::Column::KnowledgeItemId.is_in(ids.clone()))
             .all(db)
             .await?
     };
@@ -1124,6 +1346,28 @@ async fn results_with_images(
             .entry(image.knowledge_item_id.clone())
             .or_default()
             .push(image_response(image)?);
+    }
+    let attachments = if ids.is_empty() {
+        Vec::new()
+    } else {
+        knowledge_attachments::Entity::find()
+            .filter(knowledge_attachments::Column::KnowledgeItemId.is_in(ids))
+            .all(db)
+            .await?
+    };
+    let mut attachments_by_item: HashMap<String, Vec<KnowledgeAttachmentResponse>> = HashMap::new();
+    for attachment in attachments {
+        attachments_by_item
+            .entry(attachment.knowledge_item_id.clone())
+            .or_default()
+            .push(KnowledgeAttachmentResponse {
+                id: attachment.id,
+                file_name: attachment.file_name,
+                storage_path: attachment.storage_path,
+                mime_type: attachment.mime_type,
+                byte_size: attachment.byte_size,
+                created_at: attachment.created_at,
+            });
     }
     Ok(items
         .into_iter()
@@ -1143,8 +1387,23 @@ async fn results_with_images(
             source_url: item.source_url,
             status: item.status,
             images: images_by_item.remove(&item.id).unwrap_or_default(),
+            attachments: attachments_by_item.remove(&item.id).unwrap_or_default(),
         })
         .collect())
+}
+async fn has_review_event(
+    db: &DatabaseConnection,
+    item_id: &str,
+    version: i32,
+    event_type: &str,
+) -> Result<bool, ApiError> {
+    Ok(knowledge_content_review_events::Entity::find()
+        .filter(knowledge_content_review_events::Column::KnowledgeItemId.eq(item_id))
+        .filter(knowledge_content_review_events::Column::ContentVersion.eq(version))
+        .filter(knowledge_content_review_events::Column::EventType.eq(event_type))
+        .one(db)
+        .await?
+        .is_some())
 }
 
 async fn find_base(db: &DatabaseConnection, id: &str) -> Result<knowledge_bases::Model, ApiError> {
@@ -1178,6 +1437,18 @@ fn image_response(image: knowledge_images::Model) -> Result<KnowledgeImageRespon
         width: image.width,
         height: image.height,
         metadata: serde_json::from_str(&image.metadata_json).map_err(|_| ApiError::Internal)?,
+    })
+}
+fn attachment_response(
+    attachment: knowledge_attachments::Model,
+) -> Result<KnowledgeAttachmentResponse, ApiError> {
+    Ok(KnowledgeAttachmentResponse {
+        id: attachment.id,
+        file_name: attachment.file_name,
+        storage_path: attachment.storage_path,
+        mime_type: attachment.mime_type,
+        byte_size: attachment.byte_size,
+        created_at: attachment.created_at,
     })
 }
 pub fn require_admin(auth: &AuthenticatedUser) -> Result<(), ApiError> {
@@ -1600,6 +1871,7 @@ mod tests {
             source_name: "Source".to_owned(),
             source_url: None,
             images: Vec::new(),
+            attachments: Vec::new(),
             status: "published".to_owned(),
         };
         let context = build_context(&[result]);

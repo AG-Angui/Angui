@@ -5,12 +5,14 @@ import { LearningCenterPage } from "./LearningCenterPage";
 
 const mocked = vi.hoisted(() => ({
   getPublicPreventionCard: vi.fn(),
-  askKnowledge: vi.fn(),
   listLearningQuestions: vi.fn(),
   listLearningCategories: vi.fn(),
   listLearningResources: vi.fn(),
   submitLearningCategoryProposal: vi.fn(),
   submitLearningResourceDraft: vi.fn(),
+  submitLearningAnswer: vi.fn(),
+  searchLearningKnowledge: vi.fn(),
+  askKnowledge: vi.fn(),
   token: "learner-session" as string | null,
 }));
 
@@ -36,8 +38,9 @@ vi.mock("../api/learning", () => ({
     mocked.submitLearningCategoryProposal(...args),
   submitLearningResourceDraft: (...args: unknown[]) =>
     mocked.submitLearningResourceDraft(...args),
+  submitLearningAnswer: (...args: unknown[]) => mocked.submitLearningAnswer(...args),
+  searchLearningKnowledge: (...args: unknown[]) => mocked.searchLearningKnowledge(...args),
   askKnowledge: (...args: unknown[]) => mocked.askKnowledge(...args),
-  submitLearningAnswer: vi.fn(),
 }));
 
 describe("LearningCenterPage", () => {
@@ -52,6 +55,16 @@ describe("LearningCenterPage", () => {
       status: "pending",
     });
     mocked.submitLearningResourceDraft.mockResolvedValue({});
+    mocked.submitLearningAnswer.mockResolvedValue({
+      question_id: "question-1",
+      is_correct: true,
+      score: 1,
+      max_score: 1,
+      explanation: "解析只会在提交后出现。",
+      source: { resource_id: "resource-1", title: "来源资料", version: 1 },
+    });
+    mocked.searchLearningKnowledge.mockResolvedValue({ results: [] });
+    mocked.askKnowledge.mockResolvedValue({ answer: "资料不足", certainty: "insufficient_sources", sources: [], human_review_notice: "请咨询负责人。" });
   });
 
   it("renders only the approved public prevention card supplied by the API", async () => {
@@ -105,7 +118,7 @@ describe("LearningCenterPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("labels visible resources and source-backed answers as approved published material", async () => {
+  it("labels visible resources as approved published material without exposing an AI answer entry", async () => {
     mocked.getPublicPreventionCard.mockRejectedValue(
       new ApiClientError(404, "not_found", "未找到可访问的资源。"),
     );
@@ -123,15 +136,6 @@ describe("LearningCenterPage", () => {
         effective_at: "2026-08-05T00:00:00.000Z",
       },
     ]);
-    mocked.askKnowledge.mockResolvedValue({
-      answer: "请核对经审核的案例摘要。",
-      certainty: "source_backed",
-      sources: [
-        { resource_id: "case-study-v2", title: "脱敏案例复盘", version: 2 },
-      ],
-      human_review_notice: "现场行动以负责人指令为准。",
-    });
-
     render(<LearningCenterPage />);
 
     expect(await screen.findByText("脱敏案例")).toBeInTheDocument();
@@ -142,20 +146,11 @@ describe("LearningCenterPage", () => {
       screen.getByText("生效时间：", { exact: false }),
     ).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("输入学习问题"), {
-      target: { value: "如何复盘？" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "提交问题" }));
-
-    expect(
-      await screen.findByText("资料状态：已审核资料支持"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("引用来源（均为已审核发布）：脱敏案例复盘 v2"),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("新人问答")).not.toBeInTheDocument();
+    expect(screen.getByText("提交前不会显示答案或解析。完成作答后可查看解析与关联的已发布资料。")).toBeInTheDocument();
   });
 
-  it("keeps published resources visible when the knowledge service fails", async () => {
+  it("keeps published resources visible without a knowledge chat dependency", async () => {
     mocked.getPublicPreventionCard.mockRejectedValue(
       new ApiClientError(404, "not_found", "未找到可访问的资源。"),
     );
@@ -173,22 +168,43 @@ describe("LearningCenterPage", () => {
         effective_at: "2026-08-05T00:00:00.000Z",
       },
     ]);
-    mocked.askKnowledge.mockRejectedValue(new Error("服务暂不可用"));
-
     render(<LearningCenterPage />);
     expect(await screen.findByText("已发布手册")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("输入学习问题"), {
-      target: { value: "如何准备？" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "提交问题" }));
-
-    expect(
-      await screen.findByText(
-        "问答暂时不可用，已发布资料仍可查看。请稍后重试。",
-      ),
-    ).toBeInTheDocument();
     expect(screen.getByText("已发布手册")).toBeInTheDocument();
+  });
+
+  it("keeps the answer and explanation hidden until a single-choice submission completes", async () => {
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "没有卡片"),
+    );
+    mocked.listLearningQuestions.mockResolvedValue([
+      {
+        id: "question-1",
+        prompt: "哪项符合已发布资料？",
+        question_type: "single_choice",
+        difficulty: "basic",
+        tags: ["基础"],
+        options: [{ id: "a", text: "选项甲" }, { id: "b", text: "选项乙" }],
+        definition: { options: [{ id: "a", text: "选项甲" }, { id: "b", text: "选项乙" }] },
+        source_resource_id: "resource-1",
+        version: 1,
+      },
+    ]);
+
+    render(<LearningCenterPage />);
+    expect(await screen.findByText("哪项符合已发布资料？")).toBeInTheDocument();
+    expect(screen.queryByText("解析只会在提交后出现。")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "选项甲" }));
+    await waitFor(() =>
+      expect(mocked.submitLearningAnswer).toHaveBeenCalledWith(
+        "learner-session",
+        "question-1",
+        "a",
+      ),
+    );
+    expect(await screen.findByText("回答正确。", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(/解析只会在提交后出现/)).toBeInTheDocument();
   });
 
   it("renders category and tag chips and sends server-side filter changes", async () => {

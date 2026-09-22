@@ -119,6 +119,7 @@ async fn knowledge_rag_requires_governed_publication_before_search_and_chat() {
     let search_before_publish: Value = search!(&app, &context, &base_id, "emergency", LEARNER);
     assert_eq!(search_before_publish["results"], json!([]));
 
+    transition!(&app, &context, &item_id, "deidentify");
     transition!(&app, &context, &item_id, "review");
     transition!(&app, &context, &item_id, "publish");
 

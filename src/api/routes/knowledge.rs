@@ -31,11 +31,17 @@ pub fn configure(config: &mut web::ServiceConfig) {
             web::scope("/admin/knowledge-items")
                 .route("/{id}", web::get().to(get_item))
                 .route("/{id}", web::patch().to(update_item))
+                .route("/{id}/deidentify", web::post().to(deidentify_item))
                 .route("/{id}/review", web::post().to(review_item))
                 .route("/{id}/publish", web::post().to(publish_item))
                 .route("/{id}/withdraw", web::post().to(withdraw_item))
                 .route("/{id}/images", web::post().to(upload_image))
-                .route("/{id}/images/{image_id}", web::get().to(load_image)),
+                .route("/{id}/images/{image_id}", web::get().to(load_image))
+                .route("/{id}/attachments", web::post().to(upload_attachment))
+                .route(
+                    "/{id}/attachments/{attachment_id}",
+                    web::get().to(load_attachment),
+                ),
         )
         .service(
             web::scope("/knowledge-bases")
@@ -184,6 +190,72 @@ async fn load_image(
         .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .body(bytes))
 }
+async fn upload_attachment(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+    mut multipart: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    knowledge_service::require_admin(&auth)?;
+    let mut file_name = "knowledge.pdf".to_owned();
+    let mut content_type = String::new();
+    let mut bytes = Vec::new();
+    if let Some(field) = multipart.next().await {
+        let mut field =
+            field.map_err(|_| ApiError::Validation("invalid attachment upload".to_owned()))?;
+        if let Some(disposition) = field.content_disposition() {
+            if let Some(name) = disposition.get_filename() {
+                file_name = name.to_owned();
+            }
+        }
+        content_type = field
+            .content_type()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        while let Some(chunk) = field.next().await {
+            bytes.extend_from_slice(
+                &chunk.map_err(|_| ApiError::Validation("invalid attachment upload".to_owned()))?,
+            );
+        }
+    }
+    Ok(HttpResponse::Created().json(
+        knowledge_service::upload_pdf_attachment(
+            &state.db,
+            &auth,
+            &id,
+            &file_name,
+            &content_type,
+            bytes,
+            &state.attachment_storage_directory,
+            state.attachment_max_image_bytes,
+        )
+        .await?,
+    ))
+}
+async fn load_attachment(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (item_id, attachment_id) = path.into_inner();
+    let (file_name, bytes) = knowledge_service::load_pdf_attachment(
+        &state.db,
+        &auth,
+        &item_id,
+        &attachment_id,
+        &state.attachment_storage_directory,
+    )
+    .await?;
+    Ok(HttpResponse::Ok()
+        .insert_header((header::CONTENT_TYPE, "application/pdf"))
+        .insert_header((
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{file_name}\""),
+        ))
+        .insert_header((header::CACHE_CONTROL, "no-store, private"))
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .body(bytes))
+}
 async fn update_item(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -200,6 +272,14 @@ async fn review_item(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok()
         .json(knowledge_service::transition_item(&state.db, &auth, &id, "review").await?))
+}
+async fn deidentify_item(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(knowledge_service::transition_item(&state.db, &auth, &id, "deidentify").await?))
 }
 async fn publish_item(
     auth: AuthenticatedUser,
