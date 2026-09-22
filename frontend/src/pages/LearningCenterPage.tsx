@@ -8,6 +8,7 @@ import {
   listLearningResources,
   searchLearningKnowledge,
   askKnowledge,
+  downloadKnowledgeImage,
   submitLearningCategoryProposal,
   submitLearningAnswer,
   submitLearningResourceDraft,
@@ -18,6 +19,7 @@ import type {
   LearningQuestion,
   LearningResource,
   KnowledgeAnswer,
+  KnowledgeImage,
   KnowledgeSearchResult,
 } from "../api/learning";
 import { ApiClientError } from "../api/client";
@@ -78,6 +80,63 @@ export function LearningCenterPage() {
   const [knowledgeAnswer, setKnowledgeAnswer] = useState<KnowledgeAnswer | null>(null);
   const [knowledgeBusy, setKnowledgeBusy] = useState(false);
   const [knowledgeMessage, setKnowledgeMessage] = useState("");
+  const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<Record<string, string>>({});
+  const [knowledgeImageFailures, setKnowledgeImageFailures] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const images = new Map<string, { itemId: string; imageId: string }>();
+    const sources = [...knowledgeResults, ...(knowledgeAnswer?.sources ?? [])];
+    for (const source of sources) {
+      for (const image of source.images) {
+        images.set(image.id, {
+          itemId: source.knowledge_item_id,
+          imageId: image.id,
+        });
+      }
+    }
+    const controller = new AbortController();
+    let active = true;
+    const createdUrls: string[] = [];
+    setKnowledgeImageFailures({});
+    setKnowledgeImageUrls((current) => {
+      Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+      return {};
+    });
+
+    if (!token || images.size === 0) {
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+
+    void Promise.all(
+      [...images.values()].map(async ({ itemId, imageId }) => {
+        try {
+          const blob = await downloadKnowledgeImage(token, itemId, imageId, {
+            signal: controller.signal,
+          });
+          const url = URL.createObjectURL(blob);
+          if (!active) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          createdUrls.push(url);
+          setKnowledgeImageUrls((current) => ({ ...current, [imageId]: url }));
+        } catch {
+          if (active && !controller.signal.aborted) {
+            setKnowledgeImageFailures((current) => ({ ...current, [imageId]: true }));
+          }
+        }
+      }),
+    );
+
+    return () => {
+      active = false;
+      controller.abort();
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [knowledgeAnswer, knowledgeResults, token]);
 
   const searchKnowledge = () => {
     if (!token || !knowledgeQuery.trim()) return;
@@ -194,6 +253,43 @@ export function LearningCenterPage() {
   };
 
   const availableTags = Array.from(new Set(resources.flatMap((resource) => resource.tags))).sort();
+  const renderKnowledgeImages = (
+    title: string,
+    images: KnowledgeImage[],
+  ) => {
+    if (images.length === 0) return null;
+    return (
+      <div className="mt-3 flex flex-wrap gap-3" aria-label={`${title} 的附图`}>
+        {images.map((image, index) => {
+          const url = knowledgeImageUrls[image.id];
+          if (url) {
+            return (
+              <a key={image.id} href={url} target="_blank" rel="noreferrer" className="block">
+                <img
+                  src={url}
+                  alt={`${title} 附图 ${index + 1}`}
+                  className="h-24 w-36 rounded-md border border-slate-200 object-cover"
+                />
+              </a>
+            );
+          }
+          return (
+            <p key={image.id} className="m-0 text-xs text-slate-500">
+              {knowledgeImageFailures[image.id]
+                ? "附图暂时无法加载。"
+                : "正在加载附图…"}
+            </p>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const knowledgeAnswerStatus = knowledgeAnswer && {
+    source_backed: "AI Gateway 已基于下列已发布资料生成回答。",
+    rule_based: "当前未配置或无法连接可用的 AI Gateway；以下是命中资料原文拼接，不是模型生成回答。",
+    insufficient_sources: "没有足够的已发布资料，系统不会生成回答。",
+  }[knowledgeAnswer.certainty];
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
@@ -212,8 +308,8 @@ export function LearningCenterPage() {
         <header className="border-b border-slate-200 px-5 py-4"><h2 id="knowledge-search-title" className="m-0 text-base font-bold text-slate-950">知识检索与问答</h2><p className="mb-0 mt-1 text-sm text-slate-600">仅匹配已发布、已脱敏的知识标题、正文、分类和标签；AI 回答只引用匹配资料。</p></header>
         <div className="flex gap-2 p-5"><Input aria-label="搜索知识" value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} placeholder="输入关键词或问题" maxLength={1000} /><Button onPress={searchKnowledge} isDisabled={knowledgeBusy || !knowledgeQuery.trim()}>{knowledgeBusy ? <Spinner size="sm" /> : "搜索"}</Button><Button variant="secondary" onPress={askFromKnowledge} isDisabled={knowledgeBusy || !knowledgeQuery.trim()}>基于资料问答</Button></div>
         {knowledgeMessage && <p className="m-0 px-5 pb-4 text-sm text-amber-800" role="status">{knowledgeMessage}</p>}
-        {knowledgeResults.length > 0 && <div className="divide-y divide-slate-100">{knowledgeResults.map((result) => <article key={result.knowledge_item_id} className="px-5 py-4"><h3 className="m-0 text-sm font-semibold">{result.title}</h3><p className="mb-0 mt-1 text-sm text-slate-600">{result.summary}</p><p className="mb-0 mt-2 text-xs text-slate-500">匹配字段：标题、正文、分类或标签 · #{result.category} · {result.keywords.map((tag) => `#${tag}`).join(" ")}</p></article>)}</div>}
-        {knowledgeAnswer && <div className="m-5 rounded-md border border-slate-200 bg-slate-50 p-4"><p className="m-0 whitespace-pre-wrap text-sm leading-6">{knowledgeAnswer.answer}</p><p className="mb-0 mt-3 text-xs text-slate-600">来源：{knowledgeAnswer.sources.map((source) => `${source.title} v${source.version}`).join("、") || "资料不足"}</p></div>}
+        {knowledgeResults.length > 0 && <div className="divide-y divide-slate-100">{knowledgeResults.map((result) => <article key={result.knowledge_item_id} className="px-5 py-4"><h3 className="m-0 text-sm font-semibold">{result.title}</h3><p className="mb-0 mt-1 text-sm text-slate-600">{result.summary}</p><p className="mb-0 mt-2 text-xs text-slate-500">匹配字段：标题、正文、分类或标签 · #{result.category} · {result.keywords.map((tag) => `#${tag}`).join(" ")}</p>{renderKnowledgeImages(result.title, result.images)}</article>)}</div>}
+        {knowledgeAnswer && <div className="m-5 rounded-md border border-slate-200 bg-slate-50 p-4"><p className="m-0 text-xs text-slate-600" role="status">{knowledgeAnswerStatus}</p><p className="mb-0 mt-3 whitespace-pre-wrap text-sm leading-6">{knowledgeAnswer.answer}</p><p className="mb-0 mt-3 text-xs text-slate-600">来源：{knowledgeAnswer.sources.map((source) => `${source.title} v${source.version}`).join("、") || "资料不足"}</p>{knowledgeAnswer.sources.map((source) => <div key={source.knowledge_item_id}>{renderKnowledgeImages(source.title, source.images)}</div>)}<p className="mb-0 mt-3 text-xs text-slate-600">{knowledgeAnswer.human_review_notice}</p></div>}
       </section>
       <section
         className="mb-7 border-y border-emerald-200 bg-emerald-50"

@@ -249,6 +249,11 @@ pub async fn upload_image(
 ) -> Result<KnowledgeImageResponse, ApiError> {
     require_admin(auth)?;
     let item = find_item(db, item_id).await?;
+    if item.status != "draft" {
+        return Err(ApiError::Conflict(
+            "attachments can only be added while a knowledge item is a draft".to_owned(),
+        ));
+    }
     let (mime_type, _filename, bytes) = normalize_image_upload(upload, max_image_bytes).await?;
     let image_id = case_service::new_id();
     let extension = if mime_type == "image/png" {
@@ -358,6 +363,11 @@ pub async fn upload_pdf_attachment(
         ));
     }
     let item = find_item(db, item_id).await?;
+    if item.status != "draft" {
+        return Err(ApiError::Conflict(
+            "attachments can only be added while a knowledge item is a draft".to_owned(),
+        ));
+    }
     let attachment_id = case_service::new_id();
     let relative = PathBuf::from("knowledge")
         .join(item_id)
@@ -505,6 +515,12 @@ pub async fn update_item(
 ) -> Result<KnowledgeSearchResultResponse, ApiError> {
     require_admin(auth)?;
     let existing = find_item(db, id).await?;
+    if existing.status != "draft" {
+        return Err(ApiError::Conflict(
+            "only draft knowledge items can be edited; create a new version for governed content"
+                .to_owned(),
+        ));
+    }
     let base = find_base(db, &existing.knowledge_base_id).await?;
     let input = merge_item(existing.clone(), request, &base.visibility)?;
     let hash = content_hash(
@@ -568,8 +584,11 @@ pub async fn transition_item(
     require_admin(auth)?;
     let item = find_item(db, id).await?;
     let target = match (action, item.status.as_str()) {
-        ("deidentify", "draft" | "submitted") => "draft",
-        ("review", "draft" | "submitted")
+        // `submitted` is the persisted representation of "deidentified and
+        // awaiting independent review"; the migration's status constraint
+        // intentionally does not introduce a second deidentified enum value.
+        ("deidentify", "draft") => "submitted",
+        ("review", "submitted")
             if has_review_event(db, id, item.version, "deidentified").await? =>
         {
             "reviewed"
@@ -582,6 +601,11 @@ pub async fn transition_item(
             ));
         }
     };
+    if action == "review" && item.created_by_user_id == auth.id {
+        return Err(ApiError::Forbidden(
+            "the submitting administrator cannot perform the independent review".to_owned(),
+        ));
+    }
     let timestamp = now();
     let item_version = item.version;
     let mut active: knowledge_items::ActiveModel = item.into();

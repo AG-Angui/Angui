@@ -15,6 +15,7 @@ use crate::{
         learning_resources,
     },
     error::ApiError,
+    integrations::ai_gateway::AiGateway,
     models::{
         AuthenticatedUser, CreateLearningCategoryRequest, CreateLearningQuestionRequest,
         CreateLearningResourceRequest, KnowledgeAnswerResponse, KnowledgeAskRequest,
@@ -464,21 +465,28 @@ pub async fn submit_answer(
     })
 }
 
-#[allow(unreachable_code)]
 pub async fn ask_knowledge(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     request: KnowledgeAskRequest,
+    gateway: &AiGateway,
 ) -> Result<KnowledgeAnswerResponse, ApiError> {
-    let chat = crate::services::knowledge_service::chat(
+    let question = request.question.trim();
+    if question.is_empty() || question.chars().count() > MAX_QUESTION_LENGTH {
+        return Err(ApiError::Validation(
+            "question must contain between 1 and 1000 characters".to_owned(),
+        ));
+    }
+    let chat = crate::services::knowledge_service::chat_with_gateway(
         db,
         auth,
         "learning-materials",
-        &request.question,
+        question,
         Some(5),
+        gateway,
     )
     .await?;
-    return Ok(KnowledgeAnswerResponse {
+    Ok(KnowledgeAnswerResponse {
         answer: chat.answer,
         certainty: chat.certainty,
         sources: chat
@@ -491,66 +499,6 @@ pub async fn ask_knowledge(
             })
             .collect(),
         human_review_notice: chat.human_review_notice,
-    });
-
-    let prompt = request.question.trim();
-    if prompt.is_empty() || prompt.chars().count() > MAX_QUESTION_LENGTH {
-        return Err(ApiError::Validation(
-            "question must contain between 1 and 1000 characters".to_owned(),
-        ));
-    }
-    let keywords = knowledge_keywords(prompt);
-    let resources = list_resources(
-        db,
-        auth,
-        LearningResourceQuery {
-            resource_type: None,
-            tag: None,
-            category_id: None,
-            query: None,
-        },
-    )
-    .await?;
-    let matches: Vec<_> = resources
-        .into_iter()
-        .filter(|resource| {
-            let haystack = format!(
-                "{} {} {} {}",
-                resource.title,
-                resource.summary,
-                resource.content,
-                resource.tags.join(" ")
-            )
-            .to_lowercase();
-            keywords.iter().any(|word| haystack.contains(word))
-        })
-        .take(2)
-        .collect();
-    if matches.is_empty() {
-        return Ok(KnowledgeAnswerResponse {
-            answer: "没有可支持该问题的已审核学习资料。请联系负责人或查阅经审核的手册，不能据此形成行动结论。".to_owned(),
-            certainty: "insufficient_sources".to_owned(),
-            sources: Vec::new(),
-            human_review_notice: "学习问答仅提供资料定位；现场行动以人工审核记录和负责人指令为准。".to_owned(),
-        });
-    }
-    Ok(KnowledgeAnswerResponse {
-        answer: matches
-            .iter()
-            .map(|resource| resource.content.clone())
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        certainty: "source_backed".to_owned(),
-        sources: matches
-            .iter()
-            .map(|resource| LearningAnswerSource {
-                resource_id: resource.id.clone(),
-                title: resource.title.clone(),
-                version: resource.version,
-            })
-            .collect(),
-        human_review_notice: "学习问答仅提供资料定位；现场行动以人工审核记录和负责人指令为准。"
-            .to_owned(),
     })
 }
 
@@ -1982,38 +1930,4 @@ fn validated_options(value: serde_json::Value) -> Result<Vec<LearningOption>, Ap
     let serialized = serde_json::to_string(&value)
         .map_err(|_| ApiError::Validation("题目选项无效".to_owned()))?;
     parse_options(&serialized).map_err(|_| ApiError::Validation("题目选项无效".to_owned()))
-}
-
-fn knowledge_keywords(prompt: &str) -> Vec<String> {
-    let mut keywords: Vec<String> = prompt
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| word.chars().count() > 1)
-        .map(str::to_lowercase)
-        .collect();
-
-    let chinese: Vec<char> = prompt
-        .chars()
-        .filter(|character| ('\u{4e00}'..='\u{9fff}').contains(character))
-        .collect();
-    keywords.extend(
-        chinese
-            .windows(2)
-            .map(|window| window.iter().collect::<String>()),
-    );
-    keywords.sort();
-    keywords.dedup();
-    keywords
-}
-
-#[cfg(test)]
-mod tests {
-    use super::knowledge_keywords;
-
-    #[test]
-    fn chinese_questions_produce_searchable_bigrams() {
-        let keywords = knowledge_keywords("如何防止走失？");
-
-        assert!(keywords.iter().any(|keyword| keyword == "防止"));
-        assert!(keywords.iter().any(|keyword| keyword == "走失"));
-    }
 }

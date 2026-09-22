@@ -4,10 +4,10 @@ use actix_web::{
 };
 use serde_json::{Value, json};
 
-use crate::support::{ADMIN, FAMILY, LEARNER, TestContext, assert_error};
+use crate::support::{ADMIN, ADMIN2, FAMILY, LEARNER, TestContext, assert_error};
 
 macro_rules! transition {
-    ($app:expr, $context:expr, $item_id:expr, $action:expr) => {{
+    ($app:expr, $context:expr, $item_id:expr, $action:expr, $email:expr) => {{
         let response = test::call_service(
             $app,
             test::TestRequest::post()
@@ -17,7 +17,7 @@ macro_rules! transition {
                 ))
                 .insert_header((
                     header::AUTHORIZATION,
-                    format!("Bearer {}", $context.token(ADMIN).await),
+                    format!("Bearer {}", $context.token($email).await),
                 ))
                 .to_request(),
         )
@@ -119,9 +119,21 @@ async fn knowledge_rag_requires_governed_publication_before_search_and_chat() {
     let search_before_publish: Value = search!(&app, &context, &base_id, "emergency", LEARNER);
     assert_eq!(search_before_publish["results"], json!([]));
 
-    transition!(&app, &context, &item_id, "deidentify");
-    transition!(&app, &context, &item_id, "review");
-    transition!(&app, &context, &item_id, "publish");
+    transition!(&app, &context, &item_id, "deidentify", ADMIN);
+    let self_review = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/admin/knowledge-items/{item_id}/review"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(ADMIN).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_error(self_review, StatusCode::FORBIDDEN, "forbidden").await;
+    transition!(&app, &context, &item_id, "review", ADMIN2);
+    transition!(&app, &context, &item_id, "publish", ADMIN);
 
     let search_after_publish: Value = search!(&app, &context, &base_id, "emergency", LEARNER);
     let results = search_after_publish["results"]
@@ -157,7 +169,7 @@ async fn knowledge_rag_requires_governed_publication_before_search_and_chat() {
             .is_some_and(|answer| answer.contains(&item_id))
     );
 
-    transition!(&app, &context, &item_id, "withdraw");
+    transition!(&app, &context, &item_id, "withdraw", ADMIN);
     let search_after_withdrawal: Value = search!(&app, &context, &base_id, "emergency", LEARNER);
     assert_eq!(search_after_withdrawal["results"], json!([]));
 

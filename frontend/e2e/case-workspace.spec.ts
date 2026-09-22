@@ -3,6 +3,7 @@ import {
   accounts,
   createCaseFixture,
   demoPassword,
+  tokenFor,
   uniqueTestSuffix,
 } from "./support";
 
@@ -27,8 +28,15 @@ test("a case created through the live API is visible only in its member workspac
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "指挥端" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "退出登录" }).first().click();
-  await login(page, accounts.commander);
+  // Login/logout behavior is covered independently. Install a fresh command
+  // session here so this case-visibility test cannot race the previous
+  // account's asynchronous remote logout.
+  const commanderToken = await tokenFor(request, accounts.commander);
+  await page.goto("/");
+  await page.evaluate((token) => {
+    sessionStorage.clear();
+    sessionStorage.setItem("angui.session.token", token);
+  }, commanderToken);
   await page.goto("/command");
   await expect(
     page.getByRole("button", { name: fixture.displayName }),
