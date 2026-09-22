@@ -52,6 +52,8 @@ mod m0049_add_elder_profile_extended_fields;
 mod m0050_add_intake_primary_photo;
 mod m0051_add_learning_question_engine;
 mod m0052_add_knowledge_governance;
+mod m0053_unify_case_places_as_location_clues;
+mod m0054_link_archive_learning_items;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -113,6 +115,8 @@ impl MigratorTrait for Migrator {
             Box::new(m0050_add_intake_primary_photo::Migration),
             Box::new(m0051_add_learning_question_engine::Migration),
             Box::new(m0052_add_knowledge_governance::Migration),
+            Box::new(m0053_unify_case_places_as_location_clues::Migration),
+            Box::new(m0054_link_archive_learning_items::Migration),
         ]
     }
 }

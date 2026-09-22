@@ -16,6 +16,9 @@ import { useAuth } from "../auth/useAuth";
 
 const statusLabels: Record<CaseListItem["status"], string> = {
   active: "正在跟进",
+  ended: "已结束",
+  reviewing: "复盘中",
+  archived: "已归档",
   resolved: "已找到",
   closed: "已结束",
 };

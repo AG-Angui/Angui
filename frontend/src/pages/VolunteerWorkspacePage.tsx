@@ -65,6 +65,9 @@ const statusLabels: Record<TaskStatus, string> = {
 
 const caseStatusLabels: Record<string, string> = {
   active: "进行中",
+  ended: "已结束",
+  reviewing: "复盘中",
+  archived: "已归档",
   resolved: "已找到",
   closed: "已关闭",
 };

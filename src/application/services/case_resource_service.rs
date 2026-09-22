@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     fs,
     io::Cursor,
     path::{Path, PathBuf},
@@ -11,7 +12,7 @@ use futures_util::StreamExt;
 use image::ImageFormat;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait, sea_query::Expr,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -23,11 +24,14 @@ use crate::{
     },
     error::ApiError,
     models::{
-        AuthenticatedUser, CaseAttachmentResponse, CasePlaceResponse, CreateCasePlaceRequest,
-        ReviewCasePlaceRequest,
+        AuthenticatedUser, CaseAttachmentResponse, CasePlaceResponse, ClueResponse,
+        CreateCasePlaceRequest, CreateClueRequest, ReviewCasePlaceRequest, ReviewClueRequest,
     },
     roles::CaseRole,
-    services::case_service::{require_case_role, write_audit},
+    services::{
+        case_service,
+        case_service::{require_case_role, write_audit},
+    },
 };
 
 pub struct AttachmentUpload<'a> {
@@ -141,19 +145,53 @@ pub async fn create_place(
     allowed_place_types: &[String],
 ) -> Result<CasePlaceResponse, ApiError> {
     validate_place(&request, allowed_place_types)?;
-    let transaction = db.begin().await?;
     let role = require_case_role(
-        &transaction,
+        db,
         &auth.id,
         case_id,
         &[CaseRole::Family, CaseRole::Commander],
     )
     .await?;
-    ensure_case_is_open(&transaction, case_id).await?;
-    let timestamp = now();
-    let model = case_places::ActiveModel {
-        id: Set(new_id()),
-        case_id: Set(case_id.to_owned()),
+    let clue = case_service::create_clue(
+        db,
+        auth,
+        case_id,
+        CreateClueRequest {
+            source: role.to_string(),
+            content: format!("{}: {}", request.name.trim(), request.address.trim()),
+            source_type: Some("manual_report".to_owned()),
+            raw_record_reference: Some(format!(
+                "legacy-place-type:{}",
+                request.place_type.trim().to_lowercase()
+            )),
+            occurred_at: None,
+            location_text: Some(request.address.trim().to_owned()),
+            location_precision: Some(
+                if request.longitude.is_some() {
+                    "exact"
+                } else {
+                    "approximate"
+                }
+                .to_owned(),
+            ),
+            location_kind: Some("point".to_owned()),
+            longitude: request.longitude,
+            latitude: request.latitude,
+            location_radius_meters: None,
+            visibility: Some(request.visibility.as_str().to_owned()),
+            confidence: Some("unverified".to_owned()),
+            next_action: None,
+            linked_task_reference: None,
+            attachment_ids: Vec::new(),
+        },
+    )
+    .await?;
+    // Keep the legacy table populated while older clients and integrations
+    // still read it. The clue remains the canonical record for new behavior.
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    case_places::ActiveModel {
+        id: Set(clue.id.clone()),
+        case_id: Set(clue.case_id.clone()),
         name: Set(request.name.trim().to_owned()),
         place_type: Set(request.place_type.trim().to_lowercase()),
         address: Set(request.address.trim().to_owned()),
@@ -161,16 +199,14 @@ pub async fn create_place(
         latitude: Set(request.latitude),
         source: Set(role.to_string()),
         visibility: Set(request.visibility.as_str().to_owned()),
-        review_status: Set("pending_review".to_owned()),
+        review_status: Set(clue.status.clone()),
         created_by_user_id: Set(auth.id.clone()),
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp),
     }
-    .insert(&transaction)
+    .insert(db)
     .await?;
-    write_audit(&transaction, Some(case_id.to_owned()), auth, "case.place_submitted", "case_place", model.id.clone(), Some(json!({ "review_status": "pending_review", "visibility": model.visibility, "actor_case_role": role }))).await?;
-    transaction.commit().await?;
-    Ok(place_response(model, &auth.id))
+    Ok(location_clue_response(clue, "location_clue"))
 }
 
 pub async fn review_place(
@@ -193,61 +229,52 @@ pub async fn review_place(
         ));
     }
 
-    let transaction = db.begin().await?;
-    require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander]).await?;
-    ensure_case_is_open(&transaction, case_id).await?;
-    let existing = case_places::Entity::find_by_id(place_id)
-        .one(&transaction)
+    let location_clue = clues::Entity::find_by_id(place_id)
+        .one(db)
         .await?
-        .filter(|place| place.case_id == case_id)
-        .ok_or_else(|| ApiError::NotFound("case place was not found".to_owned()))?;
-    if existing.review_status != "pending_review" {
+        .filter(|clue| clue.case_id == case_id && clue.location_kind.is_some())
+        .ok_or_else(|| ApiError::NotFound("location clue was not found".to_owned()))?;
+    if location_clue.status != "pending_review" {
         return Err(ApiError::Conflict(
-            "case place has already been reviewed".to_owned(),
+            "location clue has already been reviewed".to_owned(),
         ));
     }
 
-    let updated_at = now();
-    let update = case_places::Entity::update_many()
-        .col_expr(
-            case_places::Column::ReviewStatus,
-            Expr::value(next_status.clone()),
-        )
-        .col_expr(
-            case_places::Column::UpdatedAt,
-            Expr::value(updated_at.clone()),
-        )
-        .filter(case_places::Column::Id.eq(place_id))
-        .filter(case_places::Column::CaseId.eq(case_id))
-        .filter(case_places::Column::ReviewStatus.eq("pending_review"))
-        .exec(&transaction)
-        .await?;
-    if update.rows_affected != 1 {
-        return Err(ApiError::Conflict(
-            "case place changed during review; reload and try again".to_owned(),
-        ));
+    let clue = case_service::review_clue(
+        db,
+        auth,
+        place_id,
+        ReviewClueRequest {
+            status: next_status,
+            reason: reason.to_owned(),
+            related_clue_id: None,
+            relationship_type: None,
+            next_action: None,
+            linked_task_reference: None,
+        },
+    )
+    .await?;
+    if let Some(existing) = case_places::Entity::find_by_id(place_id).one(db).await? {
+        let mut active = existing.into_active_model();
+        active.review_status = Set(clue.status.clone());
+        active.updated_at = Set(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+        active.update(db).await?;
     }
-
-    let updated = case_places::Entity::find_by_id(place_id)
-        .one(&transaction)
-        .await?
-        .ok_or(ApiError::Internal)?;
     write_audit(
-        &transaction,
+        db,
         Some(case_id.to_owned()),
         auth,
         "case.place_reviewed",
         "case_place",
         place_id.to_owned(),
         Some(json!({
-            "from": existing.review_status,
-            "to": next_status,
+            "from": "pending_review",
+            "to": clue.status,
             "reason": reason,
         })),
     )
     .await?;
-    transaction.commit().await?;
-    Ok(place_response(updated, &auth.id))
+    Ok(location_clue_response(clue, "location_clue"))
 }
 
 pub async fn store_image_attachment(
@@ -382,30 +409,68 @@ pub async fn visible_places(
     viewer_id: &str,
     role: CaseRole,
 ) -> Result<Vec<CasePlaceResponse>, ApiError> {
-    let mut query = case_places::Entity::find().filter(case_places::Column::CaseId.eq(case_id));
+    let mut query = clues::Entity::find()
+        .filter(clues::Column::CaseId.eq(case_id))
+        .filter(clues::Column::LocationKind.is_not_null());
     query = match role {
         CaseRole::Commander => query,
         CaseRole::Family => query.filter(
             Condition::any()
-                .add(case_places::Column::CreatedByUserId.eq(viewer_id))
+                .add(clues::Column::CreatedByUserId.eq(viewer_id))
                 .add(
                     Condition::all()
-                        .add(case_places::Column::ReviewStatus.eq("confirmed"))
-                        .add(case_places::Column::Visibility.ne("internal")),
+                        .add(clues::Column::Status.eq("confirmed"))
+                        .add(clues::Column::Visibility.ne("internal")),
                 ),
         ),
         CaseRole::Volunteer => query
-            .filter(case_places::Column::Visibility.is_in(["public", "confirmed"]))
-            .filter(case_places::Column::ReviewStatus.eq("confirmed")),
+            .filter(clues::Column::Visibility.is_in(["public", "confirmed"]))
+            .filter(clues::Column::Status.eq("confirmed")),
     };
     let records = query
-        .order_by_desc(case_places::Column::CreatedAt)
+        .order_by_desc(clues::Column::CreatedAt)
         .all(db)
         .await?;
-    Ok(records
-        .into_iter()
-        .map(|place| place_response(place, viewer_id))
-        .collect())
+    let legacy_records = case_places::Entity::find()
+        .filter(case_places::Column::CaseId.eq(case_id))
+        .all(db)
+        .await?;
+    let legacy_by_id: HashMap<_, _> = legacy_records
+        .iter()
+        .map(|place| (place.id.as_str(), place))
+        .collect();
+    let clue_ids: HashSet<_> = records.iter().map(|clue| clue.id.clone()).collect();
+    let mut responses = Vec::with_capacity(records.len() + legacy_records.len());
+    for clue in records {
+        let clue_id = clue.id.clone();
+        let mut response = location_clue_model_response(clue, viewer_id);
+        if let Some(legacy) = legacy_by_id.get(clue_id.as_str()) {
+            response.review_status = legacy.review_status.clone();
+            response.visibility = legacy.visibility.clone();
+            response.updated_at = legacy.updated_at.clone();
+        }
+        responses.push(response);
+    }
+    for legacy in &legacy_records {
+        if clue_ids.contains(&legacy.id) {
+            continue;
+        }
+        let visible = match role {
+            CaseRole::Commander => true,
+            CaseRole::Family => {
+                legacy.created_by_user_id == viewer_id
+                    || (legacy.review_status == "confirmed" && legacy.visibility != "internal")
+            }
+            CaseRole::Volunteer => {
+                legacy.review_status == "confirmed"
+                    && matches!(legacy.visibility.as_str(), "public" | "confirmed")
+            }
+        };
+        if visible {
+            responses.push(legacy_place_response(legacy));
+        }
+    }
+    Ok(responses)
 }
 
 pub async fn visible_attachments(
@@ -733,7 +798,10 @@ async fn ensure_case_is_open<C: sea_orm::ConnectionTrait>(
         .one(db)
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
-    if case_model.status == "closed" {
+    if matches!(
+        case_model.status.as_str(),
+        "ended" | "reviewing" | "archived" | "resolved" | "closed"
+    ) {
         return Err(ApiError::Conflict(
             "new supplementary information cannot be added to a closed case".to_owned(),
         ));
@@ -741,22 +809,77 @@ async fn ensure_case_is_open<C: sea_orm::ConnectionTrait>(
     Ok(())
 }
 
-fn place_response(model: case_places::Model, viewer_id: &str) -> CasePlaceResponse {
+fn location_clue_response(clue: ClueResponse, place_type: &str) -> CasePlaceResponse {
+    let (name, address) = split_location_content(&clue.content, clue.location_text.as_deref());
+    CasePlaceResponse {
+        id: clue.id,
+        case_id: clue.case_id,
+        name,
+        place_type: place_type.to_owned(),
+        address,
+        longitude: clue.longitude,
+        latitude: clue.latitude,
+        source: clue.source,
+        visibility: clue.visibility.unwrap_or_else(|| "confirmed".to_owned()),
+        review_status: clue.status,
+        created_at: clue.created_at,
+        updated_at: clue.updated_at,
+        is_own_submission: clue.is_own_submission,
+    }
+}
+
+fn location_clue_model_response(model: clues::Model, viewer_id: &str) -> CasePlaceResponse {
+    let (name, address) = split_location_content(&model.content, model.location_text.as_deref());
+    let place_type = model
+        .raw_record_reference
+        .as_deref()
+        .and_then(|value| value.strip_prefix("legacy-place-type:"))
+        .unwrap_or("location_clue");
     CasePlaceResponse {
         id: model.id,
         case_id: model.case_id,
-        name: model.name,
-        place_type: model.place_type,
-        address: model.address,
+        name,
+        place_type: place_type.to_owned(),
+        address,
         longitude: model.longitude,
         latitude: model.latitude,
         source: model.source,
-        visibility: model.visibility,
-        review_status: model.review_status,
+        visibility: model.visibility.unwrap_or_else(|| "confirmed".to_owned()),
+        review_status: model.status,
         created_at: model.created_at,
         updated_at: model.updated_at,
-        is_own_submission: model.created_by_user_id == viewer_id,
+        is_own_submission: model.created_by_user_id.as_deref() == Some(viewer_id),
     }
+}
+
+fn legacy_place_response(model: &case_places::Model) -> CasePlaceResponse {
+    CasePlaceResponse {
+        id: model.id.clone(),
+        case_id: model.case_id.clone(),
+        name: model.name.clone(),
+        place_type: model.place_type.clone(),
+        address: model.address.clone(),
+        longitude: model.longitude,
+        latitude: model.latitude,
+        source: model.source.clone(),
+        visibility: model.visibility.clone(),
+        review_status: model.review_status.clone(),
+        created_at: model.created_at.clone(),
+        updated_at: model.updated_at.clone(),
+        is_own_submission: false,
+    }
+}
+
+fn split_location_content(content: &str, location_text: Option<&str>) -> (String, String) {
+    content
+        .split_once(": ")
+        .map(|(name, address)| (name.to_owned(), address.to_owned()))
+        .unwrap_or_else(|| {
+            (
+                "地点线索".to_owned(),
+                location_text.unwrap_or(content).to_owned(),
+            )
+        })
 }
 fn attachment_response(model: case_attachments::Model, viewer_id: &str) -> CaseAttachmentResponse {
     CaseAttachmentResponse {

@@ -131,6 +131,9 @@ const workspaceCopy: Record<WorkspaceMode, { context: string; title: string }> =
 
 const statusLabels: Record<string, string> = {
   active: "进行中",
+  ended: "已结束",
+  reviewing: "复盘中",
+  archived: "已归档",
   resolved: "已找到",
   closed: "已关闭",
   pending_review: "待审核",
@@ -559,6 +562,7 @@ function CaseDetailView({
   >({});
   const [attachment, setAttachment] = useState<File | null>(null);
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status);
+  const [statusReason, setStatusReason] = useState("");
   const [memberEmail, setMemberEmail] = useState("");
   const [memberRole, setMemberRole] = useState<CaseRole>("volunteer");
   const [busy, setBusy] = useState("");
@@ -575,10 +579,14 @@ function CaseDetailView({
   const placeTypes = resourceConfiguration.case_place_types;
   const statusOptions: CaseStatus[] =
     detail.status === "active"
-      ? ["active", "resolved", "closed"]
-      : detail.status === "resolved"
-        ? ["resolved", "active", "closed"]
-        : ["closed"];
+      ? ["active", "ended"]
+      : detail.status === "ended"
+        ? ["ended", "reviewing", "archived", "active"]
+        : detail.status === "reviewing"
+          ? ["reviewing", "archived", "active"]
+          : detail.status === "archived"
+            ? ["archived", "active"]
+            : [detail.status];
 
   const loadClueQueue = useCallback(async () => {
     const requestVersion = queueRequestVersion.current + 1;
@@ -846,7 +854,7 @@ function CaseDetailView({
                   if (!token) return;
                   void run(
                     "status",
-                    () => updateCaseStatus(token, detail.id, nextStatus),
+                    () => updateCaseStatus(token, detail.id, nextStatus, statusReason),
                     "案件状态已更新",
                   );
                 }}
@@ -865,7 +873,11 @@ function CaseDetailView({
                     onChange={(event) =>
                       setNextStatus(event.target.value as CaseStatus)
                     }
-                    disabled={detail.status === "closed"}
+                    disabled={
+                      detail.status === "archived" ||
+                      detail.status === "resolved" ||
+                      detail.status === "closed"
+                    }
                   >
                     {statusOptions.map((status) => (
                       <option key={status} value={status}>
@@ -873,12 +885,22 @@ function CaseDetailView({
                       </option>
                     ))}
                   </select>
+                  {nextStatus === "active" && detail.status !== "active" && (
+                    <Input
+                      aria-label="重开理由"
+                      value={statusReason}
+                      maxLength={1000}
+                      placeholder="重开理由（必填）"
+                      onChange={(event) => setStatusReason(event.target.value)}
+                    />
+                  )}
                   <Button
                     type="submit"
                     size="sm"
                     variant="secondary"
                     isDisabled={
-                      busy === "status" || nextStatus === detail.status
+                      busy === "status" || nextStatus === detail.status ||
+                      (nextStatus === "active" && detail.status !== "active" && !statusReason.trim())
                     }
                   >
                     保存

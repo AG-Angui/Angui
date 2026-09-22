@@ -1203,6 +1203,9 @@ impl IntakePhaseProgress {
 #[serde(deny_unknown_fields)]
 pub struct UpdateCaseStatusRequest {
     pub status: String,
+    /// Required when a commander re-opens a case after it has ended.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1241,6 +1244,18 @@ pub struct CreateClueRequest {
     pub location_text: Option<String>,
     #[serde(default)]
     pub location_precision: Option<String>,
+    #[serde(default)]
+    pub location_kind: Option<String>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub location_radius_meters: Option<f64>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<String>,
     #[serde(default)]
     pub next_action: Option<String>,
     #[serde(default)]
@@ -1484,6 +1499,13 @@ pub struct ClueResponse {
     pub confirmed_at: Option<String>,
     pub location_text: Option<String>,
     pub location_precision: Option<String>,
+    pub location_kind: Option<String>,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub location_radius_meters: Option<f64>,
+    pub visibility: Option<String>,
+    pub confidence: Option<String>,
+    pub legacy_case_place_id: Option<String>,
     pub next_action: Option<String>,
     pub linked_task_reference: Option<String>,
     pub related_clue_id: Option<String>,
@@ -1869,6 +1891,7 @@ pub struct ArchiveDraftResponse {
     pub version: i32,
     pub usage_scope: String,
     pub retention_status: String,
+    pub knowledge_item_id: Option<String>,
     pub deidentified_at: Option<String>,
     pub reviewed_at: Option<String>,
     pub created_at: String,
@@ -2056,6 +2079,13 @@ impl ClueResponse {
             confirmed_at: model.confirmed_at,
             location_text: model.location_text,
             location_precision: model.location_precision,
+            location_kind: model.location_kind,
+            longitude: model.longitude,
+            latitude: model.latitude,
+            location_radius_meters: model.location_radius_meters,
+            visibility: model.visibility,
+            confidence: model.confidence,
+            legacy_case_place_id: model.legacy_case_place_id,
             next_action: model.next_action,
             linked_task_reference: model.linked_task_reference,
             related_clue_id: model.related_clue_id,

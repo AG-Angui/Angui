@@ -358,34 +358,47 @@ async fn get_map_view(
             updated_at: detail.updated_at.clone(),
         });
     }
-    items.extend(detail.places.into_iter().map(|place| {
-        CaseMapItem {
-            id: place.id,
-            object_type: "place".to_owned(),
-            display_name: Some(place.name),
-            longitude: place.longitude,
-            latitude: place.latitude,
-            location_text: Some(place.address),
-            location_precision: if place.longitude.is_some() {
-                "exact"
-            } else {
-                "unknown"
-            }
-            .to_owned(),
-            source: place.source,
-            occurred_at: None,
-            reported_at: Some(place.created_at),
-            review_status: place.review_status,
-            related_task_id: None,
-            updated_at: place.updated_at,
-        }
-    }));
+    // Locations are clues now.  Keeping this projection here (rather than
+    // reading `case_places`) ensures every map uses the same review and
+    // visibility decision as the clue timeline.
+    items.extend(
+        detail
+            .clues
+            .iter()
+            .filter(|clue| {
+                clue.location_kind.is_some()
+                    && clue.location_text.is_some()
+                    && (detail.access_role == CaseRole::Commander || clue.status == "confirmed")
+            })
+            .map(|clue| CaseMapItem {
+                id: clue.id.clone(),
+                object_type: "location_clue".to_owned(),
+                display_name: Some(clue.content.clone()),
+                longitude: clue.longitude,
+                latitude: clue.latitude,
+                location_text: clue.location_text.clone(),
+                location_precision: clue
+                    .location_precision
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                source: clue.source_type.clone(),
+                occurred_at: clue.occurred_at.clone(),
+                reported_at: Some(clue.reported_at.clone()),
+                review_status: clue.status.clone(),
+                related_task_id: None,
+                updated_at: clue.updated_at.clone(),
+            }),
+    );
     if detail.access_role == CaseRole::Commander {
         items.extend(
             detail
                 .clues
                 .into_iter()
-                .filter(|clue| clue.status == "confirmed" && clue.location_text.is_some())
+                .filter(|clue| {
+                    clue.location_kind.is_none()
+                        && clue.status == "confirmed"
+                        && clue.location_text.is_some()
+                })
                 .map(|clue| CaseMapItem {
                     id: clue.id,
                     object_type: "clue".to_owned(),

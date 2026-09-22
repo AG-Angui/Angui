@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        collaboration_spaces, event_outbox, space_events, space_location_consents,
+        cases, collaboration_spaces, event_outbox, space_events, space_location_consents,
         space_location_samples, space_member_slots, space_members, space_messages, users,
         voice_reports, voice_transcripts,
     },
@@ -44,6 +44,7 @@ pub async fn create_space(
     let name = validated_name(request.name)?;
     let transaction = db.begin().await?;
     require_case_role(&transaction, &auth.id, case_id, &[CaseRole::Commander]).await?;
+    ensure_case_is_active(&transaction, case_id).await?;
     if collaboration_spaces::Entity::find()
         .filter(collaboration_spaces::Column::CaseId.eq(case_id))
         .filter(collaboration_spaces::Column::Status.eq("active"))
@@ -857,11 +858,29 @@ async fn active_space<C: sea_orm::ConnectionTrait>(
     db: &C,
     space_id: &str,
 ) -> Result<collaboration_spaces::Model, ApiError> {
-    collaboration_spaces::Entity::find_by_id(space_id)
+    let space = collaboration_spaces::Entity::find_by_id(space_id)
         .filter(collaboration_spaces::Column::Status.eq("active"))
         .one(db)
         .await?
-        .ok_or_else(|| ApiError::NotFound("active collaboration space was not found".to_owned()))
+        .ok_or_else(|| ApiError::NotFound("active collaboration space was not found".to_owned()))?;
+    ensure_case_is_active(db, &space.case_id).await?;
+    Ok(space)
+}
+
+async fn ensure_case_is_active<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    case_id: &str,
+) -> Result<(), ApiError> {
+    let case_model = cases::Entity::find_by_id(case_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case_model.status != "active" {
+        return Err(ApiError::Conflict(
+            "real-time collaboration is unavailable after a case has ended".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 async fn active_member<C: sea_orm::ConnectionTrait>(

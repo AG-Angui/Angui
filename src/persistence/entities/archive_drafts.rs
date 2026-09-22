@@ -23,6 +23,7 @@ pub struct Model {
     pub version: i32,
     pub usage_scope: String,
     pub retention_status: String,
+    pub knowledge_item_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

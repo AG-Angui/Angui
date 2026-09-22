@@ -7,14 +7,15 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::{
     ai_gateway::{AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel},
     amap_service::{Coordinate, PoiSearch, RouteEstimate, RouteMode},
     entities::{
         archive_drafts, archive_review_materials, case_places, case_source_records, cases,
-        clue_drafts, clues, summary_drafts, tasks,
+        clue_drafts, clues, knowledge_bases, knowledge_content_review_events, knowledge_items,
+        summary_drafts, tasks,
     },
     error::ApiError,
     models::{
@@ -147,7 +148,10 @@ pub async fn create_archive_draft(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
-    if !matches!(case.status.as_str(), "resolved" | "closed") {
+    if !matches!(
+        case.status.as_str(),
+        "ended" | "reviewing" | "archived" | "resolved" | "closed"
+    ) {
         return Err(ApiError::Conflict(
             "archive drafts can only be created for resolved or closed cases".to_owned(),
         ));
@@ -235,6 +239,7 @@ pub async fn create_archive_draft(
         version: Set(1),
         usage_scope: Set("internal_archive".to_owned()),
         retention_status: Set("retained".to_owned()),
+        knowledge_item_id: Set(None),
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp),
     }
@@ -493,6 +498,11 @@ pub async fn review_archive_draft(
             "archive draft must have confirmed de-identification before publication".to_owned(),
         ));
     }
+    if action == "publish" && existing.knowledge_item_id.is_some() {
+        return Err(ApiError::Conflict(
+            "archive draft is already linked to a learning material".to_owned(),
+        ));
+    }
     let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let timestamp = now();
     let next_status = match action.as_str() {
@@ -511,6 +521,95 @@ pub async fn review_archive_draft(
     } else {
         "retained"
     };
+    let mut knowledge_item_id = existing.knowledge_item_id.clone();
+    if action == "publish" {
+        let learning_base = knowledge_bases::Entity::find_by_id("learning-materials")
+            .one(&transaction)
+            .await?
+            .ok_or_else(|| {
+                ApiError::Conflict("learning materials knowledge base is unavailable".to_owned())
+            })?;
+        if learning_base.status != "enabled" || learning_base.visibility != "learner" {
+            return Err(ApiError::Conflict(
+                "learning materials knowledge base is not enabled for learners".to_owned(),
+            ));
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(existing.content.as_bytes());
+        let content_hash = format!("archive-{}-{:x}", draft_id, hasher.finalize());
+        let item = knowledge_items::ActiveModel {
+            id: Set(case_service::new_id()),
+            knowledge_base_id: Set("learning-materials".to_owned()),
+            title: Set("已脱敏案件复盘学习材料".to_owned()),
+            summary: Set("经过人工脱敏和审核的案件复盘材料".to_owned()),
+            content: Set(existing.content.clone()),
+            category: Set("case_study".to_owned()),
+            category_id: Set(None),
+            keywords_json: Set("[]".to_owned()),
+            metadata_json: Set(json!({ "archive_draft_id": draft_id }).to_string()),
+            source_name: Set("人工审核案件归档".to_owned()),
+            source_url: Set(None),
+            visibility: Set("learner".to_owned()),
+            status: Set("published".to_owned()),
+            effective_at: Set(timestamp.clone()),
+            withdrawn_at: Set(None),
+            previous_version_id: Set(None),
+            version: Set(1),
+            content_hash: Set(content_hash),
+            embedding_json: Set(None),
+            embedding_model: Set(None),
+            embedding_dimension: Set(None),
+            embedding_status: Set("none".to_owned()),
+            embedding_generated_at: Set(None),
+            embedding_content_hash: Set(None),
+            created_by_user_id: Set(auth.id.clone()),
+            created_at: Set(timestamp.clone()),
+            updated_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+        for event_type in ["deidentified", "reviewed", "published"] {
+            knowledge_content_review_events::ActiveModel {
+                id: Set(case_service::new_id()),
+                knowledge_item_id: Set(item.id.clone()),
+                content_version: Set(item.version),
+                event_type: Set(event_type.to_owned()),
+                actor_user_id: Set(auth.id.clone()),
+                reason: Set(reason.clone()),
+                created_at: Set(timestamp.clone()),
+            }
+            .insert(&transaction)
+            .await?;
+        }
+        knowledge_item_id = Some(item.id);
+    } else if action == "withdraw" {
+        if let Some(item_id) = existing.knowledge_item_id.as_deref() {
+            knowledge_items::Entity::update_many()
+                .col_expr(knowledge_items::Column::Status, Expr::value("withdrawn"))
+                .col_expr(
+                    knowledge_items::Column::WithdrawnAt,
+                    Expr::value(Some(timestamp.clone())),
+                )
+                .col_expr(
+                    knowledge_items::Column::UpdatedAt,
+                    Expr::value(timestamp.clone()),
+                )
+                .filter(knowledge_items::Column::Id.eq(item_id))
+                .exec(&transaction)
+                .await?;
+            knowledge_content_review_events::ActiveModel {
+                id: Set(case_service::new_id()),
+                knowledge_item_id: Set(item_id.to_owned()),
+                content_version: Set(1),
+                event_type: Set("withdrawn".to_owned()),
+                actor_user_id: Set(auth.id.clone()),
+                reason: Set(reason.clone()),
+                created_at: Set(timestamp.clone()),
+            }
+            .insert(&transaction)
+            .await?;
+        }
+    }
     let update = archive_drafts::Entity::update_many()
         .col_expr(archive_drafts::Column::Status, Expr::value(next_status))
         .col_expr(
@@ -534,6 +633,10 @@ pub async fn review_archive_draft(
             Expr::value(next_retention_status),
         )
         .col_expr(archive_drafts::Column::Version, Expr::value(next_version))
+        .col_expr(
+            archive_drafts::Column::KnowledgeItemId,
+            Expr::value(knowledge_item_id),
+        )
         .col_expr(archive_drafts::Column::UpdatedAt, Expr::value(timestamp))
         .filter(archive_drafts::Column::Id.eq(draft_id))
         .filter(archive_drafts::Column::Version.eq(existing.version))
@@ -1572,15 +1675,36 @@ async fn authorized_center(
             latitude: task.latitude.ok_or(ApiError::Internal)?,
         });
     }
-    let mut places = case_places::Entity::find()
+    let mut location_clues = clues::Entity::find()
+        .filter(clues::Column::CaseId.eq(case_id))
+        .filter(clues::Column::Status.eq("confirmed"))
+        .filter(clues::Column::LocationKind.is_not_null())
+        .filter(clues::Column::Longitude.is_not_null())
+        .filter(clues::Column::Latitude.is_not_null());
+    if role == CaseRole::Volunteer {
+        location_clues =
+            location_clues.filter(clues::Column::Visibility.is_in(["public", "confirmed"]));
+    }
+    if let Some(clue) = location_clues
+        .order_by_desc(clues::Column::UpdatedAt)
+        .one(db)
+        .await?
+    {
+        return Ok(Coordinate {
+            longitude: clue.longitude.ok_or(ApiError::Internal)?,
+            latitude: clue.latitude.ok_or(ApiError::Internal)?,
+        });
+    }
+    let mut legacy_places = case_places::Entity::find()
         .filter(case_places::Column::CaseId.eq(case_id))
         .filter(case_places::Column::ReviewStatus.eq("confirmed"))
         .filter(case_places::Column::Longitude.is_not_null())
         .filter(case_places::Column::Latitude.is_not_null());
     if role == CaseRole::Volunteer {
-        places = places.filter(case_places::Column::Visibility.is_in(["public", "confirmed"]));
+        legacy_places =
+            legacy_places.filter(case_places::Column::Visibility.is_in(["public", "confirmed"]));
     }
-    if let Some(place) = places
+    if let Some(place) = legacy_places
         .order_by_desc(case_places::Column::UpdatedAt)
         .one(db)
         .await?
@@ -1955,6 +2079,7 @@ fn archive_draft_response(model: archive_drafts::Model) -> Result<ArchiveDraftRe
         version: model.version,
         usage_scope: model.usage_scope,
         retention_status: model.retention_status,
+        knowledge_item_id: model.knowledge_item_id,
         deidentified_at: model.deidentified_at,
         reviewed_at: model.reviewed_at,
         created_at: model.created_at,
@@ -2144,6 +2269,12 @@ pub async fn review_clue_draft(
                     .location_text
                     .as_ref()
                     .map(|_| "approximate".to_owned()),
+                location_kind: None,
+                longitude: None,
+                latitude: None,
+                location_radius_meters: None,
+                visibility: None,
+                confidence: None,
                 next_action: candidate.action_candidates.first().cloned(),
                 linked_task_reference: None,
                 attachment_ids: Vec::new(),
