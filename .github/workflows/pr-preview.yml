@@ -172,9 +172,13 @@ jobs:
           | --- | --- |
           | Family | \`family@demo.invalid\` |
           | Commander | \`commander@demo.invalid\` |
+          | Commander 2 | \`commander2@demo.invalid\` |
           | Volunteer | \`volunteer@demo.invalid\` |
+          | Volunteer 2 | \`volunteer2@demo.invalid\` |
+          | Volunteer 3 | \`volunteer3@demo.invalid\` |
           | Learner | \`learner@demo.invalid\` |
           | Administrator | \`admin@demo.invalid\` |
+          | Administrator 2 | \`admin2@demo.invalid\` |
 
           > These accounts and all preview data belong only to this deployment. The next preview deployment resets the SQLite database and invalidates these credentials.
           EOF

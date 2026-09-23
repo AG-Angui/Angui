@@ -8,7 +8,7 @@ import {
 import type { AccountType, GlobalCapability } from "./auth";
 
 export type CaseRole = "family" | "commander" | "volunteer";
-export type CaseStatus = "active" | "resolved" | "closed";
+export type CaseStatus = "active" | "ended" | "reviewing" | "archived" | "resolved" | "closed";
 export type ClueReviewStatus =
   | "needs_verification"
   | "confirmed"
@@ -71,6 +71,13 @@ export interface Clue {
   confirmed_at: string | null;
   location_text: string | null;
   location_precision: LocationPrecision | null;
+  location_kind?: "point" | "area" | null;
+  longitude?: number | null;
+  latitude?: number | null;
+  location_radius_meters?: number | null;
+  visibility?: "public" | "confirmed" | "internal" | null;
+  confidence?: string | null;
+  legacy_case_place_id?: string | null;
   next_action: string | null;
   linked_task_reference: string | null;
   related_clue_id: string | null;
@@ -210,6 +217,12 @@ export interface CreateCluePayload {
   source_type?: PublicClueSourceType;
   raw_record_reference?: string | null;
   location_precision?: LocationPrecision | null;
+  location_kind?: "point" | "area" | null;
+  longitude?: number | null;
+  latitude?: number | null;
+  location_radius_meters?: number | null;
+  visibility?: "public" | "confirmed" | "internal" | null;
+  confidence?: string | null;
   next_action?: string | null;
   linked_task_reference?: string | null;
   attachment_ids?: string[];
@@ -1091,11 +1104,21 @@ export function createCasePlace(
   caseId: string,
   payload: CreateCasePlacePayload,
 ): Promise<CasePlace> {
-  return apiRequest<CasePlace>(
-    `/cases/${caseId}/places`,
-    { method: "POST", body: JSON.stringify(payload) },
-    token,
-  );
+  return createClue(token, caseId, {
+    source: "location submission",
+    content: `${payload.name.trim()}: ${payload.address.trim()}`,
+    source_type: "manual_report",
+    raw_record_reference: `location-type:${payload.place_type}`,
+    occurred_at: null,
+    location_text: payload.address,
+    location_precision:
+      payload.longitude === null ? "approximate" : "exact",
+    location_kind: "point",
+    longitude: payload.longitude,
+    latitude: payload.latitude,
+    visibility: payload.visibility,
+    confidence: "unverified",
+  }).then(locationClueAsPlace);
 }
 
 export function reviewCasePlace(
@@ -1104,11 +1127,35 @@ export function reviewCasePlace(
   placeId: string,
   payload: ReviewCasePlacePayload,
 ): Promise<CasePlace> {
-  return apiRequest<CasePlace>(
-    `/cases/${caseId}/places/${placeId}/review`,
-    { method: "PATCH", body: JSON.stringify(payload) },
-    token,
-  );
+  // Kept in the signature for source compatibility; clue IDs are globally
+  // scoped so the unified review endpoint does not need the case path.
+  void caseId;
+  return reviewClue(token, placeId, payload).then(locationClueAsPlace);
+}
+
+/** Temporary UI adapter while legacy place read models are retired. */
+function locationClueAsPlace(clue: Clue): CasePlace {
+  const separator = clue.content.indexOf(": ");
+  const name = separator >= 0 ? clue.content.slice(0, separator) : "地点线索";
+  const address =
+    clue.location_text ??
+    (separator >= 0 ? clue.content.slice(separator + 2) : clue.content);
+  return {
+    id: clue.id,
+    case_id: clue.case_id,
+    name,
+    place_type:
+      clue.raw_record_reference?.replace(/^location-type:/, "") ?? "location_clue",
+    address,
+    longitude: clue.longitude ?? null,
+    latitude: clue.latitude ?? null,
+    source: "family",
+    visibility: clue.visibility ?? "confirmed",
+    review_status: clue.status as CasePlace["review_status"],
+    created_at: clue.created_at,
+    updated_at: clue.updated_at,
+    is_own_submission: clue.is_own_submission,
+  };
 }
 
 export function uploadCaseAttachment(
@@ -1169,10 +1216,11 @@ export function updateCaseStatus(
   token: string,
   caseId: string,
   status: CaseStatus,
+  reason?: string,
 ): Promise<CaseDetail> {
   return apiRequest<CaseDetail>(
     `/cases/${caseId}/status`,
-    { method: "PATCH", body: JSON.stringify({ status }) },
+    { method: "PATCH", body: JSON.stringify({ status, reason }) },
     token,
   );
 }

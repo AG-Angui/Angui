@@ -84,7 +84,10 @@ pub async fn create_task(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
-    if case.status == "closed" {
+    if matches!(
+        case.status.as_str(),
+        "ended" | "reviewing" | "archived" | "resolved" | "closed"
+    ) {
         return Err(ApiError::Conflict(
             "tasks cannot be created for a closed case".to_owned(),
         ));
@@ -961,6 +964,14 @@ pub async fn submit_task_feedback(
         confirmed_at: Set(None),
         location_text: Set(request.location_text),
         location_precision: Set(request.location_precision),
+        location_kind: Set(None),
+        longitude: Set(None),
+        latitude: Set(None),
+        location_radius_meters: Set(None),
+        visibility: Set(None),
+        confidence: Set(None),
+        created_by_user_id: Set(Some(auth.id.clone())),
+        legacy_case_place_id: Set(None),
         next_action: Set(None),
         linked_task_reference: Set(Some(task.id.clone())),
         related_clue_id: Set(None),

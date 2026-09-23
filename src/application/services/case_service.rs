@@ -24,7 +24,14 @@ use crate::{
     roles::{AccountType, CaseRole, GlobalCapability},
 };
 
-const CASE_STATUSES: &[&str] = &["active", "resolved", "closed"];
+const CASE_STATUSES: &[&str] = &[
+    "active",
+    "ended",
+    "reviewing",
+    "archived",
+    "resolved",
+    "closed",
+];
 const CLUE_REVIEW_STATUSES: &[&str] = &[
     "needs_verification",
     "confirmed",
@@ -283,6 +290,22 @@ pub async fn update_case_status(
         )));
     }
 
+    let reopening = next_status == "active"
+        && matches!(
+            case_model.status.as_str(),
+            "ended" | "reviewing" | "archived" | "resolved" | "closed"
+        );
+    let reason = trim_optional(request.reason);
+    if reopening
+        && reason
+            .as_deref()
+            .is_none_or(|value| value.chars().count() > 1_000)
+    {
+        return Err(ApiError::Validation(
+            "a re-open reason between 1 and 1000 characters is required".to_owned(),
+        ));
+    }
+
     let previous_status = case_model.status.clone();
     let mut active = case_model.into_active_model();
     active.status = Set(next_status.clone());
@@ -296,7 +319,11 @@ pub async fn update_case_status(
         "case.status_changed",
         "case",
         case_id.to_owned(),
-        Some(json!({ "from": previous_status, "to": next_status })),
+        Some(json!({
+            "from": previous_status,
+            "to": next_status,
+            "reopen_reason_length": reason.as_ref().map(|value| value.chars().count()),
+        })),
     )
     .await?;
 
@@ -538,6 +565,16 @@ pub(crate) async fn create_clue_in_transaction<C: ConnectionTrait>(
         confirmed_at: Set(None),
         location_text: Set(trim_optional(request.location_text)),
         location_precision: Set(location_precision),
+        location_kind: Set(request
+            .location_kind
+            .map(|value| value.trim().to_lowercase())),
+        longitude: Set(request.longitude),
+        latitude: Set(request.latitude),
+        location_radius_meters: Set(request.location_radius_meters),
+        visibility: Set(request.visibility.map(|value| value.trim().to_lowercase())),
+        confidence: Set(request.confidence.map(|value| value.trim().to_lowercase())),
+        created_by_user_id: Set(Some(auth.id.clone())),
+        legacy_case_place_id: Set(None),
         next_action: Set(trim_optional(request.next_action)),
         linked_task_reference: Set(trim_optional(request.linked_task_reference)),
         related_clue_id: Set(None),
@@ -1466,6 +1503,64 @@ fn validate_clue_request(request: &CreateClueRequest) -> Result<(), ApiError> {
             "location_precision requires location_text".to_owned(),
         ));
     }
+    let location_kind = request
+        .location_kind
+        .as_deref()
+        .map(|value| value.trim().to_lowercase());
+    if let Some(kind) = location_kind.as_deref()
+        && !matches!(kind, "point" | "area")
+    {
+        return Err(ApiError::Validation(
+            "location_kind must be point or area".to_owned(),
+        ));
+    }
+    if request.longitude.is_some() != request.latitude.is_some() {
+        return Err(ApiError::Validation(
+            "longitude and latitude must be supplied together".to_owned(),
+        ));
+    }
+    if let Some(longitude) = request.longitude
+        && !(-180.0..=180.0).contains(&longitude)
+    {
+        return Err(ApiError::Validation("longitude is out of range".to_owned()));
+    }
+    if let Some(latitude) = request.latitude
+        && !(-90.0..=90.0).contains(&latitude)
+    {
+        return Err(ApiError::Validation("latitude is out of range".to_owned()));
+    }
+    if request.location_radius_meters.is_some() && location_kind.as_deref() != Some("area") {
+        return Err(ApiError::Validation(
+            "location_radius_meters is only valid for an area".to_owned(),
+        ));
+    }
+    if let Some(radius) = request.location_radius_meters
+        && (!radius.is_finite() || radius <= 0.0)
+    {
+        return Err(ApiError::Validation(
+            "location_radius_meters must be greater than zero".to_owned(),
+        ));
+    }
+    if let Some(visibility) = request.visibility.as_deref()
+        && !matches!(
+            visibility.trim().to_lowercase().as_str(),
+            "public" | "confirmed" | "internal"
+        )
+    {
+        return Err(ApiError::Validation(
+            "visibility must be public, confirmed, or internal".to_owned(),
+        ));
+    }
+    if let Some(confidence) = request.confidence.as_deref()
+        && !matches!(
+            confidence.trim().to_lowercase().as_str(),
+            "high" | "medium" | "low" | "unverified"
+        )
+    {
+        return Err(ApiError::Validation(
+            "confidence must be high, medium, low, or unverified".to_owned(),
+        ));
+    }
     if request.attachment_ids.len() > 10 {
         return Err(ApiError::Validation(
             "attachment_ids cannot contain more than 10 items".to_owned(),
@@ -1541,10 +1636,14 @@ fn case_transition_allowed(current: &str, next: &str) -> bool {
     current == next
         || matches!(
             (current, next),
-            ("active", "resolved")
-                | ("active", "closed")
+            ("active", "ended" | "resolved" | "closed")
+                | ("ended", "reviewing" | "active" | "archived")
+                | ("reviewing", "archived" | "active")
+                | ("archived", "active")
                 | ("resolved", "active")
                 | ("resolved", "closed")
+                | ("closed", "active")
+                | ("closed", "reviewing")
         )
 }
 
@@ -1683,6 +1782,12 @@ mod tests {
                 occurred_at: Some("2026-07-13T09:10:00Z".to_owned()),
                 location_text: Some("模拟公园北门".to_owned()),
                 location_precision: None,
+                location_kind: None,
+                longitude: None,
+                latitude: None,
+                location_radius_meters: None,
+                visibility: None,
+                confidence: None,
                 next_action: None,
                 linked_task_reference: None,
                 attachment_ids: Vec::new(),
@@ -1738,6 +1843,7 @@ mod tests {
             &case.id,
             UpdateCaseStatusRequest {
                 status: "resolved".to_owned(),
+                reason: None,
             },
         )
         .await

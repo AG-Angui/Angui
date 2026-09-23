@@ -149,6 +149,7 @@ impl TestContext {
             case_id,
             UpdateCaseStatusRequest {
                 status: "closed".to_owned(),
+                reason: None,
             },
         )
         .await
@@ -196,6 +197,12 @@ pub fn create_clue_request() -> CreateClueRequest {
         occurred_at: Some("2026-07-13T09:10:00Z".to_owned()),
         location_text: Some("测试公园北门".to_owned()),
         location_precision: None,
+        location_kind: None,
+        longitude: None,
+        latitude: None,
+        location_radius_meters: None,
+        visibility: None,
+        confidence: None,
         next_action: None,
         linked_task_reference: None,
         attachment_ids: Vec::new(),

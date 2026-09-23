@@ -247,7 +247,7 @@ jobs:
           {
             echo "Tag preview deployed at ${PREVIEW_URL}"
             echo
-            echo "Temporary password for family@demo.invalid, commander@demo.invalid, volunteer@demo.invalid, learner@demo.invalid, and admin@demo.invalid: \`${PREVIEW_PASSWORD}\`"
+            echo "Temporary password for family@demo.invalid, commander@demo.invalid, commander2@demo.invalid, volunteer@demo.invalid, volunteer2@demo.invalid, volunteer3@demo.invalid, learner@demo.invalid, admin@demo.invalid, and admin2@demo.invalid: \`${PREVIEW_PASSWORD}\`"
             echo
             echo "The next deployment resets this preview's SQLite database and invalidates these credentials."
           } >> "${GITHUB_STEP_SUMMARY}"
