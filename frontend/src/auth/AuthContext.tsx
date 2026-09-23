@@ -80,13 +80,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       logout: async () => {
         if (!token) return;
+        const sessionToken = token;
         setIsLoggingOut(true);
+        // A local logout must never be held hostage by a slow or unavailable
+        // revocation endpoint. Capture the token first so the server request
+        // can still complete after the UI has returned to the login screen.
+        clearSession();
         try {
-          await requestLogout(token);
+          await requestLogout(sessionToken);
         } catch {
           // Remote revocation is best effort; always complete the local safety exit.
         } finally {
-          clearSession();
           setIsLoggingOut(false);
         }
       },

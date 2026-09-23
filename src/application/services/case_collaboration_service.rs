@@ -582,33 +582,33 @@ pub async fn review_archive_draft(
             .await?;
         }
         knowledge_item_id = Some(item.id);
-    } else if action == "withdraw" {
-        if let Some(item_id) = existing.knowledge_item_id.as_deref() {
-            knowledge_items::Entity::update_many()
-                .col_expr(knowledge_items::Column::Status, Expr::value("withdrawn"))
-                .col_expr(
-                    knowledge_items::Column::WithdrawnAt,
-                    Expr::value(Some(timestamp.clone())),
-                )
-                .col_expr(
-                    knowledge_items::Column::UpdatedAt,
-                    Expr::value(timestamp.clone()),
-                )
-                .filter(knowledge_items::Column::Id.eq(item_id))
-                .exec(&transaction)
-                .await?;
-            knowledge_content_review_events::ActiveModel {
-                id: Set(case_service::new_id()),
-                knowledge_item_id: Set(item_id.to_owned()),
-                content_version: Set(1),
-                event_type: Set("withdrawn".to_owned()),
-                actor_user_id: Set(auth.id.clone()),
-                reason: Set(reason.clone()),
-                created_at: Set(timestamp.clone()),
-            }
-            .insert(&transaction)
+    } else if action == "withdraw"
+        && let Some(item_id) = existing.knowledge_item_id.as_deref()
+    {
+        knowledge_items::Entity::update_many()
+            .col_expr(knowledge_items::Column::Status, Expr::value("withdrawn"))
+            .col_expr(
+                knowledge_items::Column::WithdrawnAt,
+                Expr::value(Some(timestamp.clone())),
+            )
+            .col_expr(
+                knowledge_items::Column::UpdatedAt,
+                Expr::value(timestamp.clone()),
+            )
+            .filter(knowledge_items::Column::Id.eq(item_id))
+            .exec(&transaction)
             .await?;
+        knowledge_content_review_events::ActiveModel {
+            id: Set(case_service::new_id()),
+            knowledge_item_id: Set(item_id.to_owned()),
+            content_version: Set(1),
+            event_type: Set("withdrawn".to_owned()),
+            actor_user_id: Set(auth.id.clone()),
+            reason: Set(reason.clone()),
+            created_at: Set(timestamp.clone()),
         }
+        .insert(&transaction)
+        .await?;
     }
     let update = archive_drafts::Entity::update_many()
         .col_expr(archive_drafts::Column::Status, Expr::value(next_status))
