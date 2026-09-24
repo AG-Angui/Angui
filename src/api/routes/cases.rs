@@ -358,21 +358,33 @@ async fn get_map_view(
             updated_at: detail.updated_at.clone(),
         });
     }
-    // Locations are clues now.  Keeping this projection here (rather than
-    // reading `case_places`) ensures every map uses the same review and
-    // visibility decision as the clue timeline.
+    // Project every visible clue that supplies a location. This deliberately
+    // includes older records with coordinates that predate `location_kind`;
+    // otherwise their valid positions disappear from the map.
     items.extend(
         detail
             .clues
             .iter()
             .filter(|clue| {
-                clue.location_kind.is_some()
-                    && clue.location_text.is_some()
+                (detail.access_role == CaseRole::Commander
+                    || clue.location_kind.is_some()
+                    || (clue.longitude.is_some() && clue.latitude.is_some()))
+                    && (clue.location_text.is_some()
+                        || (clue.longitude.is_some() && clue.latitude.is_some()))
                     && (detail.access_role == CaseRole::Commander || clue.status == "confirmed")
             })
             .map(|clue| CaseMapItem {
                 id: clue.id.clone(),
-                object_type: "location_clue".to_owned(),
+                object_type: if clue
+                    .raw_record_reference
+                    .as_deref()
+                    .is_some_and(|reference| reference.starts_with("legacy-place-type:"))
+                {
+                    "place"
+                } else {
+                    "clue"
+                }
+                .to_owned(),
                 display_name: Some(clue.content.clone()),
                 longitude: clue.longitude,
                 latitude: clue.latitude,
@@ -389,35 +401,6 @@ async fn get_map_view(
                 updated_at: clue.updated_at.clone(),
             }),
     );
-    if detail.access_role == CaseRole::Commander {
-        items.extend(
-            detail
-                .clues
-                .into_iter()
-                .filter(|clue| {
-                    clue.location_kind.is_none()
-                        && clue.status == "confirmed"
-                        && clue.location_text.is_some()
-                })
-                .map(|clue| CaseMapItem {
-                    id: clue.id,
-                    object_type: "clue".to_owned(),
-                    display_name: Some(clue.content),
-                    longitude: None,
-                    latitude: None,
-                    location_text: clue.location_text,
-                    location_precision: clue
-                        .location_precision
-                        .unwrap_or_else(|| "unknown".to_owned()),
-                    source: clue.source_type,
-                    occurred_at: clue.occurred_at,
-                    reported_at: Some(clue.reported_at),
-                    review_status: clue.status,
-                    related_task_id: clue.linked_task_reference,
-                    updated_at: clue.updated_at,
-                }),
-        );
-    }
     items.extend(task_items.into_iter().map(|task| {
         CaseMapItem {
             id: task.id.clone(),
@@ -440,6 +423,22 @@ async fn get_map_view(
             updated_at: task.updated_at,
         }
     }));
+    // Keep the same newest-first order used by the clue timeline. Stable
+    // fallback fields make records with only a report timestamp predictable.
+    items.sort_by(|left, right| {
+        right
+            .occurred_at
+            .as_deref()
+            .or(right.reported_at.as_deref())
+            .or(Some(right.updated_at.as_str()))
+            .cmp(
+                &left
+                    .occurred_at
+                    .as_deref()
+                    .or(left.reported_at.as_deref())
+                    .or(Some(left.updated_at.as_str())),
+            )
+    });
     Ok(HttpResponse::Ok().json(CaseMapViewResponse { items }))
 }
 

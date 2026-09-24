@@ -21,6 +21,7 @@ export interface MapTimelineCardProps {
 // 类型对应的颜色映射
 const typeColors: Record<string, string> = {
   clue: '#d84343',        // 红色 - 线索
+  location_clue: '#d84343', // 红色 - 地点线索（兼容旧接口响应）
   task: '#2e8b57',        // 绿色 - 任务
   place: '#6a43cf',       // 紫色 - 地点
   last_seen: '#ef8f26',   // 橙色 - 最后出现
@@ -29,6 +30,7 @@ const typeColors: Record<string, string> = {
 // 类型对应的中文标签
 const typeLabels: Record<string, string> = {
   clue: '线索',
+  location_clue: '地点线索',
   task: '任务',
   place: '地点',
   last_seen: '最后出现',

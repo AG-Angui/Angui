@@ -338,7 +338,12 @@ export interface CasePoiRoute {
   source: string;
   degradation_status: "available" | "degraded";
 }
-export type CaseMapObjectType = "last_seen" | "place" | "clue" | "task";
+export type CaseMapObjectType =
+  | "last_seen"
+  | "place"
+  | "location_clue"
+  | "clue"
+  | "task";
 export type MapLocationPrecision = "exact" | "approximate" | "unknown";
 export interface CaseMapItem {
   id: string;
@@ -833,7 +838,7 @@ export interface CaseMapView {
 
 export interface CaseMapItem {
   id: string;
-  object_type: "clue" | "task" | "place" | "last_seen";
+  object_type: CaseMapObjectType;
   display_name: string | null;
   longitude: number | null;
   latitude: number | null;

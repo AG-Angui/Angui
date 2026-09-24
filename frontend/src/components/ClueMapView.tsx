@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@heroui/react';
 import { RotateCcw } from 'lucide-react';
 import { useAMap } from '../hooks/useAMap';
@@ -16,6 +16,7 @@ export interface ClueMapViewProps {
 // 类型对应的标记颜色
 const markerColors: Record<string, string> = {
   clue: '#d84343',
+  location_clue: '#d84343',
   task: '#2e8b57',
   place: '#6a43cf',
   last_seen: '#ef8f26',
@@ -32,7 +33,11 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
 
   // 获取地图数据
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setItems([]);
+      setDataLoading(false);
+      return;
+    }
 
     setDataLoading(true);
     setDataError(null);
@@ -59,9 +64,17 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
   const markersRef = useRef<Map<string, AMapType.Marker>>(new Map());
   const infoWindowRef = useRef<AMapType.InfoWindow | null>(null);
 
-  // 过滤出有坐标的项目
-  const itemsWithCoords = items.filter(
-    (item) => item.longitude !== null && item.latitude !== null
+  // The API already returns the case timeline in its authorized order. Keep
+  // the same order for both cards and marker labels, so marker 2 always means
+  // the second timeline entry rather than the second entry that happened to
+  // include coordinates.
+  const timelineItems = useMemo(() => items, [items]);
+  const itemsWithCoords = useMemo(
+    () =>
+      timelineItems.filter(
+        (item) => item.longitude !== null && item.latitude !== null,
+      ),
+    [timelineItems],
   );
 
   // 创建自定义标记图标
@@ -106,11 +119,13 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
 
   // 初始化地图标记
   useEffect(() => {
-    if (!map || !AMap || itemsWithCoords.length === 0) return;
+    if (!map || !AMap) return;
 
     // 清除旧标记
     markersRef.current.forEach((marker) => marker.setMap(null));
     markersRef.current.clear();
+
+    if (itemsWithCoords.length === 0) return;
 
     // 创建信息窗体
     if (!infoWindowRef.current) {
@@ -120,11 +135,14 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
     }
 
     // 添加新标记
-    itemsWithCoords.forEach((item, index) => {
+    itemsWithCoords.forEach((item) => {
       if (item.longitude === null || item.latitude === null) return;
 
       const position = new AMap.LngLat(item.longitude, item.latitude);
-      const icon = createMarkerIcon(item.object_type, index);
+      const timelineIndex = timelineItems.findIndex(
+        (timelineItem) => timelineItem.id === item.id,
+      );
+      const icon = createMarkerIcon(item.object_type, timelineIndex);
 
       const marker = new AMap.Marker({
         position,
@@ -165,7 +183,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
     if (itemsWithCoords.length > 0) {
       map.setFitView(Array.from(markersRef.current.values()));
     }
-  }, [map, AMap, itemsWithCoords, createMarkerIcon]);
+  }, [map, AMap, itemsWithCoords, timelineItems, createMarkerIcon]);
 
   // 卡片点击处理：飞到对应标记
   const handleCardClick = useCallback(
@@ -221,7 +239,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
       {/* 侧边栏：时间线卡片列表 */}
       <aside className="flex flex-col gap-4 overflow-hidden">
         <div className="flex-1 overflow-y-auto space-y-2 pr-2">
-          {dataLoading ? <LoadingState label="正在加载地图数据" /> : dataError ? <ErrorState message="地图数据加载失败" onRetry={() => window.location.reload()} /> : itemsWithCoords.length === 0 ? <EmptyState title="暂无地图数据" /> : itemsWithCoords.map((item, index) => (
+          {dataLoading ? <LoadingState label="正在加载地图数据" /> : dataError ? <ErrorState message="地图数据加载失败" onRetry={() => window.location.reload()} /> : timelineItems.length === 0 ? <EmptyState title="暂无地图数据" /> : timelineItems.map((item, index) => (
             <MapTimelineCard
               key={item.id}
               item={item}
@@ -250,6 +268,11 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
           data-testid="clue-map-container"
           className="h-full min-h-[500px] w-full"
         />
+        {!loading && !error && timelineItems.length > 0 && itemsWithCoords.length === 0 && (
+          <div className="pointer-events-none absolute inset-x-4 top-4 rounded-md bg-white/95 p-3 text-center text-sm text-slate-600 shadow-sm">
+            当前线索只有文字地点，暂无可安全标注的坐标。后续请通过地点选取器确认坐标。
+          </div>
+        )}
         {loading && !error && <div className="absolute inset-0 grid place-items-center bg-white/80"><LoadingState label="正在加载地图" /></div>}
         {error && <div className="absolute inset-0 grid place-items-center bg-white/90 p-4"><ErrorState message="地图加载失败" onRetry={() => window.location.reload()} /></div>}
       </div>

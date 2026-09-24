@@ -520,6 +520,10 @@ function CaseDetailView({
   const { token } = useAuth();
   const [clueContent, setClueContent] = useState("");
   const [clueLocation, setClueLocation] = useState("");
+  const [clueCoordinates, setClueCoordinates] = useState<{
+    longitude: number;
+    latitude: number;
+  } | null>(null);
   const [clueOccurredAt, setClueOccurredAt] = useState("");
   const [clueSourceType, setClueSourceType] =
     useState<PublicClueSourceType>("manual_report");
@@ -1427,6 +1431,9 @@ function CaseDetailView({
                       occurred_at: toIsoOrNull(clueOccurredAt),
                       location_text: location,
                       location_precision: clueLocationPrecision || null,
+                      location_kind: clueCoordinates ? "point" : null,
+                      longitude: clueCoordinates?.longitude ?? null,
+                      latitude: clueCoordinates?.latitude ?? null,
                       next_action: nullable(clueNextAction),
                       attachment_ids: linkedAttachmentIds,
                     }),
@@ -1435,6 +1442,7 @@ function CaseDetailView({
                   if (succeeded) {
                     setClueContent("");
                     setClueLocation("");
+                    setClueCoordinates(null);
                     setClueOccurredAt("");
                     setClueSourceType("manual_report");
                     setClueRawReference("");
@@ -1460,10 +1468,15 @@ function CaseDetailView({
                   onConfirm={(location) => {
                     setClueLocation(location.address);
                     setClueLocationPrecision(location.precision);
+                    setClueCoordinates({
+                      longitude: location.longitude,
+                      latitude: location.latitude,
+                    });
                   }}
                   onClear={() => {
                     setClueLocation("");
                     setClueLocationPrecision("");
+                    setClueCoordinates(null);
                   }}
                 />
               </div>
@@ -1493,7 +1506,10 @@ function CaseDetailView({
                 <Field label="地点">
                   <Input
                     value={clueLocation}
-                    onChange={(event) => setClueLocation(event.target.value)}
+                    onChange={(event) => {
+                      setClueLocation(event.target.value);
+                      setClueCoordinates(null);
+                    }}
                     fullWidth
                   />
                 </Field>
@@ -2464,6 +2480,7 @@ function TaskBoard({
 const mapObjectLabels: Record<CaseMapItem["object_type"], string> = {
   last_seen: "最后出现信息",
   place: "补充地点",
+  location_clue: "地点线索",
   clue: "已确认线索",
   task: "任务区域",
 };
