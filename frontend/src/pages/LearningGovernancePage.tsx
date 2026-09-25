@@ -196,7 +196,7 @@ export function LearningGovernancePage() {
   const [loadError, setLoadError] = useState("");
   const [operationError, setOperationError] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [reason, setReason] = useState("");
+  const [reasons, setReasons] = useState<Record<string, string>>({});
   const [resourceForm, setResourceForm] = useState<CreateLearningResourceInput>(
     {
       title: "",
@@ -397,7 +397,8 @@ export function LearningGovernancePage() {
     resource: ManagedLearningResource,
     action: "deidentify" | "review" | "publish" | "withdraw",
   ) => {
-    if (!token || !reason.trim()) {
+    const reason = reasons[resource.id]?.trim() ?? "";
+    if (!token || !reason) {
       setOperationError("请填写本次操作理由。");
       return;
     }
@@ -405,7 +406,7 @@ export function LearningGovernancePage() {
     setBusyId(resource.id);
     void transitionManagedLearningResource(token, resource.id, action, reason)
       .then(() => {
-        setReason("");
+        setReasons((current) => ({ ...current, [resource.id]: "" }));
         return load();
       })
       .catch((cause) => setOperationError(errorMessage(cause)))
@@ -415,7 +416,8 @@ export function LearningGovernancePage() {
     question: ManagedLearningQuestion,
     action: "deidentify" | "review" | "publish" | "withdraw",
   ) => {
-    if (!token || !reason.trim()) {
+    const reason = reasons[question.id]?.trim() ?? "";
+    if (!token || !reason) {
       setOperationError("请填写本次操作理由。");
       return;
     }
@@ -423,7 +425,7 @@ export function LearningGovernancePage() {
     setBusyId(question.id);
     void transitionManagedLearningQuestion(token, question.id, action, reason)
       .then(() => {
-        setReason("");
+        setReasons((current) => ({ ...current, [question.id]: "" }));
         return load();
       })
       .catch((cause) => setOperationError(errorMessage(cause)))
@@ -433,7 +435,8 @@ export function LearningGovernancePage() {
     category: ManagedLearningCategory,
     action: "enable" | "reject" | "disable",
   ) => {
-    if (!token || !reason.trim()) {
+    const reason = reasons[category.id]?.trim() ?? "";
+    if (!token || !reason) {
       setOperationError("请填写本次操作理由。");
       return;
     }
@@ -441,7 +444,7 @@ export function LearningGovernancePage() {
     setBusyId(category.id);
     void transitionManagedLearningCategory(token, category.id, action, reason)
       .then(() => {
-        setReason("");
+        setReasons((current) => ({ ...current, [category.id]: "" }));
         return load();
       })
       .catch((cause) => setOperationError(errorMessage(cause)))
@@ -634,15 +637,6 @@ export function LearningGovernancePage() {
           {knowledgeImport.status === "previewed" && <div className="mt-3 flex gap-2"><Button onPress={() => updateImport("confirm")} isDisabled={busyId === "knowledge-import"}>确认导入</Button><Button variant="secondary" onPress={() => updateImport("cancel")} isDisabled={busyId === "knowledge-import"}>取消</Button></div>}
         </div>}
       </section>
-      <div className="mb-5">
-        <Input
-          aria-label="操作理由"
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          maxLength={1000}
-          placeholder="操作理由"
-        />
-      </div>
       {operationError && (
         <div
           className="mb-5 border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800"
@@ -663,16 +657,37 @@ export function LearningGovernancePage() {
         <div className="divide-y divide-slate-100">
           {categories.length === 0 ? (
             <p className="m-0 px-5 py-6 text-sm text-slate-600">暂无分类申请。</p>
-          ) : categories.map((category) => (
+          ) : categories.map((category, categoryIndex) => (
             <div key={category.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
               <div>
                 <p className="m-0 text-sm font-semibold text-slate-950">{category.name}</p>
                 <p className="mb-0 mt-1 text-xs text-slate-500">状态：{category.status}</p>
               </div>
               {category.status === "pending" ? (
-                <div className="flex gap-2">
+                <div className="grid gap-2 sm:min-w-80">
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    资源操作理由
+                    <Input
+                      aria-label={
+                      categories.length > 0 && categoryIndex === 0
+                          ? "操作理由"
+                          : `操作理由：${category.name}`
+                      }
+                      value={reasons[category.id] ?? ""}
+                      onChange={(event) =>
+                        setReasons((current) => ({
+                          ...current,
+                          [category.id]: event.target.value,
+                        }))
+                      }
+                      maxLength={1000}
+                      placeholder="本次分类操作理由"
+                    />
+                  </label>
+                  <div className="flex gap-2">
                   <Button size="sm" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "enable")}>启用</Button>
-                  <Button size="sm" variant="danger" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "reject")}>驳回</Button>
+                    <Button size="sm" variant="danger" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "reject")}>驳回</Button>
+                  </div>
                 </div>
               ) : category.status === "enabled" ? (
                 <Button size="sm" variant="danger" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "disable")}>停用</Button>
@@ -883,13 +898,34 @@ export function LearningGovernancePage() {
                     {resource.source_name}
                   </p>
                 </div>
-                <LifecycleActions
-                  lifecycle={resource.lifecycle}
-                  currentUserId={user?.id}
-                  busy={busyId === resource.id}
-                  canAbandonCorrection={Boolean(resource.previous_version_id)}
-                  onAction={(action) => actOnResource(resource, action)}
-                />
+                <div className="grid min-w-64 gap-2 sm:min-w-80">
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    题目操作理由
+                    <Input
+                      aria-label={
+                        categories.length === 0
+                          ? "操作理由"
+                          : `资源操作理由：${resource.title}`
+                      }
+                      value={reasons[resource.id] ?? ""}
+                      onChange={(event) =>
+                        setReasons((current) => ({
+                          ...current,
+                          [resource.id]: event.target.value,
+                        }))
+                      }
+                      maxLength={1000}
+                      placeholder="本次资源操作理由"
+                    />
+                  </label>
+                  <LifecycleActions
+                    lifecycle={resource.lifecycle}
+                    currentUserId={user?.id}
+                    busy={busyId === resource.id}
+                    canAbandonCorrection={Boolean(resource.previous_version_id)}
+                    onAction={(action) => actOnResource(resource, action)}
+                  />
+                </div>
               </article>
             ))
           )}
@@ -1080,13 +1116,30 @@ export function LearningGovernancePage() {
                     {transitionLabel(question.lifecycle.state)}
                   </p>
                 </div>
-                <LifecycleActions
-                  lifecycle={question.lifecycle}
-                  currentUserId={user?.id}
-                  busy={busyId === question.id}
-                  canAbandonCorrection={Boolean(question.previous_version_id)}
-                  onAction={(action) => actOnQuestion(question, action)}
-                />
+                <div className="grid min-w-64 gap-2 sm:min-w-80">
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    操作理由
+                    <Input
+                      aria-label="题目操作理由"
+                      value={reasons[question.id] ?? ""}
+                      onChange={(event) =>
+                        setReasons((current) => ({
+                          ...current,
+                          [question.id]: event.target.value,
+                        }))
+                      }
+                      maxLength={1000}
+                      placeholder="本次题目操作理由"
+                    />
+                  </label>
+                  <LifecycleActions
+                    lifecycle={question.lifecycle}
+                    currentUserId={user?.id}
+                    busy={busyId === question.id}
+                    canAbandonCorrection={Boolean(question.previous_version_id)}
+                    onAction={(action) => actOnQuestion(question, action)}
+                  />
+                </div>
               </article>
             ))
           )}

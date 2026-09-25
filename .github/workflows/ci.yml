@@ -259,6 +259,13 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: . -> target
+          # The E2E server builds executable build scripts immediately before
+          # Playwright starts. A partial or runner-incompatible `target`
+          # restore makes Cargo reuse a missing build-script binary (for
+          # example aws-lc-rs) and prevents the web server from starting.
+          # Keep the registry/git caches, but always compile this isolated
+          # server target on the runner that will execute it.
+          cache-targets: false
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
