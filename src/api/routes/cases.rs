@@ -10,10 +10,10 @@ use crate::{
     error::ApiError,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse, CasePoiQuery,
-        CasePoiRouteQuery, CaseResourceConfigurationResponse, CreateCasePlaceRequest,
-        CreateCaseRequest, CreateCaseSourceRecordRequest, CreateClueDraftRequest,
-        CreateClueRequest, CreateSummaryDraftRequest, CreateTaskRequest, ReviewCasePlaceRequest,
-        ReviewClueDraftRequest, ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
+        CasePoiRouteQuery, CaseResourceConfigurationResponse, CreateCaseRequest,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
+        CreateSummaryDraftRequest, CreateTaskRequest, ReviewClueDraftRequest,
+        ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
         UpdateElderProfileRequest,
     },
     roles::CaseRole,
@@ -87,12 +87,6 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 "/{case_id}/archive-drafts",
                 web::post().to(create_archive_draft),
             )
-            .route("/{case_id}/places", web::get().to(list_places))
-            .route("/{case_id}/places", web::post().to(create_place))
-            .route(
-                "/{case_id}/places/{place_id}/review",
-                web::patch().to(review_place),
-            )
             .route(
                 "/{case_id}/resource-configuration",
                 web::get().to(get_resource_configuration),
@@ -148,59 +142,6 @@ async fn get_resource_configuration(
         attachment_max_per_case: state.attachment_max_per_case,
         case_place_types: state.case_place_types.clone(),
     }))
-}
-
-async fn create_place(
-    auth: AuthenticatedUser,
-    state: web::Data<AppState>,
-    case_id: web::Path<String>,
-    request: web::Json<CreateCasePlaceRequest>,
-) -> Result<HttpResponse, ApiError> {
-    let place = crate::services::case_resource_service::create_place(
-        &state.db,
-        &auth,
-        &case_id,
-        request.into_inner(),
-        &state.case_place_types,
-    )
-    .await?;
-    Ok(HttpResponse::Created().json(place))
-}
-
-async fn list_places(
-    auth: AuthenticatedUser,
-    state: web::Data<AppState>,
-    case_id: web::Path<String>,
-) -> Result<HttpResponse, ApiError> {
-    let role = case_service::require_case_role(
-        &state.db,
-        &auth.id,
-        &case_id,
-        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
-    )
-    .await?;
-    let places =
-        crate::services::case_resource_service::visible_places(&state.db, &case_id, &auth.id, role)
-            .await?;
-    Ok(HttpResponse::Ok().json(places))
-}
-
-async fn review_place(
-    auth: AuthenticatedUser,
-    state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
-    request: web::Json<ReviewCasePlaceRequest>,
-) -> Result<HttpResponse, ApiError> {
-    let (case_id, place_id) = path.into_inner();
-    let place = crate::services::case_resource_service::review_place(
-        &state.db,
-        &auth,
-        &case_id,
-        &place_id,
-        request.into_inner(),
-    )
-    .await?;
-    Ok(HttpResponse::Ok().json(place))
 }
 
 async fn create_attachment(

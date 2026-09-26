@@ -582,6 +582,47 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
         "new attempts must retain an immutable snapshot"
     );
 
+    let learner_token = context.token(LEARNER).await;
+    let history = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/answers")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(history.status(), StatusCode::OK);
+    let history: Value = test::read_body_json(history).await;
+    assert_eq!(history[0]["question_id"], question_id);
+    assert_eq!(history[0]["question_version"], 1);
+    assert_eq!(
+        history[0]["question_snapshot"]["explanation"],
+        "解析仅在提交后返回，并携带来源。"
+    );
+    let wrong = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/wrong-answers")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(wrong.status(), StatusCode::OK);
+    let wrong: Value = test::read_body_json(wrong).await;
+    assert_eq!(wrong, json!([]));
+    let progress = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/progress")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(progress.status(), StatusCode::OK);
+    let progress: Value = test::read_body_json(progress).await;
+    assert_eq!(progress["answered_questions"], 1);
+    assert_eq!(progress["correct_answers"], 1);
+
     let duplicate_submission_event = context
         .database
         .execute_unprepared(&format!(
@@ -617,6 +658,20 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
         "not_found",
     )
     .await;
+    let retained_history = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/answers")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(retained_history.status(), StatusCode::OK);
+    let retained_history: Value = test::read_body_json(retained_history).await;
+    assert_eq!(
+        retained_history[0]["question_snapshot"],
+        history[0]["question_snapshot"]
+    );
 
     let manually_withdrawn_original = test::call_service(
         &app,

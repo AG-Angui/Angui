@@ -344,6 +344,15 @@ pub async fn get_task_navigation(
     task_id: &str,
 ) -> Result<TaskNavigationResponse, ApiError> {
     let task = load_task_for_assignee_or_commander(db, auth, task_id).await?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" || is_terminal_status(&task.status) {
+        return Err(ApiError::Conflict(
+            "navigation is unavailable for a finished case or task".to_owned(),
+        ));
+    }
     let coordinate_note = if task.latitude.is_some() && task.longitude.is_some() {
         "任务点坐标仅在受限任务卡内可见；因当前任务坐标未声明坐标系，服务不会生成可能偏移的第三方导航链接。"
     } else {
@@ -414,6 +423,15 @@ pub async fn update_task_status(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" {
+        return Err(ApiError::Conflict(
+            "task actions are unavailable for a non-active case".to_owned(),
+        ));
+    }
     let case_role = require_case_role(
         &transaction,
         &auth.id,
@@ -502,6 +520,15 @@ pub async fn submit_location_report(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" {
+        return Err(ApiError::Conflict(
+            "location reports are unavailable for a non-active case".to_owned(),
+        ));
+    }
     let case_role = require_case_role(
         &transaction,
         &auth.id,
@@ -755,6 +782,15 @@ pub async fn review_task_application(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" || is_terminal_status(&task.status) {
+        return Err(ApiError::Conflict(
+            "task applications cannot be reviewed after the case or task ends".to_owned(),
+        ));
+    }
     require_task_reviewer(&transaction, auth, &task.case_id).await?;
     let application = task_applications::Entity::find_by_id(application_id)
         .one(&transaction)

@@ -1038,7 +1038,7 @@ export function listAdminArchiveDrafts(token: string): Promise<ArchiveDraft[]> {
 export function reviewArchiveDraft(
   token: string,
   draftId: string,
-  payload: { action: "publish" | "reject" | "withdraw"; reason: string },
+  payload: { action: "approve" | "publish" | "reject" | "withdraw"; reason: string; confirm_retention?: boolean },
 ): Promise<ArchiveDraft> {
   return apiRequest(
     `/admin/archive-drafts/${draftId}/review`,

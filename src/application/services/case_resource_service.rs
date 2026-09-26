@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashMap, HashSet},
     fs,
     io::Cursor,
     path::{Path, PathBuf},
@@ -12,20 +11,18 @@ use futures_util::StreamExt;
 use image::ImageFormat;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    entities::{
-        case_attachments, case_places, cases, clue_attachment_links, clue_attributions, clues,
-    },
+    entities::{case_attachments, cases, clue_attachment_links, clue_attributions, clues},
     error::ApiError,
     models::{
         AuthenticatedUser, CaseAttachmentResponse, CasePlaceResponse, ClueResponse,
-        CreateCasePlaceRequest, CreateClueRequest, ReviewCasePlaceRequest, ReviewClueRequest,
+        CreateCasePlaceRequest, CreateClueRequest,
     },
     roles::CaseRole,
     services::{
@@ -186,94 +183,6 @@ pub async fn create_place(
         },
     )
     .await?;
-    // Keep the legacy table populated while older clients and integrations
-    // still read it. The clue remains the canonical record for new behavior.
-    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    case_places::ActiveModel {
-        id: Set(clue.id.clone()),
-        case_id: Set(clue.case_id.clone()),
-        name: Set(request.name.trim().to_owned()),
-        place_type: Set(request.place_type.trim().to_lowercase()),
-        address: Set(request.address.trim().to_owned()),
-        longitude: Set(request.longitude),
-        latitude: Set(request.latitude),
-        source: Set(role.to_string()),
-        visibility: Set(request.visibility.as_str().to_owned()),
-        review_status: Set(clue.status.clone()),
-        created_by_user_id: Set(auth.id.clone()),
-        created_at: Set(timestamp.clone()),
-        updated_at: Set(timestamp),
-    }
-    .insert(db)
-    .await?;
-    Ok(location_clue_response(clue, "location_clue"))
-}
-
-pub async fn review_place(
-    db: &DatabaseConnection,
-    auth: &AuthenticatedUser,
-    case_id: &str,
-    place_id: &str,
-    request: ReviewCasePlaceRequest,
-) -> Result<CasePlaceResponse, ApiError> {
-    let next_status = request.status.trim().to_lowercase();
-    if !matches!(next_status.as_str(), "confirmed" | "rejected") {
-        return Err(ApiError::Validation(
-            "place review status must be confirmed or rejected".to_owned(),
-        ));
-    }
-    let reason = request.reason.trim();
-    if !(1..=1_000).contains(&reason.chars().count()) {
-        return Err(ApiError::Validation(
-            "reason must contain 1 to 1000 characters".to_owned(),
-        ));
-    }
-
-    let location_clue = clues::Entity::find_by_id(place_id)
-        .one(db)
-        .await?
-        .filter(|clue| clue.case_id == case_id && clue.location_kind.is_some())
-        .ok_or_else(|| ApiError::NotFound("location clue was not found".to_owned()))?;
-    if location_clue.status != "pending_review" {
-        return Err(ApiError::Conflict(
-            "location clue has already been reviewed".to_owned(),
-        ));
-    }
-
-    let clue = case_service::review_clue(
-        db,
-        auth,
-        place_id,
-        ReviewClueRequest {
-            status: next_status,
-            reason: reason.to_owned(),
-            related_clue_id: None,
-            relationship_type: None,
-            next_action: None,
-            linked_task_reference: None,
-        },
-    )
-    .await?;
-    if let Some(existing) = case_places::Entity::find_by_id(place_id).one(db).await? {
-        let mut active = existing.into_active_model();
-        active.review_status = Set(clue.status.clone());
-        active.updated_at = Set(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
-        active.update(db).await?;
-    }
-    write_audit(
-        db,
-        Some(case_id.to_owned()),
-        auth,
-        "case.place_reviewed",
-        "case_place",
-        place_id.to_owned(),
-        Some(json!({
-            "from": "pending_review",
-            "to": clue.status,
-            "reason": reason,
-        })),
-    )
-    .await?;
     Ok(location_clue_response(clue, "location_clue"))
 }
 
@@ -431,46 +340,10 @@ pub async fn visible_places(
         .order_by_desc(clues::Column::CreatedAt)
         .all(db)
         .await?;
-    let legacy_records = case_places::Entity::find()
-        .filter(case_places::Column::CaseId.eq(case_id))
-        .all(db)
-        .await?;
-    let legacy_by_id: HashMap<_, _> = legacy_records
-        .iter()
-        .map(|place| (place.id.as_str(), place))
-        .collect();
-    let clue_ids: HashSet<_> = records.iter().map(|clue| clue.id.clone()).collect();
-    let mut responses = Vec::with_capacity(records.len() + legacy_records.len());
-    for clue in records {
-        let clue_id = clue.id.clone();
-        let mut response = location_clue_model_response(clue, viewer_id);
-        if let Some(legacy) = legacy_by_id.get(clue_id.as_str()) {
-            response.review_status = legacy.review_status.clone();
-            response.visibility = legacy.visibility.clone();
-            response.updated_at = legacy.updated_at.clone();
-        }
-        responses.push(response);
-    }
-    for legacy in &legacy_records {
-        if clue_ids.contains(&legacy.id) {
-            continue;
-        }
-        let visible = match role {
-            CaseRole::Commander => true,
-            CaseRole::Family => {
-                legacy.created_by_user_id == viewer_id
-                    || (legacy.review_status == "confirmed" && legacy.visibility != "internal")
-            }
-            CaseRole::Volunteer => {
-                legacy.review_status == "confirmed"
-                    && matches!(legacy.visibility.as_str(), "public" | "confirmed")
-            }
-        };
-        if visible {
-            responses.push(legacy_place_response(legacy));
-        }
-    }
-    Ok(responses)
+    Ok(records
+        .into_iter()
+        .map(|clue| location_clue_model_response(clue, viewer_id))
+        .collect())
 }
 
 pub async fn visible_attachments(
@@ -849,24 +722,6 @@ fn location_clue_model_response(model: clues::Model, viewer_id: &str) -> CasePla
         created_at: model.created_at,
         updated_at: model.updated_at,
         is_own_submission: model.created_by_user_id.as_deref() == Some(viewer_id),
-    }
-}
-
-fn legacy_place_response(model: &case_places::Model) -> CasePlaceResponse {
-    CasePlaceResponse {
-        id: model.id.clone(),
-        case_id: model.case_id.clone(),
-        name: model.name.clone(),
-        place_type: model.place_type.clone(),
-        address: model.address.clone(),
-        longitude: model.longitude,
-        latitude: model.latitude,
-        source: model.source.clone(),
-        visibility: model.visibility.clone(),
-        review_status: model.review_status.clone(),
-        created_at: model.created_at.clone(),
-        updated_at: model.updated_at.clone(),
-        is_own_submission: false,
     }
 }
 

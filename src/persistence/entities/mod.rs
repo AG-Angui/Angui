@@ -33,6 +33,7 @@ pub mod knowledge_images;
 pub mod knowledge_import_batches;
 pub mod knowledge_import_rows;
 pub mod knowledge_items;
+pub mod knowledge_terms;
 pub mod learning_categories;
 pub mod learning_category_review_events;
 pub mod learning_content_review_events;

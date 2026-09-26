@@ -225,6 +225,28 @@ pub struct SubmitLearningAnswerResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct LearningAnswerHistoryResponse {
+    pub id: String,
+    pub question_id: String,
+    pub selected_option_id: String,
+    pub is_correct: bool,
+    pub score: i32,
+    pub max_score: i32,
+    pub question_version: i32,
+    pub question_snapshot: Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningProgressResponse {
+    pub answered_questions: u64,
+    pub total_answers: u64,
+    pub correct_answers: u64,
+    pub accuracy: f64,
+    pub latest_answered_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct LearningAnswerSource {
     pub resource_id: String,
     pub title: String,
@@ -235,6 +257,8 @@ pub struct LearningAnswerSource {
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeAskRequest {
     pub question: String,
+    pub category: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -271,6 +295,32 @@ pub struct KnowledgeBaseResponse {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateKnowledgeTermRequest {
+    /// Controlled vocabulary kind. Only `category` and `tag` are accepted.
+    pub kind: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeTermResponse {
+    pub id: String,
+    pub knowledge_base_id: String,
+    pub kind: String,
+    pub name: String,
+    pub status: String,
+    pub created_by_user_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeTermTransitionRequest {
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -319,6 +369,8 @@ pub struct CreateKnowledgeItemRequest {
     pub source_name: Option<String>,
     pub source_url: Option<String>,
     pub visibility: String,
+    /// Existing governed item when this draft is a correction version.
+    pub previous_version_id: Option<String>,
     #[serde(default)]
     pub images: Vec<KnowledgeImageInput>,
 }
@@ -336,6 +388,12 @@ pub struct UpdateKnowledgeItemRequest {
     pub source_url: Option<String>,
     pub visibility: Option<String>,
     pub images: Option<Vec<KnowledgeImageInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeTransitionRequest {
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -411,6 +469,9 @@ pub struct KnowledgeSearchResultResponse {
     pub images: Vec<KnowledgeImageResponse>,
     pub attachments: Vec<KnowledgeAttachmentResponse>,
     pub status: String,
+    /// Fields that contributed to the keyword match. This is intentionally
+    /// returned by the server so the UI does not have to guess.
+    pub matched_fields: Vec<String>,
 }
 #[derive(Debug, Serialize)]
 pub struct KnowledgeSearchResponse {
@@ -422,6 +483,8 @@ pub struct KnowledgeSearchResponse {
 pub struct KnowledgeChatRequest {
     pub query: String,
     pub limit: Option<u32>,
+    pub category: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -688,6 +751,7 @@ pub struct DeidentifyArchiveDraftRequest {
 pub struct ReviewArchiveDraftRequest {
     pub action: String,
     pub reason: String,
+    pub confirm_retention: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
