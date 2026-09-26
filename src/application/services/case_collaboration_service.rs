@@ -2635,8 +2635,20 @@ mod tests {
             SECRET,
         );
         let (payload, signature) = token.split_once('.').expect("signed token format");
-        let tampered = format!("{payload}.{}", signature.replacen('a', "b", 1));
+        let tampered_signature = signature
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index == 0 {
+                    if character == '0' { '1' } else { '0' }
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        let tampered = format!("{payload}.{tampered_signature}");
 
+        assert_ne!(tampered, token);
         assert!(selected_poi_destination(&tampered, "case-a", "user-a", SECRET).is_err());
     }
 }
