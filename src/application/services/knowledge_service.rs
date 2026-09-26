@@ -1175,7 +1175,7 @@ pub async fn chat_with_gateway(
     auth: &AuthenticatedUser,
     base_id: &str,
     query: &str,
-    limit: Option<u32>,
+    _limit: Option<u32>,
     gateway: &AiGateway,
 ) -> Result<KnowledgeChatResponse, ApiError> {
     chat_with_gateway_filtered(
@@ -1183,7 +1183,6 @@ pub async fn chat_with_gateway(
         auth,
         base_id,
         query,
-        limit,
         KnowledgeChatFilters::default(),
         gateway,
     )
@@ -1201,7 +1200,6 @@ pub async fn chat_with_gateway_filtered(
     auth: &AuthenticatedUser,
     base_id: &str,
     query: &str,
-    _limit: Option<u32>,
     filters: KnowledgeChatFilters<'_>,
     gateway: &AiGateway,
 ) -> Result<KnowledgeChatResponse, ApiError> {

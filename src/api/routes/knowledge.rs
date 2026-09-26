@@ -429,7 +429,6 @@ async fn chat(
             &auth,
             &id,
             &request.query,
-            request.limit,
             knowledge_service::KnowledgeChatFilters {
                 category: request.category.as_deref(),
                 tag: request.tag.as_deref(),

@@ -249,7 +249,7 @@ describe("LearningCenterPage", () => {
     await screen.findByRole("heading", { name: "知识检索与问答" });
     expect(await screen.findByRole("option", { name: "安全" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "核实" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("知识分类筛选"), { target: { value: "安全" } });
+    fireEvent.change(screen.getByLabelText("知识库分类"), { target: { value: "安全" } });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await waitFor(() => expect(mocked.searchLearningKnowledge).toHaveBeenLastCalledWith(
       "learner-session", { query: "", category_id: "安全", tag: "" },

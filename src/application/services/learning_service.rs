@@ -557,7 +557,6 @@ pub async fn ask_knowledge(
         auth,
         "learning-materials",
         question,
-        Some(5),
         crate::services::knowledge_service::KnowledgeChatFilters {
             category: request.category.as_deref(),
             tag: request.tag.as_deref(),
