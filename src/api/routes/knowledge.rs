@@ -430,8 +430,10 @@ async fn chat(
             &id,
             &request.query,
             request.limit,
-            request.category.as_deref(),
-            request.tag.as_deref(),
+            knowledge_service::KnowledgeChatFilters {
+                category: request.category.as_deref(),
+                tag: request.tag.as_deref(),
+            },
             &state.ai_gateway,
         )
         .await?,

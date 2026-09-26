@@ -1178,7 +1178,22 @@ pub async fn chat_with_gateway(
     limit: Option<u32>,
     gateway: &AiGateway,
 ) -> Result<KnowledgeChatResponse, ApiError> {
-    chat_with_gateway_filtered(db, auth, base_id, query, limit, None, None, gateway).await
+    chat_with_gateway_filtered(
+        db,
+        auth,
+        base_id,
+        query,
+        limit,
+        KnowledgeChatFilters::default(),
+        gateway,
+    )
+    .await
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KnowledgeChatFilters<'a> {
+    pub category: Option<&'a str>,
+    pub tag: Option<&'a str>,
 }
 
 pub async fn chat_with_gateway_filtered(
@@ -1187,12 +1202,11 @@ pub async fn chat_with_gateway_filtered(
     base_id: &str,
     query: &str,
     _limit: Option<u32>,
-    category: Option<&str>,
-    tag: Option<&str>,
+    filters: KnowledgeChatFilters<'_>,
     gateway: &AiGateway,
 ) -> Result<KnowledgeChatResponse, ApiError> {
     let results = if base_id == "learning-materials" {
-        search_learning_materials(db, auth, Some(query), category, tag)
+        search_learning_materials(db, auth, Some(query), filters.category, filters.tag)
             .await?
             .results
     } else {
@@ -1213,8 +1227,8 @@ pub async fn chat_with_gateway_filtered(
         metadata_json: Set(Some(
             json!({
                 "source_count": results.len(),
-                "has_category_filter": category.is_some(),
-                "has_tag_filter": tag.is_some(),
+                "has_category_filter": filters.category.is_some(),
+                "has_tag_filter": filters.tag.is_some(),
             })
             .to_string(),
         )),
