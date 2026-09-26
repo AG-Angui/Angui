@@ -21,15 +21,17 @@ use crate::{
     entities::{
         audit_events, knowledge_attachments, knowledge_bases, knowledge_content_review_events,
         knowledge_images, knowledge_import_batches, knowledge_import_rows, knowledge_items,
+        knowledge_terms,
     },
     error::ApiError,
     models::{
         AuthenticatedUser, CreateKnowledgeBaseRequest, CreateKnowledgeItemRequest,
-        KnowledgeAttachmentResponse, KnowledgeBaseOverviewResponse, KnowledgeBaseResponse,
-        KnowledgeChatResponse, KnowledgeChatSourceResponse, KnowledgeImageInput,
-        KnowledgeImageResponse, KnowledgeImportBatchResponse, KnowledgeImportRowResponse,
-        KnowledgeOverviewResponse, KnowledgeSearchResponse, KnowledgeSearchResultResponse,
-        UpdateKnowledgeBaseRequest, UpdateKnowledgeItemRequest,
+        CreateKnowledgeTermRequest, KnowledgeAttachmentResponse, KnowledgeBaseOverviewResponse,
+        KnowledgeBaseResponse, KnowledgeChatResponse, KnowledgeChatSourceResponse,
+        KnowledgeImageInput, KnowledgeImageResponse, KnowledgeImportBatchResponse,
+        KnowledgeImportRowResponse, KnowledgeOverviewResponse, KnowledgeSearchResponse,
+        KnowledgeSearchResultResponse, KnowledgeTermResponse, UpdateKnowledgeBaseRequest,
+        UpdateKnowledgeItemRequest,
     },
     roles::{AccountType, GlobalCapability},
     services::{
@@ -223,6 +225,122 @@ pub async fn list_items(
         .all(db)
         .await?;
     results_with_images(db, items, None).await
+}
+
+/// Lists the controlled vocabulary for an administrator. Archived terms are
+/// included so that governance screens can explain why historical snapshots
+/// no longer appear in new-item selectors.
+pub async fn list_terms(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+) -> Result<Vec<KnowledgeTermResponse>, ApiError> {
+    require_admin(auth)?;
+    find_base(db, base_id).await?;
+    Ok(knowledge_terms::Entity::find()
+        .filter(knowledge_terms::Column::KnowledgeBaseId.eq(base_id))
+        .order_by_asc(knowledge_terms::Column::Kind)
+        .order_by_asc(knowledge_terms::Column::Name)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(term_response)
+        .collect())
+}
+
+/// Creates an active category or tag in a knowledge base. Existing knowledge
+/// items retain their free-text/category snapshots for backwards compatibility;
+/// this vocabulary governs new content produced by the admin UI.
+pub async fn create_term(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+    request: CreateKnowledgeTermRequest,
+) -> Result<KnowledgeTermResponse, ApiError> {
+    require_admin(auth)?;
+    find_base(db, base_id).await?;
+    let kind = request.kind.trim().to_lowercase();
+    if !matches!(kind.as_str(), "category" | "tag") {
+        return Err(ApiError::Validation(
+            "term kind must be category or tag".to_owned(),
+        ));
+    }
+    let name = required(&request.name, "name", 160)?;
+    let existing = knowledge_terms::Entity::find()
+        .filter(knowledge_terms::Column::KnowledgeBaseId.eq(base_id))
+        .filter(knowledge_terms::Column::Kind.eq(&kind))
+        .all(db)
+        .await?
+        .into_iter()
+        .find(|term| term.name.eq_ignore_ascii_case(&name));
+    if existing.is_some() {
+        return Err(ApiError::Conflict("term already exists".to_owned()));
+    }
+    let timestamp = now();
+    let transaction = db.begin().await?;
+    let term = knowledge_terms::ActiveModel {
+        id: Set(case_service::new_id()),
+        knowledge_base_id: Set(base_id.to_owned()),
+        kind: Set(kind),
+        name: Set(name),
+        status: Set("active".to_owned()),
+        created_by_user_id: Set(auth.id.clone()),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp),
+    }
+    .insert(&transaction)
+    .await?;
+    case_service::write_audit(
+        &transaction,
+        None,
+        auth,
+        "knowledge.term_created",
+        "knowledge_term",
+        term.id.clone(),
+        Some(json!({ "knowledge_base_id": base_id, "kind": term.kind, "name": term.name })),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(term_response(term))
+}
+
+/// Archives a controlled term. The row is retained for auditability and for
+/// historical item snapshots, but archived terms cannot be selected for new
+/// material by the governance UI.
+pub async fn disable_term(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    term_id: &str,
+    reason: &str,
+) -> Result<KnowledgeTermResponse, ApiError> {
+    require_admin(auth)?;
+    let reason = required(reason, "reason", 1_000)?;
+    let existing = knowledge_terms::Entity::find_by_id(term_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("knowledge term was not found".to_owned()))?;
+    if existing.status != "active" {
+        return Err(ApiError::Conflict(
+            "only active terms can be disabled".to_owned(),
+        ));
+    }
+    let mut active: knowledge_terms::ActiveModel = existing.into();
+    active.status = Set("archived".to_owned());
+    active.updated_at = Set(now());
+    let transaction = db.begin().await?;
+    let term = active.update(&transaction).await?;
+    case_service::write_audit(
+        &transaction,
+        None,
+        auth,
+        "knowledge.term_disabled",
+        "knowledge_term",
+        term.id.clone(),
+        Some(json!({ "knowledge_base_id": term.knowledge_base_id, "reason": reason })),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(term_response(term))
 }
 
 pub async fn get_item(
@@ -450,7 +568,35 @@ pub async fn create_item(
 ) -> Result<KnowledgeSearchResultResponse, ApiError> {
     require_admin(auth)?;
     let base = find_base(db, base_id).await?;
+    let previous_version_id = request.previous_version_id.clone();
+    let (previous_version_id, version) = if let Some(previous_id) = previous_version_id {
+        let previous = find_item(db, &previous_id).await?;
+        if previous.knowledge_base_id != base_id
+            || !matches!(previous.status.as_str(), "published" | "withdrawn")
+        {
+            return Err(ApiError::Conflict(
+                "correction must reference a published or withdrawn item in the same base"
+                    .to_owned(),
+            ));
+        }
+        if knowledge_items::Entity::find()
+            .filter(knowledge_items::Column::PreviousVersionId.eq(&previous_id))
+            .one(db)
+            .await?
+            .is_some()
+        {
+            return Err(ApiError::Conflict(
+                "this knowledge version already has a correction".to_owned(),
+            ));
+        }
+        (Some(previous_id), previous.version + 1)
+    } else {
+        (None, 1)
+    };
     let input = validated_item(request, &base.visibility)?;
+    if let Some(category_id) = input.category_id.as_deref() {
+        ensure_active_category_term(db, base_id, category_id).await?;
+    }
     let content_hash = content_hash(
         &input.title,
         &input.summary,
@@ -487,8 +633,8 @@ pub async fn create_item(
         status: Set("draft".to_owned()),
         effective_at: Set(timestamp.clone()),
         withdrawn_at: Set(None),
-        previous_version_id: Set(None),
-        version: Set(1),
+        previous_version_id: Set(previous_version_id),
+        version: Set(version),
         content_hash: Set(content_hash),
         embedding_json: Set(None),
         embedding_model: Set(None),
@@ -523,6 +669,11 @@ pub async fn update_item(
     }
     let base = find_base(db, &existing.knowledge_base_id).await?;
     let input = merge_item(existing.clone(), request, &base.visibility)?;
+    if input.category_id != existing.category_id
+        && let Some(category_id) = input.category_id.as_deref()
+    {
+        ensure_active_category_term(db, &existing.knowledge_base_id, category_id).await?;
+    }
     let hash = content_hash(
         &input.title,
         &input.summary,
@@ -549,7 +700,6 @@ pub async fn update_item(
             .exec(&transaction)
             .await?;
     }
-    let next_version = existing.version + 1;
     let mut active: knowledge_items::ActiveModel = existing.into();
     active.title = Set(input.title);
     active.summary = Set(input.summary);
@@ -564,7 +714,6 @@ pub async fn update_item(
     active.content_hash = Set(hash);
     active.status = Set("draft".to_owned());
     active.withdrawn_at = Set(None);
-    active.version = Set(next_version);
     let timestamp = now();
     active.updated_at = Set(timestamp.clone());
     let item = active.update(&transaction).await?;
@@ -580,8 +729,10 @@ pub async fn transition_item(
     auth: &AuthenticatedUser,
     id: &str,
     action: &str,
+    reason: &str,
 ) -> Result<KnowledgeSearchResultResponse, ApiError> {
     require_admin(auth)?;
+    let reason = required(reason, "reason", 1_000)?;
     let item = find_item(db, id).await?;
     let target = match (action, item.status.as_str()) {
         // `submitted` is the persisted representation of "deidentified and
@@ -608,11 +759,29 @@ pub async fn transition_item(
     }
     let timestamp = now();
     let item_version = item.version;
-    let mut active: knowledge_items::ActiveModel = item.into();
-    active.status = Set(target.to_owned());
-    active.withdrawn_at = Set((target == "withdrawn").then_some(timestamp.clone()));
-    active.updated_at = Set(timestamp.clone());
-    active.update(db).await?;
+    let previous_version_id = item.previous_version_id.clone();
+    let previous_status = item.status.clone();
+    let transaction = db.begin().await?;
+    let updated = knowledge_items::Entity::update_many()
+        .col_expr(knowledge_items::Column::Status, Expr::value(target))
+        .col_expr(
+            knowledge_items::Column::WithdrawnAt,
+            Expr::value((target == "withdrawn").then_some(timestamp.clone())),
+        )
+        .col_expr(
+            knowledge_items::Column::UpdatedAt,
+            Expr::value(timestamp.clone()),
+        )
+        .filter(knowledge_items::Column::Id.eq(id))
+        .filter(knowledge_items::Column::Status.eq(previous_status))
+        .filter(knowledge_items::Column::Version.eq(item_version))
+        .exec(&transaction)
+        .await?;
+    if updated.rows_affected != 1 {
+        return Err(ApiError::Conflict(
+            "knowledge item changed before the transition could be saved".to_owned(),
+        ));
+    }
     let event_type = match action {
         "deidentify" => "deidentified",
         "review" => "reviewed",
@@ -626,11 +795,39 @@ pub async fn transition_item(
         content_version: Set(item_version),
         event_type: Set(event_type.to_owned()),
         actor_user_id: Set(auth.id.clone()),
-        reason: Set("knowledge governance transition".to_owned()),
-        created_at: Set(timestamp),
+        reason: Set(reason.clone()),
+        created_at: Set(timestamp.clone()),
     }
-    .insert(db)
+    .insert(&transaction)
     .await?;
+    if action == "publish"
+        && let Some(previous_id) = previous_version_id
+    {
+        let previous = knowledge_items::Entity::find_by_id(&previous_id)
+            .one(&transaction)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("knowledge item was not found".to_owned()))?;
+        if previous.status == "published" {
+            let previous_version = previous.version;
+            let mut old: knowledge_items::ActiveModel = previous.into();
+            old.status = Set("withdrawn".to_owned());
+            old.withdrawn_at = Set(Some(timestamp.clone()));
+            old.updated_at = Set(timestamp.clone());
+            old.update(&transaction).await?;
+            knowledge_content_review_events::ActiveModel {
+                id: Set(case_service::new_id()),
+                knowledge_item_id: Set(previous_id),
+                content_version: Set(previous_version),
+                event_type: Set("withdrawn".to_owned()),
+                actor_user_id: Set(auth.id.clone()),
+                reason: Set("replaced by a reviewed correction version".to_owned()),
+                created_at: Set(timestamp),
+            }
+            .insert(&transaction)
+            .await?;
+        }
+    }
+    transaction.commit().await?;
     get_item(db, auth, id).await
 }
 
@@ -666,7 +863,10 @@ pub async fn search_learning_materials(
             continue;
         }
         let tags: Vec<String> = serde_json::from_str(&item.keywords_json).unwrap_or_default();
-        if category.is_some_and(|value| !item.category.eq_ignore_ascii_case(value.trim())) {
+        if category.is_some_and(|value| {
+            let value = value.trim();
+            !item.category.eq_ignore_ascii_case(value) && item.category_id.as_deref() != Some(value)
+        }) {
             continue;
         }
         if tag.is_some_and(|value| {
@@ -696,6 +896,40 @@ pub async fn search_learning_materials(
         Some(&scores),
     )
     .await?;
+    let mut results = results;
+    if let Some(query) = query {
+        for result in &mut results {
+            let terms = search_terms(query);
+            let mut fields = Vec::new();
+            if terms
+                .iter()
+                .any(|term| result.title.to_lowercase().contains(term))
+            {
+                fields.push("title".to_owned());
+            }
+            if terms
+                .iter()
+                .any(|term| result.content.to_lowercase().contains(term))
+            {
+                fields.push("content".to_owned());
+            }
+            if terms
+                .iter()
+                .any(|term| result.category.to_lowercase().contains(term))
+            {
+                fields.push("category".to_owned());
+            }
+            if terms.iter().any(|term| {
+                result
+                    .keywords
+                    .iter()
+                    .any(|tag| tag.to_lowercase().contains(term))
+            }) {
+                fields.push("tag".to_owned());
+            }
+            result.matched_fields = fields;
+        }
+    }
     // Never retain the user query itself: audit only the operation's minimal metadata.
     audit_events::ActiveModel {
         id: Set(case_service::new_id()), case_id: Set(None), actor: Set(auth.id.clone()),
@@ -733,6 +967,34 @@ pub async fn get_learning_material(
         .ok_or(ApiError::Internal)
 }
 
+pub async fn preview_learner_material(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    id: &str,
+) -> Result<KnowledgeSearchResultResponse, ApiError> {
+    require_admin(auth)?;
+    let item = find_item(db, id).await?;
+    let base = find_base(db, &item.knowledge_base_id).await?;
+    if base.status != "enabled"
+        || item.status != "published"
+        || item.effective_at > now()
+        || item.withdrawn_at.is_some()
+        || !matches!(
+            item.visibility.as_str(),
+            "learner" | "authenticated" | "public"
+        )
+    {
+        return Err(ApiError::NotFound(
+            "item is not visible to learners".to_owned(),
+        ));
+    }
+    results_with_images(db, vec![item], None)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(ApiError::Internal)
+}
+
 pub async fn search(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -742,6 +1004,11 @@ pub async fn search(
 ) -> Result<KnowledgeSearchResponse, ApiError> {
     let query = validate_query(query)?;
     let limit = validate_limit(limit)?;
+    if base_id == "learning-materials" {
+        let mut response = search_learning_materials(db, auth, Some(query), None, None).await?;
+        response.results.truncate(limit as usize);
+        return Ok(response);
+    }
     let base = find_base(db, base_id).await?;
     if base.status != "enabled" {
         return Err(ApiError::Validation(
@@ -809,14 +1076,74 @@ pub async fn search(
     Ok(KnowledgeSearchResponse { results })
 }
 
+/// Returns every governed keyword match without applying the search endpoint's
+/// presentation limit. This is intentionally used by the Q&A workflow so the
+/// model receives the complete matched corpus rather than an arbitrary top-N
+/// subset.
+async fn search_all_keyword_matches(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+    query: &str,
+) -> Result<KnowledgeSearchResponse, ApiError> {
+    let query = validate_query(query)?;
+    let base = find_base(db, base_id).await?;
+    if base.status != "enabled" {
+        return Err(ApiError::Validation(
+            "knowledge base is disabled".to_owned(),
+        ));
+    }
+    if !visible_to(auth, &base.visibility) {
+        return Err(ApiError::Forbidden(
+            "knowledge base is not visible to this account".to_owned(),
+        ));
+    }
+    let items = knowledge_items::Entity::find()
+        .filter(knowledge_items::Column::KnowledgeBaseId.eq(base_id))
+        .filter(knowledge_items::Column::Status.eq("published"))
+        .filter(knowledge_items::Column::EffectiveAt.lte(now()))
+        .filter(knowledge_items::Column::WithdrawnAt.is_null())
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|item| visible_to(auth, &item.visibility))
+        .filter_map(|item| score_item(&item, query).map(|score| (item, score)))
+        .collect::<Vec<_>>();
+    let mut items = items;
+    items.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.title.cmp(&b.0.title)));
+    let scores = items
+        .iter()
+        .map(|(item, score)| (item.id.clone(), *score))
+        .collect::<HashMap<_, _>>();
+    Ok(KnowledgeSearchResponse {
+        results: results_with_images(
+            db,
+            items.into_iter().map(|(item, _)| item).collect(),
+            Some(&scores),
+        )
+        .await?,
+    })
+}
+
 pub async fn chat(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     base_id: &str,
     query: &str,
-    limit: Option<u32>,
+    _limit: Option<u32>,
 ) -> Result<KnowledgeChatResponse, ApiError> {
-    let results = search(db, auth, base_id, query, limit).await?.results;
+    // Learner-facing answers must use the same governed keyword search as the
+    // learning center. This prevents the chat path from widening its corpus
+    // or bypassing category/tag/status filtering.
+    let results = if base_id == "learning-materials" {
+        search_learning_materials(db, auth, Some(query), None, None)
+            .await?
+            .results
+    } else {
+        search_all_keyword_matches(db, auth, base_id, query)
+            .await?
+            .results
+    };
     let sources = results
         .iter()
         .map(|result| KnowledgeChatSourceResponse {
@@ -851,7 +1178,50 @@ pub async fn chat_with_gateway(
     limit: Option<u32>,
     gateway: &AiGateway,
 ) -> Result<KnowledgeChatResponse, ApiError> {
-    let results = search(db, auth, base_id, query, limit).await?.results;
+    chat_with_gateway_filtered(db, auth, base_id, query, limit, None, None, gateway).await
+}
+
+pub async fn chat_with_gateway_filtered(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+    query: &str,
+    _limit: Option<u32>,
+    category: Option<&str>,
+    tag: Option<&str>,
+    gateway: &AiGateway,
+) -> Result<KnowledgeChatResponse, ApiError> {
+    let results = if base_id == "learning-materials" {
+        search_learning_materials(db, auth, Some(query), category, tag)
+            .await?
+            .results
+    } else {
+        // Q&A is deliberately unbounded: the legacy `limit` field remains
+        // accepted for old clients, but never drops a keyword match from the
+        // AI context.
+        search_all_keyword_matches(db, auth, base_id, query)
+            .await?
+            .results
+    };
+    audit_events::ActiveModel {
+        id: Set(case_service::new_id()),
+        case_id: Set(None),
+        actor: Set(auth.id.clone()),
+        action: Set("knowledge.answer_requested".to_owned()),
+        entity_type: Set("knowledge_base".to_owned()),
+        entity_id: Set(base_id.to_owned()),
+        metadata_json: Set(Some(
+            json!({
+                "source_count": results.len(),
+                "has_category_filter": category.is_some(),
+                "has_tag_filter": tag.is_some(),
+            })
+            .to_string(),
+        )),
+        created_at: Set(now()),
+    }
+    .insert(db)
+    .await?;
     let sources = results
         .iter()
         .map(|result| KnowledgeChatSourceResponse {
@@ -1013,6 +1383,7 @@ pub async fn preview_csv(
                 source_name: Some(source_name.to_owned()),
                 source_url: (!source_url.is_empty()).then(|| source_url.to_owned()),
                 visibility: visibility.to_owned(),
+                previous_version_id: None,
                 images: Vec::new(),
             },
             &base.visibility,
@@ -1111,6 +1482,11 @@ pub async fn preview_csv(
         )
         .exec(&transaction)
         .await?;
+    case_service::write_audit(
+        &transaction, None, auth, "knowledge.import_previewed", "knowledge_import_batch",
+        batch_id.clone(),
+        Some(json!({ "knowledge_base_id": base_id, "total_rows": rows.len(), "valid_rows": valid_rows, "invalid_rows": invalid_rows })),
+    ).await?;
     transaction.commit().await?;
     get_import(db, auth, &batch_id).await
 }
@@ -1296,6 +1672,11 @@ pub async fn confirm_import(
             .exec(&transaction)
             .await?;
     }
+    case_service::write_audit(
+        &transaction, None, auth, "knowledge.import_confirmed", "knowledge_import_batch",
+        batch_id.to_owned(),
+        Some(json!({ "knowledge_base_id": batch.knowledge_base_id, "total_rows": batch.total_rows, "valid_rows": batch.valid_rows, "invalid_rows": batch.invalid_rows })),
+    ).await?;
     transaction.commit().await?;
     get_import(db, auth, batch_id).await
 }
@@ -1348,6 +1729,18 @@ pub async fn cancel_import(
         };
         return Err(ApiError::Conflict(message.to_owned()));
     }
+    case_service::write_audit(
+        &transaction,
+        None,
+        auth,
+        "knowledge.import_cancelled",
+        "knowledge_import_batch",
+        batch_id.to_owned(),
+        Some(
+            json!({ "knowledge_base_id": batch.knowledge_base_id, "total_rows": batch.total_rows }),
+        ),
+    )
+    .await?;
     transaction.commit().await?;
     get_import(db, auth, batch_id).await
 }
@@ -1411,6 +1804,7 @@ async fn results_with_images(
             source_name: item.source_name,
             source_url: item.source_url,
             status: item.status,
+            matched_fields: Vec::new(),
             images: images_by_item.remove(&item.id).unwrap_or_default(),
             attachments: attachments_by_item.remove(&item.id).unwrap_or_default(),
         })
@@ -1443,6 +1837,24 @@ async fn find_item(db: &DatabaseConnection, id: &str) -> Result<knowledge_items:
         .await?
         .ok_or_else(|| ApiError::NotFound("knowledge item was not found".to_owned()))
 }
+async fn ensure_active_category_term(
+    db: &DatabaseConnection,
+    base_id: &str,
+    term_id: &str,
+) -> Result<(), ApiError> {
+    let term = knowledge_terms::Entity::find_by_id(term_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Validation("category_id does not reference a category term".to_owned())
+        })?;
+    if term.knowledge_base_id != base_id || term.kind != "category" || term.status != "active" {
+        return Err(ApiError::Validation(
+            "category_id must reference an active category in this knowledge base".to_owned(),
+        ));
+    }
+    Ok(())
+}
 fn base_response(model: knowledge_bases::Model) -> Result<KnowledgeBaseResponse, ApiError> {
     Ok(KnowledgeBaseResponse {
         id: model.id,
@@ -1453,6 +1865,18 @@ fn base_response(model: knowledge_bases::Model) -> Result<KnowledgeBaseResponse,
         created_at: model.created_at,
         updated_at: model.updated_at,
     })
+}
+fn term_response(model: knowledge_terms::Model) -> KnowledgeTermResponse {
+    KnowledgeTermResponse {
+        id: model.id,
+        knowledge_base_id: model.knowledge_base_id,
+        kind: model.kind,
+        name: model.name,
+        status: model.status,
+        created_by_user_id: model.created_by_user_id,
+        created_at: model.created_at,
+        updated_at: model.updated_at,
+    }
 }
 fn image_response(image: knowledge_images::Model) -> Result<KnowledgeImageResponse, ApiError> {
     Ok(KnowledgeImageResponse {
@@ -1617,7 +2041,6 @@ fn score_item(item: &knowledge_items::Model, query: &str) -> Option<f64> {
     let keywords: Vec<String> = serde_json::from_str(&item.keywords_json).unwrap_or_default();
     let title = item.title.to_lowercase();
     let category = item.category.to_lowercase();
-    let summary = item.summary.to_lowercase();
     let content = item.content.to_lowercase();
     let mut score = 0.0;
     for term in terms {
@@ -1630,9 +2053,6 @@ fn score_item(item: &knowledge_items::Model, query: &str) -> Option<f64> {
                 .any(|word| word.to_lowercase().contains(&term))
         {
             score += 4.0;
-        }
-        if summary.contains(&term) {
-            score += 2.0;
         }
         if content.contains(&term) {
             score += 1.0;
@@ -1774,6 +2194,7 @@ fn merge_item(
         source_name: request.source_name.or(Some(existing.source_name)),
         source_url: request.source_url.or(existing.source_url),
         visibility: request.visibility.unwrap_or(existing.visibility),
+        previous_version_id: None,
         images: images.clone().unwrap_or_default(),
     };
     let validated = validated_item(input, default_visibility)?;
@@ -1866,10 +2287,14 @@ pub fn build_context(results: &[KnowledgeSearchResultResponse]) -> String {
         .enumerate()
         .map(|(index, result)| {
             format!(
-                "[Knowledge Source {}]\nid: {}\ntitle: {}\ncontent: {}\nsource: {}",
+                "[Knowledge Source {}]\nid: {}\nversion: {}\ntitle: {}\nsummary: {}\ncategory: {}\ntags: {}\ncontent: {}\nsource: {}",
                 index + 1,
                 result.knowledge_item_id,
+                result.version,
                 result.title,
+                result.summary,
+                result.category,
+                result.keywords.join(", "),
                 result.content,
                 result.source_name
             )
@@ -1898,6 +2323,7 @@ mod tests {
             images: Vec::new(),
             attachments: Vec::new(),
             status: "published".to_owned(),
+            matched_fields: Vec::new(),
         };
         let context = build_context(&[result]);
         assert!(context.contains("id: item-1"));

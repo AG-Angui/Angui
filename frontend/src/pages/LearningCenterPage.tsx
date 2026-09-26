@@ -1,14 +1,18 @@
 import { Button, Chip, Input, Spinner } from "@heroui/react";
-import { BookOpen, WifiOff } from "lucide-react";
+import { Bookmark, BookOpen, Clock3, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   getPublicPreventionCard,
   listLearningCategories,
   listLearningQuestions,
   listLearningResources,
+  listLearningAnswers,
+  listWrongLearningAnswers,
+  getLearningProgress,
   searchLearningKnowledge,
   askKnowledge,
   downloadKnowledgeImage,
+  downloadKnowledgeAttachment,
   submitLearningCategoryProposal,
   submitLearningAnswer,
   submitLearningResourceDraft,
@@ -18,6 +22,8 @@ import type {
   LearningCategory,
   LearningQuestion,
   LearningResource,
+  LearningAnswerHistory,
+  LearningProgress,
   KnowledgeAnswer,
   KnowledgeImage,
   KnowledgeSearchResult,
@@ -74,14 +80,59 @@ export function LearningCenterPage() {
   const [results, setResults] = useState<
     Record<string, { isCorrect: boolean; explanation: string; score: number; maxScore: number }>
   >({});
+  const [answerHistory, setAnswerHistory] = useState<LearningAnswerHistory[]>([]);
+  const [wrongAnswers, setWrongAnswers] = useState<LearningAnswerHistory[]>([]);
+  const [progress, setProgress] = useState<LearningProgress | null>(null);
   const [answeringQuestion, setAnsweringQuestion] = useState("");
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const [knowledgeCategory, setKnowledgeCategory] = useState("");
+  const [knowledgeTag, setKnowledgeTag] = useState("");
   const [knowledgeResults, setKnowledgeResults] = useState<KnowledgeSearchResult[]>([]);
+  const [knowledgeCatalogue, setKnowledgeCatalogue] = useState<KnowledgeSearchResult[]>([]);
+  const [recentKnowledgeIds, setRecentKnowledgeIds] = useState<string[]>([]);
+  const [favoriteKnowledgeIds, setFavoriteKnowledgeIds] = useState<string[]>([]);
   const [knowledgeAnswer, setKnowledgeAnswer] = useState<KnowledgeAnswer | null>(null);
   const [knowledgeBusy, setKnowledgeBusy] = useState(false);
   const [knowledgeMessage, setKnowledgeMessage] = useState("");
   const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<Record<string, string>>({});
   const [knowledgeImageFailures, setKnowledgeImageFailures] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const readIds = (kind: string): string[] => {
+      try {
+        const value: unknown = JSON.parse(localStorage.getItem(`angui:knowledge:${user.id}:${kind}`) ?? "[]");
+        return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string").slice(0, 30) : [];
+      } catch {
+        return [];
+      }
+    };
+    setRecentKnowledgeIds(readIds("recent"));
+    setFavoriteKnowledgeIds(readIds("favorite"));
+  }, [user?.id]);
+
+  const rememberKnowledge = (id: string) => {
+    if (!user?.id) return;
+    setRecentKnowledgeIds((current) => {
+      const next = [id, ...current.filter((value) => value !== id)].slice(0, 30);
+      localStorage.setItem(`angui:knowledge:${user.id}:recent`, JSON.stringify(next));
+      return next;
+    });
+  };
+  const toggleKnowledgeFavorite = (id: string) => {
+    if (!user?.id) return;
+    setFavoriteKnowledgeIds((current) => {
+      const next = current.includes(id) ? current.filter((value) => value !== id) : [id, ...current].slice(0, 30);
+      localStorage.setItem(`angui:knowledge:${user.id}:favorite`, JSON.stringify(next));
+      return next;
+    });
+  };
+  const showSavedKnowledge = (ids: string[]) => {
+    const visible = new Map(knowledgeCatalogue.map((item) => [item.knowledge_item_id, item]));
+    setKnowledgeResults(ids.flatMap((id) => visible.has(id) ? [visible.get(id)!] : []));
+    setKnowledgeAnswer(null);
+    setKnowledgeMessage("");
+  };
 
   useEffect(() => {
     const images = new Map<string, { itemId: string; imageId: string }>();
@@ -139,9 +190,9 @@ export function LearningCenterPage() {
   }, [knowledgeAnswer, knowledgeResults, token]);
 
   const searchKnowledge = () => {
-    if (!token || !knowledgeQuery.trim()) return;
+    if (!token) return;
     setKnowledgeBusy(true); setKnowledgeAnswer(null); setKnowledgeMessage("");
-    void searchLearningKnowledge(token, { query: knowledgeQuery }).then((response) => {
+    void searchLearningKnowledge(token, { query: knowledgeQuery, category_id: knowledgeCategory, tag: knowledgeTag }).then((response) => {
       setKnowledgeResults(response.results);
       if (response.results.length === 0) setKnowledgeMessage("没有匹配资料。可尝试更具体的关键词或切换分类。");
     }).catch((cause) => setKnowledgeMessage(messageFrom(cause))).finally(() => setKnowledgeBusy(false));
@@ -149,7 +200,7 @@ export function LearningCenterPage() {
   const askFromKnowledge = () => {
     if (!token || !knowledgeQuery.trim()) return;
     setKnowledgeBusy(true); setKnowledgeMessage("");
-    void askKnowledge(token, knowledgeQuery).then(setKnowledgeAnswer).catch((cause) => setKnowledgeMessage(messageFrom(cause))).finally(() => setKnowledgeBusy(false));
+    void askKnowledge(token, knowledgeQuery, { category: knowledgeCategory, tag: knowledgeTag }).then(setKnowledgeAnswer).catch((cause) => setKnowledgeMessage(messageFrom(cause))).finally(() => setKnowledgeBusy(false));
   };
 
   const load = useCallback(async () => {
@@ -167,6 +218,26 @@ export function LearningCenterPage() {
       ]);
       setResources(nextResources);
       setQuestions(nextQuestions);
+      const catalogue = await Promise.resolve(searchLearningKnowledge(token)).catch(() => null);
+      setKnowledgeCatalogue(catalogue?.results ?? []);
+      if (typeof listLearningAnswers === "function" && typeof listWrongLearningAnswers === "function" && typeof getLearningProgress === "function") {
+        const [history, wrong, nextProgress] = await Promise.all([
+          listLearningAnswers(token),
+          listWrongLearningAnswers(token),
+          getLearningProgress(token),
+        ]);
+        setAnswerHistory(history);
+        setWrongAnswers(wrong);
+        setProgress(nextProgress);
+        const latest = new Map<string, LearningAnswerHistory>();
+        for (const answer of history) if (!latest.has(answer.question_id)) latest.set(answer.question_id, answer);
+        setResults(Object.fromEntries([...latest.values()].map((answer) => [answer.question_id, {
+          isCorrect: answer.is_correct,
+          explanation: answer.question_snapshot?.explanation ?? "历史解析不可用",
+          score: answer.score,
+          maxScore: answer.max_score,
+        }])));
+      }
       // Categories are progressive enhancement for legacy deployments. A
       // missing category endpoint must not hide already published resources.
       const nextCategories =
@@ -201,7 +272,7 @@ export function LearningCenterPage() {
     if (!token) return;
     setAnsweringQuestion(questionId);
     void submitLearningAnswer(token, questionId, optionId)
-      .then((result) =>
+      .then((result) => {
         setResults((current) => ({
           ...current,
           [questionId]: {
@@ -210,8 +281,11 @@ export function LearningCenterPage() {
             score: result.score,
             maxScore: result.max_score,
           },
-        })),
-      )
+        }));
+        void Promise.all([listLearningAnswers(token), listWrongLearningAnswers(token), getLearningProgress(token)])
+          .then(([history, wrong, nextProgress]) => { setAnswerHistory(history); setWrongAnswers(wrong); setProgress(nextProgress); })
+          .catch((cause) => setError(messageFrom(cause)));
+      })
       .catch((cause) => setError(messageFrom(cause)))
       .finally(() => setAnsweringQuestion(""));
   };
@@ -253,6 +327,21 @@ export function LearningCenterPage() {
   };
 
   const availableTags = Array.from(new Set(resources.flatMap((resource) => resource.tags))).sort();
+  const openKnowledgeAttachment = (itemId: string, attachmentId: string, fileName: string) => {
+    if (!token) return;
+    void downloadKnowledgeAttachment(token, itemId, attachmentId)
+      .then((blob) => { const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = fileName; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 60_000); })
+      .catch((cause) => setKnowledgeMessage(messageFrom(cause)));
+  };
+  const knowledgeCategories = Array.from(new Set(knowledgeCatalogue.map((result) => result.category).filter(Boolean))).sort();
+  const knowledgeTags = Array.from(new Set(knowledgeCatalogue.flatMap((result) => result.keywords))).sort();
+  const activeQuestionIds = new Set(questions.map((question) => question.id));
+  const recommendedQuestion = wrongAnswers.find((answer) => activeQuestionIds.has(answer.question_id))?.question_id
+    ?? questions.find((question) => !answerHistory.some((answer) => answer.question_id === question.id))?.id;
+  const recommendedKnowledge = knowledgeCatalogue.find((item) => !recentKnowledgeIds.includes(item.knowledge_item_id));
+  const jumpToQuestion = () => {
+    if (recommendedQuestion) document.getElementById(`learning-question-${recommendedQuestion}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
   const renderKnowledgeImages = (
     title: string,
     images: KnowledgeImage[],
@@ -305,10 +394,28 @@ export function LearningCenterPage() {
         </div>
       </header>
       <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="knowledge-search-title">
-        <header className="border-b border-slate-200 px-5 py-4"><h2 id="knowledge-search-title" className="m-0 text-base font-bold text-slate-950">知识检索与问答</h2><p className="mb-0 mt-1 text-sm text-slate-600">仅匹配已发布、已脱敏的知识标题、正文、分类和标签；AI 回答只引用匹配资料。</p></header>
-        <div className="flex gap-2 p-5"><Input aria-label="搜索知识" value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} placeholder="输入关键词或问题" maxLength={1000} /><Button onPress={searchKnowledge} isDisabled={knowledgeBusy || !knowledgeQuery.trim()}>{knowledgeBusy ? <Spinner size="sm" /> : "搜索"}</Button><Button variant="secondary" onPress={askFromKnowledge} isDisabled={knowledgeBusy || !knowledgeQuery.trim()}>基于资料问答</Button></div>
+        <header className="border-b border-slate-200 px-5 py-4"><h2 id="knowledge-search-title" className="m-0 text-base font-bold text-slate-950">知识检索与问答</h2><p className="mb-0 mt-1 text-sm text-slate-600">先按关键词匹配已发布、已脱敏的资料；问答只使用本次命中的资料作为上下文。</p></header>
+        <div className="grid gap-2 p-5 sm:grid-cols-[1fr_10rem_10rem_auto_auto]">
+          <Input aria-label="搜索知识" value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} placeholder="输入关键词或问题" maxLength={1000} />
+          <select aria-label="知识分类筛选" className="h-10 rounded-md border border-slate-300 bg-white px-3" value={knowledgeCategory} onChange={(event) => setKnowledgeCategory(event.target.value)}><option value="">全部分类</option>{knowledgeCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select>
+          <select aria-label="知识标签筛选" className="h-10 rounded-md border border-slate-300 bg-white px-3" value={knowledgeTag} onChange={(event) => setKnowledgeTag(event.target.value)}><option value="">全部标签</option>{knowledgeTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>
+          <Button onPress={searchKnowledge} isDisabled={knowledgeBusy}>{knowledgeBusy ? <Spinner size="sm" /> : "搜索"}</Button>
+          <Button variant="secondary" onPress={askFromKnowledge} isDisabled={knowledgeBusy || !knowledgeQuery.trim()}>基于资料问答</Button>
+        </div>
+        <div className="flex flex-wrap gap-2 px-5 pb-4">
+          <Button size="sm" variant="secondary" onPress={() => showSavedKnowledge(recentKnowledgeIds)} isDisabled={!recentKnowledgeIds.length}><Clock3 size={15} />最近查看</Button>
+          <Button size="sm" variant="secondary" onPress={() => showSavedKnowledge(favoriteKnowledgeIds)} isDisabled={!favoriteKnowledgeIds.length}><Bookmark size={15} />我的收藏</Button>
+        </div>
         {knowledgeMessage && <p className="m-0 px-5 pb-4 text-sm text-amber-800" role="status">{knowledgeMessage}</p>}
-        {knowledgeResults.length > 0 && <div className="divide-y divide-slate-100">{knowledgeResults.map((result) => <article key={result.knowledge_item_id} className="px-5 py-4"><h3 className="m-0 text-sm font-semibold">{result.title}</h3><p className="mb-0 mt-1 text-sm text-slate-600">{result.summary}</p><p className="mb-0 mt-2 text-xs text-slate-500">匹配字段：标题、正文、分类或标签 · #{result.category} · {result.keywords.map((tag) => `#${tag}`).join(" ")}</p>{renderKnowledgeImages(result.title, result.images)}</article>)}</div>}
+        {knowledgeResults.length > 0 && <div className="divide-y divide-slate-100">{knowledgeResults.map((result) =>
+          <article key={result.knowledge_item_id} className="px-5 py-4">
+            <div className="flex items-start justify-between gap-2"><h3 className="m-0 text-sm font-semibold">{result.title}</h3><button type="button" title={favoriteKnowledgeIds.includes(result.knowledge_item_id) ? "取消收藏" : "收藏资料"} aria-label={favoriteKnowledgeIds.includes(result.knowledge_item_id) ? "取消收藏" : "收藏资料"} aria-pressed={favoriteKnowledgeIds.includes(result.knowledge_item_id)} className="shrink-0 text-slate-600 hover:text-brand-700" onClick={() => toggleKnowledgeFavorite(result.knowledge_item_id)}><Bookmark size={17} fill={favoriteKnowledgeIds.includes(result.knowledge_item_id) ? "currentColor" : "none"} /></button></div>
+            <p className="mb-0 mt-1 text-sm text-slate-600">{result.summary}</p>
+            <p className="mb-0 mt-2 text-xs text-slate-500">{Boolean(result.matched_fields?.length) && `匹配字段：${result.matched_fields.join("、")} · `}#{result.category} · {result.keywords.map((tag) => `#${tag}`).join(" ")}</p>
+            <details className="mt-3 text-sm" onToggle={(event) => { if (event.currentTarget.open) rememberKnowledge(result.knowledge_item_id); }}><summary className="cursor-pointer text-brand-700">查看正文与附件</summary><p className="mt-2 whitespace-pre-wrap leading-6 text-slate-700">{result.content}</p>{result.attachments.length > 0 && <ul className="mt-2 list-disc pl-5 text-xs text-slate-600">{result.attachments.map((attachment) => <li key={attachment.id}><button type="button" className="text-brand-700 underline" onClick={() => openKnowledgeAttachment(result.knowledge_item_id, attachment.id, attachment.file_name)}>下载 {attachment.file_name}</button></li>)}</ul>}</details>
+            {renderKnowledgeImages(result.title, result.images)}
+          </article>
+        )}</div>}
         {knowledgeAnswer && <div className="m-5 rounded-md border border-slate-200 bg-slate-50 p-4"><p className="m-0 text-xs text-slate-600" role="status">{knowledgeAnswerStatus}</p><p className="mb-0 mt-3 whitespace-pre-wrap text-sm leading-6">{knowledgeAnswer.answer}</p><p className="mb-0 mt-3 text-xs text-slate-600">来源：{knowledgeAnswer.sources.map((source) => `${source.title} v${source.version}`).join("、") || "资料不足"}</p>{knowledgeAnswer.sources.map((source) => <div key={source.knowledge_item_id}>{renderKnowledgeImages(source.title, source.images)}</div>)}<p className="mb-0 mt-3 text-xs text-slate-600">{knowledgeAnswer.human_review_notice}</p></div>}
       </section>
       <section
@@ -504,7 +611,7 @@ export function LearningCenterPage() {
           ) : (
             <div className="divide-y divide-slate-100">
               {questions.map((question) => (
-                <article key={question.id} className="px-5 py-4">
+                <article key={question.id} id={`learning-question-${question.id}`} className="px-5 py-4">
                   <p className="m-0 text-sm font-semibold leading-6 text-slate-950">
                     {question.prompt}
                   </p>
@@ -515,8 +622,7 @@ export function LearningCenterPage() {
                         className="justify-start! text-left"
                         variant="secondary"
                         isDisabled={
-                          answeringQuestion === question.id ||
-                          Boolean(results[question.id])
+                          answeringQuestion === question.id
                         }
                         onPress={() => answerQuestion(question.id, option.id)}
                       >
@@ -539,6 +645,16 @@ export function LearningCenterPage() {
               ))}
             </div>
           )}
+        </section>
+        <section className="border-y border-slate-200 bg-white" aria-labelledby="learning-progress-title">
+          <header className="border-b border-slate-200 px-5 py-4"><h2 id="learning-progress-title" className="m-0 text-base font-bold">学习记录</h2></header>
+          <div className="px-5 py-4 text-sm text-slate-700">
+            <p className="m-0">已答 {progress?.answered_questions ?? 0} 题 · 正确 {progress?.correct_answers ?? 0} 题 · 正确率 {Math.round((progress?.accuracy ?? 0) * 100)}%</p>
+            <p className="mb-0 mt-2">错题 {wrongAnswers.length} 道 · 历史作答 {answerHistory.length} 次</p>
+            {(recommendedQuestion || recommendedKnowledge) && <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3"><span className="text-xs font-semibold text-slate-600">下一步</span>{recommendedKnowledge && <Button size="sm" variant="secondary" onPress={() => { setKnowledgeResults([recommendedKnowledge]); document.getElementById("knowledge-search-title")?.scrollIntoView({ behavior: "smooth" }); }}>阅读 {recommendedKnowledge.title}</Button>}{recommendedQuestion && <Button size="sm" variant="secondary" onPress={jumpToQuestion}>练习 {questions.find((question) => question.id === recommendedQuestion)?.prompt ?? "待练习题目"}</Button>}</div>}
+            {wrongAnswers.length > 0 && <ul className="mt-3 list-disc pl-5">{wrongAnswers.map((answer) => <li key={answer.id}>{answer.question_snapshot?.prompt ?? answer.question_id}（v{answer.question_version}）</li>)}</ul>}
+            {answerHistory.length > 0 && <details className="mt-3"><summary className="cursor-pointer">查看历史作答</summary><ul className="mt-2 space-y-2">{answerHistory.map((answer) => <li key={answer.id}>{answer.question_snapshot?.prompt ?? answer.question_id} · {answer.is_correct ? "正确" : "错误"} · {formatDate(answer.created_at)}</li>)}</ul></details>}
+          </div>
         </section>
         <section className="border-y border-slate-200 bg-white" aria-labelledby="practice-help-title">
           <header className="border-b border-slate-200 px-5 py-4">

@@ -73,7 +73,7 @@ async fn family_and_commander_revision_updates_while_volunteers_are_denied() {
         test::TestRequest::patch()
             .uri(&format!("/api/cases/{case_id}/elder-profile"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {family}")))
-            .set_json(serde_json::json!({ "status": "closed" }))
+            .set_json(serde_json::json!({ "status": "ended", "reason": "已完成现场行动" }))
             .to_request(),
     )
     .await;

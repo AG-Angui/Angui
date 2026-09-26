@@ -1,0 +1,1 @@
+DROP INDEX idx_knowledge_items_previous_version_unique ON knowledge_items;

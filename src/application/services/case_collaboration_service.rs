@@ -13,9 +13,9 @@ use crate::{
     ai_gateway::{AiCapability, AiExecutionResult, AiPurpose, AiRequest, AiTaskStatus, DataLevel},
     amap_service::{Coordinate, PoiSearch, RouteEstimate, RouteMode},
     entities::{
-        archive_drafts, archive_review_materials, case_places, case_source_records, cases,
-        clue_drafts, clues, knowledge_bases, knowledge_content_review_events, knowledge_items,
-        summary_drafts, tasks,
+        archive_drafts, archive_review_materials, audit_events, case_source_records, cases,
+        clue_drafts, clues, collaboration_spaces, elder_profiles, knowledge_bases,
+        knowledge_content_review_events, knowledge_items, space_messages, summary_drafts, tasks,
     },
     error::ApiError,
     models::{
@@ -148,10 +148,7 @@ pub async fn create_archive_draft(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
-    if !matches!(
-        case.status.as_str(),
-        "ended" | "reviewing" | "archived" | "resolved" | "closed"
-    ) {
+    if !matches!(case.status.as_str(), "ended" | "reviewing" | "archived") {
         return Err(ApiError::Conflict(
             "archive drafts can only be created for resolved or closed cases".to_owned(),
         ));
@@ -170,6 +167,9 @@ pub async fn create_archive_draft(
     let source_scope = vec![
         "confirmed_clue_review_material".to_owned(),
         "completed_task_review_material".to_owned(),
+        "case_source_record_review_material".to_owned(),
+        "collaboration_message_review_material".to_owned(),
+        "decision_audit_review_material".to_owned(),
     ];
     let confirmed_clue_material = clues::Entity::find()
         .filter(clues::Column::CaseId.eq(case_id))
@@ -187,9 +187,60 @@ pub async fn create_archive_draft(
         .into_iter()
         .map(|task| format!("completed task: {}", task.title))
         .collect::<Vec<_>>();
+    let communication_material = case_source_records::Entity::find()
+        .filter(case_source_records::Column::CaseId.eq(case_id))
+        .all(&transaction)
+        .await?
+        .into_iter()
+        .map(|record| format!("case communication [{}]: {}", record.id, record.content))
+        .collect::<Vec<_>>();
+    let space_ids = collaboration_spaces::Entity::find()
+        .filter(collaboration_spaces::Column::CaseId.eq(case_id))
+        .all(&transaction)
+        .await?
+        .into_iter()
+        .map(|space| space.id)
+        .collect::<Vec<_>>();
+    let space_material = if space_ids.is_empty() {
+        Vec::new()
+    } else {
+        space_messages::Entity::find()
+            .filter(space_messages::Column::SpaceId.is_in(space_ids))
+            .filter(space_messages::Column::RecalledAt.is_null())
+            .all(&transaction)
+            .await?
+            .into_iter()
+            .map(|message| {
+                format!(
+                    "collaboration message [{}]: {}",
+                    message.id, message.content
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let decision_material = audit_events::Entity::find()
+        .filter(audit_events::Column::CaseId.eq(case_id))
+        .all(&transaction)
+        .await?
+        .into_iter()
+        .filter(|event| {
+            event.action.contains("reviewed") || event.action.contains("status_changed")
+        })
+        .map(|event| {
+            format!(
+                "decision [{}]: {} {}",
+                event.id,
+                event.action,
+                event.metadata_json.unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>();
     let raw_material = confirmed_clue_material
         .into_iter()
         .chain(task_material)
+        .chain(communication_material)
+        .chain(space_material)
+        .chain(decision_material)
         .collect::<Vec<_>>()
         .join("\n");
     let timestamp = now();
@@ -473,20 +524,32 @@ pub async fn review_archive_draft(
 ) -> Result<ArchiveDraftResponse, ApiError> {
     require_admin(auth)?;
     let action = request.action.trim().to_lowercase();
-    if !matches!(action.as_str(), "publish" | "reject" | "withdraw") {
+    if !matches!(
+        action.as_str(),
+        "approve" | "publish" | "reject" | "withdraw"
+    ) {
         return Err(ApiError::Validation(
-            "action must be publish, reject, or withdraw".to_owned(),
+            "action must be approve, publish, reject, or withdraw".to_owned(),
         ));
     }
     let reason = required_text("reason", request.reason, 1_000)?;
+    if action == "approve" && request.confirm_retention != Some(true) {
+        return Err(ApiError::Validation(
+            "archive retention and access scope must be explicitly confirmed".to_owned(),
+        ));
+    }
     let transaction = db.begin().await?;
     let existing = archive_drafts::Entity::find_by_id(draft_id)
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("archive draft was not found".to_owned()))?;
+    let case = cases::Entity::find_by_id(&existing.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
     let transition_allowed = matches!(
         (existing.status.as_str(), action.as_str()),
-        ("pending_review", "publish" | "reject") | ("published", "withdraw")
+        ("pending_review", "approve" | "publish" | "reject") | ("published", "withdraw")
     );
     if !transition_allowed {
         return Err(ApiError::Conflict(
@@ -503,9 +566,38 @@ pub async fn review_archive_draft(
             "archive draft is already linked to a learning material".to_owned(),
         ));
     }
+    if action == "approve" && existing.reviewed_by_user_id.is_some() {
+        return Err(ApiError::Conflict(
+            "archive draft is already approved".to_owned(),
+        ));
+    }
+    if action == "approve" && case.status != "reviewing" {
+        return Err(ApiError::Conflict(
+            "archive material may only be approved during case review".to_owned(),
+        ));
+    }
+    if action == "reject" && case.status == "archived" {
+        return Err(ApiError::Conflict(
+            "an archived case's approved material cannot be rejected; withdraw publication instead"
+                .to_owned(),
+        ));
+    }
+    if action == "publish" {
+        if existing.reviewed_by_user_id.is_none() {
+            return Err(ApiError::Conflict(
+                "archive draft requires independent approval before publication".to_owned(),
+            ));
+        }
+        if case.status != "archived" {
+            return Err(ApiError::Conflict(
+                "case must be archived before learner publication".to_owned(),
+            ));
+        }
+    }
     let next_version = existing.version.checked_add(1).ok_or(ApiError::Internal)?;
     let timestamp = now();
     let next_status = match action.as_str() {
+        "approve" => "pending_review",
         "publish" => "published",
         "reject" => "rejected",
         "withdraw" => "withdrawn",
@@ -523,6 +615,19 @@ pub async fn review_archive_draft(
     };
     let mut knowledge_item_id = existing.knowledge_item_id.clone();
     if action == "publish" {
+        let elder = elder_profiles::Entity::find()
+            .filter(elder_profiles::Column::CaseId.eq(&existing.case_id))
+            .one(&transaction)
+            .await?;
+        validate_archive_learning_content(
+            &existing.content,
+            &case.id,
+            &case.case_code,
+            elder.as_ref().map(|value| value.display_name.as_str()),
+            elder
+                .as_ref()
+                .and_then(|value| value.last_seen_location.as_deref()),
+        )?;
         let learning_base = knowledge_bases::Entity::find_by_id("learning-materials")
             .one(&transaction)
             .await?
@@ -667,6 +772,7 @@ pub async fn review_archive_draft(
             "status": model.status,
             "usage_scope": model.usage_scope,
             "retention_status": model.retention_status,
+            "retention_confirmed": action == "approve" && request.confirm_retention == Some(true),
             "reason_length": reason.chars().count(),
             "version": model.version,
         })),
@@ -674,6 +780,58 @@ pub async fn review_archive_draft(
     .await?;
     transaction.commit().await?;
     archive_draft_response(model)
+}
+
+fn validate_archive_learning_content(
+    content: &str,
+    case_id: &str,
+    case_code: &str,
+    elder_name: Option<&str>,
+    last_seen_location: Option<&str>,
+) -> Result<(), ApiError> {
+    let normalized = content.to_lowercase();
+    let markers = [
+        (Some(case_id), 2),
+        (Some(case_code), 2),
+        (elder_name, 2),
+        (last_seen_location, 6),
+    ];
+    if markers.into_iter().any(|(marker, min_length)| {
+        marker.is_some_and(|marker| {
+            let marker = marker.trim();
+            marker.chars().count() >= min_length && normalized.contains(&marker.to_lowercase())
+        })
+    }) {
+        return Err(ApiError::Conflict(
+            "archive learning content still contains case-identifying material".to_owned(),
+        ));
+    }
+    if content
+        .split(|character: char| !character.is_ascii_digit())
+        .any(|digits| digits.len() == 11 && digits.starts_with('1'))
+    {
+        return Err(ApiError::Conflict(
+            "archive learning content still contains a phone number".to_owned(),
+        ));
+    }
+    let precise_coordinate_count = content
+        .split(|character: char| {
+            !character.is_ascii_digit() && character != '.' && character != '-'
+        })
+        .filter(|part| {
+            part.split_once('.')
+                .is_some_and(|(_, fraction)| fraction.len() >= 4)
+        })
+        .filter_map(|part| part.parse::<f64>().ok())
+        .filter(|value| value.abs() <= 180.0)
+        .take(2)
+        .count();
+    if precise_coordinate_count == 2 {
+        return Err(ApiError::Conflict(
+            "archive learning content still contains precise coordinates".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Returns archive drafts for the administrator review queue. This is kept
@@ -1695,25 +1853,6 @@ async fn authorized_center(
             latitude: clue.latitude.ok_or(ApiError::Internal)?,
         });
     }
-    let mut legacy_places = case_places::Entity::find()
-        .filter(case_places::Column::CaseId.eq(case_id))
-        .filter(case_places::Column::ReviewStatus.eq("confirmed"))
-        .filter(case_places::Column::Longitude.is_not_null())
-        .filter(case_places::Column::Latitude.is_not_null());
-    if role == CaseRole::Volunteer {
-        legacy_places =
-            legacy_places.filter(case_places::Column::Visibility.is_in(["public", "confirmed"]));
-    }
-    if let Some(place) = legacy_places
-        .order_by_desc(case_places::Column::UpdatedAt)
-        .one(db)
-        .await?
-    {
-        return Ok(Coordinate {
-            longitude: place.longitude.ok_or(ApiError::Internal)?,
-            latitude: place.latitude.ok_or(ApiError::Internal)?,
-        });
-    }
     Err(ApiError::Conflict(
         "no authorized coordinate is available; use the task area text and contact the commander"
             .to_owned(),
@@ -2425,9 +2564,46 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Coordinate, issue_poi_selection_token, selected_poi_destination};
+    use super::{
+        Coordinate, issue_poi_selection_token, selected_poi_destination,
+        validate_archive_learning_content,
+    };
 
     const SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn archive_publication_rejects_known_identifiers_and_precise_locations() {
+        for content in [
+            "Case case-123 was reviewed.",
+            "Case AG-00000053 was reviewed.",
+            "张三的案件复盘",
+            "最后在虚构公园北门出现",
+            "联系 13800138000 核实",
+            "坐标 117.2272, 31.8206",
+        ] {
+            assert!(
+                validate_archive_learning_content(
+                    content,
+                    "case-123",
+                    "AG-00000053",
+                    Some("张三"),
+                    Some("虚构公园北门")
+                )
+                .is_err(),
+                "sensitive archive content should not publish: {content}"
+            );
+        }
+        assert!(
+            validate_archive_learning_content(
+                "经过人工复核的匿名案例经验，可用于学习。",
+                "case-123",
+                "AG-00000053",
+                Some("张三"),
+                Some("虚构公园北门")
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn poi_selection_token_is_bound_to_its_case_user_and_destination() {
