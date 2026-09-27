@@ -585,7 +585,7 @@ function CaseDetailView({
     detail.status === "active"
       ? ["active", "ended"]
       : detail.status === "ended"
-        ? ["ended", "reviewing", "archived", "active"]
+        ? ["ended", "reviewing", "active"]
         : detail.status === "reviewing"
           ? ["reviewing", "archived", "active"]
           : detail.status === "archived"
@@ -889,12 +889,12 @@ function CaseDetailView({
                       </option>
                     ))}
                   </select>
-                  {nextStatus === "active" && detail.status !== "active" && (
+                  {((nextStatus === "active" && detail.status !== "active") || nextStatus === "ended") && (
                     <Input
                       aria-label="重开理由"
                       value={statusReason}
                       maxLength={1000}
-                      placeholder="重开理由（必填）"
+                      placeholder={nextStatus === "ended" ? "结束理由（必填）" : "重开理由（必填）"}
                       onChange={(event) => setStatusReason(event.target.value)}
                     />
                   )}
@@ -904,7 +904,7 @@ function CaseDetailView({
                     variant="secondary"
                     isDisabled={
                       busy === "status" || nextStatus === detail.status ||
-                      (nextStatus === "active" && detail.status !== "active" && !statusReason.trim())
+                      (((nextStatus === "active" && detail.status !== "active") || nextStatus === "ended") && !statusReason.trim())
                     }
                   >
                     保存

@@ -66,9 +66,8 @@ This deployment deliberately has no configured ASR adapter. A successfully store
 | `POST` | `/api/cases/{case_id}/summary-drafts` | `201` | 指挥创建带来源范围和版本的内部摘要草稿 |
 | `PATCH` | `/api/cases/{case_id}/summary-drafts/{draft_id}/review` | `200` | 指挥提交、审核发布、驳回或撤回摘要草稿 |
 | `POST` | `/api/cases/{case_id}/archive-drafts` | `201` | 指挥为已结束案件创建受控内部归档草稿 |
-| `GET` | `/api/cases/{case_id}/places` | `200` | 获取按案件角色、审核状态和可见级别裁剪的地点 |
-| `POST` | `/api/cases/{case_id}/places` | `201` | 家属或指挥提交常去/关键地点，始终待人工审核 |
-| `PATCH` | `/api/cases/{case_id}/places/{place_id}/review` | `200` | 案件指挥确认或驳回待审核地点并记录理由 |
+| `GET` | `/api/cases/{case_id}/clues` | `200` | 获取按案件角色裁剪的位置型及其他线索 |
+| `POST` | `/api/cases/{case_id}/clues` | `201` | 家属、志愿者或指挥提交待审核的位置型线索 |
 | `GET` | `/api/cases/{case_id}/resource-configuration` | `200` | 获取当前案件可用的地点类型和图片限制 |
 | `POST` | `/api/cases/{case_id}/attachments` | `201` | 上传受控 JPEG/PNG 案件图片，始终待人工审核 |
 | `GET` | `/api/cases/{case_id}/attachments/{attachment_id}` | `200` | 按案件权限下载本人上传的图片，指挥可下载案件全部图片 |
@@ -145,16 +144,16 @@ Authorization: Bearer angui_<session-token>
 
 ## 5. 状态约束
 
-案件状态为 `active`、`resolved`、`closed`。允许的变化为：
+案件主状态为 `active`、`ended`、`reviewing`、`archived`。允许的变化为：
 
 ```text
-active   -> resolved
-active   -> closed
-resolved -> active
-resolved -> closed
+active    -> ended
+ended     -> reviewing
+reviewing -> archived
+ended/reviewing/archived -> active（受控重开）
 ```
 
-相同状态的幂等更新允许通过。`closed` 案件不能再添加线索，也不能转回其他状态。
+结案和重开必须填写理由。结案会取消未完成任务并归档活跃协作空间；非 `active` 案件不接受新行动。进入 `archived` 前必须有已脱敏、已审核的归档草稿。
 
 新线索始终由服务端写为 `pending_review`。人工审核接口只接受：
 
@@ -212,7 +211,8 @@ AI 或其他自动化能力未来只能生成草稿或待审核输入，不得�
 
 ```json
 {
-  "status": "resolved"
+  "status": "ended",
+  "reason": "现场行动已经结束"
 }
 ```
 
@@ -245,9 +245,9 @@ Example:
 
 ## 地点与图片补充
 
-`POST /api/cases/{case_id}/places` 只允许该案件的 `family` 或 `commander` 成员调用。请求需要地点名称、由 `GET /api/cases/{case_id}/resource-configuration` 返回的地点类型、文字地址和 `public`、`confirmed` 或 `internal` 可见级别；经纬度必须同时提供，且服务端校验 longitude 在 -180..180、latitude 在 -90..90。地点来源由服务端按提交者的案件角色写入，客户端不能伪造。新地点的 `review_status` 初始为 `pending_review`，不会直接成为确认进展。志愿者不能通过此接口添加家庭地址或其他敏感地点。
+`POST /api/cases/{case_id}/clues` 接收位置文本、点或范围及受控可见级别；经纬度需同时提供。服务端记录提交者并强制新线索为 `pending_review`，审核使用 `PATCH /api/clues/{clue_id}/review`。旧 `/places` 写入和审核路由已停用。
 
-`GET /api/cases/{case_id}/places` 只对案件成员开放，非成员统一返回 `404`。服务端按案件角色裁剪数据：指挥可查看案件全部地点；家属可查看本人提交的地点，以及已确认且非内部的地点；志愿者仅可查看已确认的公开地点。未审核地点和内部搜索方向不会通过该接口暴露给非必要角色。
+`GET /api/cases/{case_id}/clues` 只对案件成员开放，非成员统一返回 `404`。指挥可查看全部线索；家属可查看本人提交和已确认线索；志愿者仅可查看已确认线索。未审核位置和内部搜索方向不会通过该接口暴露给非必要角色。
 
 `GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属申报的最后出现地点始终标为 `pending_review`，其 `display_name` 为 `null`，客户端必须按 `object_type` 本地化标签而不能呈现为确认进展。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
 
@@ -290,7 +290,7 @@ Example:
 
 `GET /api/cases/{case_id}/summary-drafts`、`POST /api/cases/{case_id}/summary-drafts` 和 `PATCH /api/cases/{case_id}/summary-drafts/{draft_id}/review` 仅对 `commander` 开放。指挥完成一条线索的人工审核后，服务端会自动创建一份 `pending_review` 摘要草稿；指挥也可以基于同一服务端来源范围编辑内容并创建新的待审核版本。生命周期包含 `pending_review`、`published`、`rejected`、`withdrawn`、`superseded`。每次审核、发布或撤回都记录操作者、理由和时间；发布会将该案件既有的已发布版本标为 `superseded`。Gateway 会在合规路由后执行 Provider 请求，且摘要输出必须经过长度与来源范围校验；提供方失效、超时或输出无效时使用同一受控来源范围的确定性降级草稿。降级不会阻塞线索审核，草稿仍必须人工审核后才能发布，且不会被标记为某个 AI 模型的输出。`GET /api/cases/{case_id}/summary-drafts/published` 仅对该案件的 `volunteer` 开放，只返回已人工发布且 `publication_eligible` 的当前与历史版本的版本号、内容和发布时间；不会返回待审核草稿、内部手写草稿、审核理由、来源范围或版本比较元数据。
 
-`POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available only after a case reaches `resolved` or `closed`. The server creates an internal placeholder `draft` plus a separately protected, administrator-reviewable material version scoped to confirmed clue and completed-task review material, then marks `deidentification_status` as `manual_review_required`. The placeholder contains no raw material and nothing is sent to AI at this stage. This endpoint does not publish, index, export, or print material; a separate authorized de-identification, review, and withdrawal workflow is required before any later reuse.
+`POST /api/cases/{case_id}/archive-drafts` is commander-only and accepts no client-supplied case material. It is available after the case reaches `ended`, `reviewing`, or `archived`. The server creates an internal placeholder and separately protected review material from confirmed clues, completed tasks, case source records, collaboration messages, and decision audits. The placeholder contains no raw material and nothing is sent to AI at this stage. Human de-identification and approval are required before the case can be archived or the material reused.
 
 `POST /api/cases/{case_id}/attachments` 使用 `multipart/form-data` 的单个 `file` 字段。首版只接收 MIME 声明（允许带参数）与文件魔数一致的 JPEG/PNG。服务端解码并重新编码图片以移除 EXIF/GPS 等非必要元数据，使用随机且不可猜测的存储键保存，并在元数据或审计写入失败时删除刚写入的文件。存储目录由 `ANGUI_ATTACHMENT_STORAGE_DIRECTORY` 配置，默认 `data/attachments`，不能包含 `..` 路径分段，且必须位于静态公开目录外。下载响应包含 `X-Content-Type-Options: nosniff` 和 `Cache-Control: no-store, private`。
 
@@ -360,7 +360,9 @@ HEIC/HEIF 支持由 `heic` feature 提供；生产构建应使用 `cargo build -
 
 `POST /api/admin/archive-drafts/{draft_id}/deidentify` 只接受人工 `confirm` 或 `reject` 结果、长度受限的理由，以及在确认时提交的人工脱敏文本。确认会创建新的已脱敏材料版本，再以该版本作为唯一允许交给 AI 的输入，并把草稿转为 `pending_review` 和 `deidentified`；拒绝会转为 `rejected`，不能发布。每次结果记录操作者、时间、版本和理由长度，审计不保存理由原文。
 
-`PATCH /api/admin/archive-drafts/{draft_id}/review` 只允许已确认脱敏的 `pending_review` 草稿 `publish` 或 `reject`，以及将 `published` 草稿 `withdraw`。发布仅把该受控版本标记为 `learning_resource`；当前不会创建知识问答/RAG 索引、导出、打印、公开读取或跨案件读取接口。撤回立即将用途恢复为 `internal_archive` 并标记 `withdrawn`，同时保留版本和审计历史；拒绝或撤回绝不修改或删除原案件。
+`PATCH /api/admin/archive-drafts/{draft_id}/review` 将已脱敏草稿在案件 `reviewing` 时 `approve`（或 `reject`）；`approve` 还必须提交 `confirm_retention: true`，确认原始材料的保留范围和访问限制。案件进入 `archived` 后，已批准草稿才可 `publish`。发布前会拦截可识别的案件编号、姓名、手机号和精确坐标；发布会生成隔离的新人知识条目，经关键词检索和受控问答读取；`withdraw` 会立即撤回该条目并保留审计历史。原始案件材料始终通过案件权限管理，不作为新人检索内容。
+
+`GET /api/learning/resources/search` 以标题、正文、分类和标签进行关键词检索，支持 `query`、`category_id`、`tag` 筛选，只返回当前已发布且新人可见的知识条目。`GET /api/admin/knowledge-items/{item_id}/learner-preview` 供管理员核对同一条目的新人可见投影；未发布或撤回条目返回 `404`。`POST /api/knowledge-bases/learning-materials/chat` 先执行同一关键词检索，再将本次全部命中资料作为受控 AI 上下文；无结果时不调用模型。
 
 管理员可通过 `GET /api/admin/archive-drafts/{draft_id}/review-materials` 查看不可变的 review material 版本链、来源范围、审核状态和当前 AI 输入版本；`GET .../review-materials/diff/{from_version}/{to_version}` 提供两个版本的增删行差异。`POST .../review-materials/{version}/restore` 只能恢复管理员已确认的 `deidentified` 版本，恢复操作会生成带 `parent_material_id` 的新版本、切换草稿的 AI 输入指针并将草稿重新置为 `pending_review`，不会修改任何历史版本。审计只记录版本、ID 和理由长度，不记录材料原文。
 # Controlled AI draft endpoints

@@ -29,7 +29,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route(
                     "/questions/{question_id}/answers",
                     web::post().to(submit_answer),
-                ),
+                )
+                .route("/answers", web::get().to(list_answers))
+                .route("/wrong-answers", web::get().to(list_wrong_answers))
+                .route("/progress", web::get().to(get_progress)),
         )
         .service(
             web::scope("/admin/learning")
@@ -190,6 +193,27 @@ async fn ask_knowledge(
         learning_service::ask_knowledge(&state.db, &auth, request.into_inner(), &state.ai_gateway)
             .await?,
     ))
+}
+
+async fn list_answers(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::list_answer_history(&state.db, &auth).await?))
+}
+
+async fn list_wrong_answers(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::list_wrong_answers(&state.db, &auth).await?))
+}
+
+async fn get_progress(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::get_progress(&state.db, &auth).await?))
 }
 
 async fn list_managed_resources(

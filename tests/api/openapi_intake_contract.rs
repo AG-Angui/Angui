@@ -377,47 +377,27 @@ fn clue_timeline_openapi_contract_covers_pagination_and_visibility() {
 }
 
 #[test]
-fn case_places_openapi_contract_covers_role_filtered_reads() {
-    let (_, places_path) = OPENAPI
-        .split_once("  /api/cases/{case_id}/places:\n")
-        .expect("OpenAPI places path must exist");
-    let get_operation = places_path
+fn location_clues_openapi_contract_covers_role_filtered_reads() {
+    assert!(!OPENAPI.contains("  /api/cases/{case_id}/places:"));
+    assert!(!OPENAPI.contains("  /api/cases/{case_id}/places/{place_id}/review:"));
+    let (_, clues_path) = OPENAPI
+        .split_once("  /api/cases/{case_id}/clues:\n")
+        .expect("OpenAPI clues path must exist");
+    let get_operation = clues_path
         .split_once("    get:\n")
         .and_then(|(_, after_get)| after_get.split_once("    post:\n").map(|(get, _)| get))
-        .expect("OpenAPI places path must declare GET before POST");
+        .expect("OpenAPI clues path must declare GET before POST");
     for expected in [
-        "operationId: listCasePlaces",
+        "operationId: listCaseClues",
         "x-case-roles: [family, commander, volunteer]",
-        "#/components/schemas/CasePlace",
+        "#/components/schemas/ClueTimelinePage",
         "\"404\": { $ref: \"#/components/responses/NotFound\" }",
     ] {
         assert!(
             get_operation.contains(expected),
-            "OpenAPI places operation must declare {expected:?}"
+            "OpenAPI clues operation must declare {expected:?}"
         );
     }
-
-    let review = operation("/api/cases/{case_id}/places/{place_id}/review:\n");
-    for expected in [
-        "operationId: reviewCasePlace",
-        "x-case-roles: [commander]",
-        "#/components/schemas/ReviewCasePlaceRequest",
-        "#/components/schemas/CasePlace",
-        "\"409\": { $ref: \"#/components/responses/Conflict\" }",
-    ] {
-        assert!(
-            review.contains(expected),
-            "OpenAPI place review operation must declare {expected:?}"
-        );
-    }
-    assert_schema_contains(
-        "ReviewCasePlaceRequest",
-        &[
-            "required: [status, reason]",
-            "enum: [confirmed, rejected]",
-            "maxLength: 1000",
-        ],
-    );
 }
 
 #[test]
@@ -428,7 +408,7 @@ fn case_summary_openapi_contract_covers_role_filtered_deterministic_output() {
     let get_operation = operation
         .split_once("    get:\n")
         .and_then(|(_, get)| {
-            get.split_once("\n  /api/cases/{case_id}/places:")
+            get.split_once("\n  /api/cases/{case_id}/public-progress:")
                 .map(|(get, _)| get)
         })
         .expect("OpenAPI case summary path must declare GET");
@@ -641,10 +621,17 @@ fn archive_review_openapi_contract_requires_admin_and_manual_deidentification() 
     );
     assert_schema_contains(
         "ReviewArchiveDraftRequest",
-        &["enum: [publish, reject, withdraw]", "reason:"],
+        &[
+            "enum: [approve, publish, reject, withdraw]",
+            "reason:",
+            "confirm_retention:",
+        ],
     );
     let review_operation = operation("/api/admin/archive-drafts/{draft_id}/review:\n");
-    assert!(review_operation.contains("does not expose a RAG, export, print, public"));
+    assert!(
+        review_operation.contains("Publication requires an archived case and independent approval")
+    );
+    assert!(review_operation.contains("Withdrawal revokes that item's learner access"));
 }
 
 #[test]

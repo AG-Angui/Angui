@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, case_attachments, case_memberships, cases, clue_attachment_links,
-        clue_attributions, clues, elder_profile_revisions, elder_profiles,
-        user_global_capabilities, users,
+        archive_drafts, audit_events, case_attachments, case_memberships, cases,
+        clue_attachment_links, clue_attributions, clues, collaboration_spaces,
+        elder_profile_revisions, elder_profiles, tasks, user_global_capabilities, users,
     },
     error::ApiError,
     models::{
@@ -24,14 +24,7 @@ use crate::{
     roles::{AccountType, CaseRole, GlobalCapability},
 };
 
-const CASE_STATUSES: &[&str] = &[
-    "active",
-    "ended",
-    "reviewing",
-    "archived",
-    "resolved",
-    "closed",
-];
+const CASE_STATUSES: &[&str] = &["active", "ended", "reviewing", "archived"];
 const CLUE_REVIEW_STATUSES: &[&str] = &[
     "needs_verification",
     "confirmed",
@@ -269,7 +262,15 @@ pub async fn update_case_status(
     case_id: &str,
     request: UpdateCaseStatusRequest,
 ) -> Result<CaseDetail, ApiError> {
-    let next_status = request.status.trim().to_lowercase();
+    // Keep accepting the pre-lifecycle `resolved` label from older clients,
+    // while persisting the canonical task-6 `ended` state.
+    let requested_status = request.status.trim().to_lowercase();
+    let legacy_resolved = requested_status == "resolved";
+    let next_status = if legacy_resolved {
+        "ended".to_owned()
+    } else {
+        requested_status
+    };
     if !CASE_STATUSES.contains(&next_status.as_str()) {
         return Err(ApiError::Validation(format!(
             "unsupported case status {next_status:?}"
@@ -296,13 +297,27 @@ pub async fn update_case_status(
             "ended" | "reviewing" | "archived" | "resolved" | "closed"
         );
     let reason = trim_optional(request.reason);
-    if reopening
+    if (reopening || (next_status == "ended" && !legacy_resolved))
         && reason
             .as_deref()
             .is_none_or(|value| value.chars().count() > 1_000)
     {
         return Err(ApiError::Validation(
-            "a re-open reason between 1 and 1000 characters is required".to_owned(),
+            "an end or re-open reason between 1 and 1000 characters is required".to_owned(),
+        ));
+    }
+    if next_status == "archived"
+        && archive_drafts::Entity::find()
+            .filter(archive_drafts::Column::CaseId.eq(case_id))
+            .filter(archive_drafts::Column::Status.eq("pending_review"))
+            .filter(archive_drafts::Column::DeidentificationStatus.eq("deidentified"))
+            .filter(archive_drafts::Column::ReviewedByUserId.is_not_null())
+            .one(&transaction)
+            .await?
+            .is_none()
+    {
+        return Err(ApiError::Conflict(
+            "an approved, de-identified archive draft is required".to_owned(),
         ));
     }
 
@@ -311,6 +326,84 @@ pub async fn update_case_status(
     active.status = Set(next_status.clone());
     active.updated_at = Set(now());
     active.update(&transaction).await?;
+
+    if next_status == "ended" {
+        // Ending a case is an operational stop, not just a label change.
+        // Preserve task history while preventing any pending/assigned work
+        // from remaining actionable after the commander ends the case.
+        let unfinished_tasks = tasks::Entity::find()
+            .filter(tasks::Column::CaseId.eq(case_id))
+            .filter(tasks::Column::Status.is_in([
+                "pending_claim",
+                "assigned",
+                "accepted",
+                "active",
+                "blocked",
+            ]))
+            .all(&transaction)
+            .await?;
+        let active_spaces = collaboration_spaces::Entity::find()
+            .filter(collaboration_spaces::Column::CaseId.eq(case_id))
+            .filter(collaboration_spaces::Column::Status.eq("active"))
+            .all(&transaction)
+            .await?;
+        tasks::Entity::update_many()
+            .col_expr(
+                tasks::Column::Status,
+                sea_orm::sea_query::Expr::value("cancelled"),
+            )
+            .col_expr(
+                tasks::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now()),
+            )
+            .filter(tasks::Column::CaseId.eq(case_id))
+            .filter(tasks::Column::Status.is_in([
+                "pending_claim",
+                "assigned",
+                "accepted",
+                "active",
+                "blocked",
+            ]))
+            .exec(&transaction)
+            .await?;
+        for task in unfinished_tasks {
+            write_audit(
+                &transaction,
+                Some(case_id.to_owned()),
+                auth,
+                "task.closed_on_case_end",
+                "task",
+                task.id,
+                Some(json!({"from": task.status, "to": "cancelled", "reason": reason})),
+            )
+            .await?;
+        }
+        for space in active_spaces {
+            write_audit(
+                &transaction,
+                Some(case_id.to_owned()),
+                auth,
+                "collaboration_space.closed_on_case_end",
+                "collaboration_space",
+                space.id,
+                Some(json!({"from": "active", "to": "archived"})),
+            )
+            .await?;
+        }
+        collaboration_spaces::Entity::update_many()
+            .col_expr(
+                collaboration_spaces::Column::Status,
+                sea_orm::sea_query::Expr::value("archived"),
+            )
+            .col_expr(
+                collaboration_spaces::Column::ArchivedAt,
+                sea_orm::sea_query::Expr::value(Some(now())),
+            )
+            .filter(collaboration_spaces::Column::CaseId.eq(case_id))
+            .filter(collaboration_spaces::Column::Status.eq("active"))
+            .exec(&transaction)
+            .await?;
+    }
 
     write_audit(
         &transaction,
@@ -322,7 +415,7 @@ pub async fn update_case_status(
         Some(json!({
             "from": previous_status,
             "to": next_status,
-            "reopen_reason_length": reason.as_ref().map(|value| value.chars().count()),
+            "reason": reason,
         })),
     )
     .await?;
@@ -1636,14 +1729,10 @@ fn case_transition_allowed(current: &str, next: &str) -> bool {
     current == next
         || matches!(
             (current, next),
-            ("active", "ended" | "resolved" | "closed")
-                | ("ended", "reviewing" | "active" | "archived")
+            ("active", "ended")
+                | ("ended", "reviewing" | "active")
                 | ("reviewing", "archived" | "active")
                 | ("archived", "active")
-                | ("resolved", "active")
-                | ("resolved", "closed")
-                | ("closed", "active")
-                | ("closed", "reviewing")
         )
 }
 

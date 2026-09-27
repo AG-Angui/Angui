@@ -16,12 +16,18 @@ import {
   confirmKnowledgeImport,
   cancelKnowledgeImport,
   createKnowledgeItem,
+  createKnowledgeTerm,
   updateKnowledgeItem,
   listKnowledgeItems,
+  listKnowledgeTerms,
+  disableKnowledgeTerm,
+  previewKnowledgeItemForLearner,
   transitionKnowledgeItem,
   getKnowledgeOverview,
   uploadKnowledgeImage,
   downloadKnowledgeImage,
+  uploadKnowledgeAttachment,
+  downloadKnowledgeAttachment,
 } from "../api/learning";
 import type {
   CreateLearningQuestionInput,
@@ -221,7 +227,7 @@ export function LearningGovernancePage() {
       question_type: "single_choice",
       difficulty: "basic",
       tags: [],
-      options: [],
+      options: [{ id: "A", text: "" }, { id: "B", text: "" }],
       correct_option_id: "",
       explanation: "",
       visibility: "learner",
@@ -231,13 +237,16 @@ export function LearningGovernancePage() {
     },
   );
   const [questionTags, setQuestionTags] = useState("");
-  const [optionLines, setOptionLines] = useState("");
   const [knowledgeBases, setKnowledgeBases] = useState<import("../api/learning").KnowledgeBase[]>([]);
   const [knowledgeOverview, setKnowledgeOverview] = useState<import("../api/learning").KnowledgeOverview | null>(null);
   const [knowledgeBaseName, setKnowledgeBaseName] = useState("");
   const [knowledgeBaseDescription, setKnowledgeBaseDescription] = useState("");
   const [knowledgeImport, setKnowledgeImport] = useState<import("../api/learning").KnowledgeImportBatch | null>(null);
   const [knowledgeItems, setKnowledgeItems] = useState<import("../api/learning").KnowledgeItem[]>([]);
+  const [knowledgeTerms, setKnowledgeTerms] = useState<import("../api/learning").KnowledgeTerm[]>([]);
+  const [knowledgeTermName, setKnowledgeTermName] = useState("");
+  const [knowledgeTermKind, setKnowledgeTermKind] = useState<"category" | "tag">("category");
+  const [learnerPreview, setLearnerPreview] = useState<import("../api/learning").KnowledgeSearchResult | null>(null);
   const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<Record<string, string>>({});
   const [knowledgeImageStates, setKnowledgeImageStates] = useState<Record<string, "loading" | "failed">>({});
   const knowledgeImageQueue = useRef<Array<{ itemId: string; imageId: string }>>([]);
@@ -248,6 +257,7 @@ export function LearningGovernancePage() {
   const [knowledgeItemBaseId, setKnowledgeItemBaseId] = useState("");
   const [knowledgeItemForm, setKnowledgeItemForm] = useState({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" });
   const [editingKnowledgeItemId, setEditingKnowledgeItemId] = useState<string | null>(null);
+  const [previousKnowledgeItemId, setPreviousKnowledgeItemId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -384,11 +394,15 @@ export function LearningGovernancePage() {
     const operation = action === "confirm" ? confirmKnowledgeImport : cancelKnowledgeImport;
     void operation(token, knowledgeImport.id).then(setKnowledgeImport).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId(""));
   };
-  const loadKnowledgeItems = (baseId: string) => { if (!token || !baseId) return; setKnowledgeItemBaseId(baseId); void Promise.all([listKnowledgeItems(token, baseId), getKnowledgeOverview(token, baseId)]).then(([items, overview]) => { setKnowledgeItems(items); setKnowledgeOverview(overview); }).catch((cause) => setOperationError(errorMessage(cause))); };
+  const loadKnowledgeItems = (baseId: string) => { if (!token || !baseId) return; setKnowledgeItemBaseId(baseId); void Promise.all([listKnowledgeItems(token, baseId), listKnowledgeTerms(token, baseId), getKnowledgeOverview(token, baseId)]).then(([items, terms, overview]) => { setKnowledgeItems(items); setKnowledgeTerms(terms); setKnowledgeOverview(overview); }).catch((cause) => setOperationError(errorMessage(cause))); };
+  const addKnowledgeTerm = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId || !knowledgeTermName.trim()) return; setBusyId("knowledge-term"); void createKnowledgeTerm(token, knowledgeItemBaseId, { kind: knowledgeTermKind, name: knowledgeTermName }).then((term) => { setKnowledgeTerms((current) => [...current, term].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))); setKnowledgeTermName(""); }).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const archiveKnowledgeTerm = (term: import("../api/learning").KnowledgeTerm) => { if (!token) return; const reason = window.prompt(`停用“${term.name}”的理由`); if (!reason?.trim()) return; setBusyId(term.id); void disableKnowledgeTerm(token, term.id, reason).then((updated) => setKnowledgeTerms((current) => current.map((item) => item.id === updated.id ? updated : item))).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
   const uploadItemImages = (itemId: string, files: FileList | null) => { if (!token || !files?.length) return; setBusyId(itemId); void Promise.all(Array.from(files).map((file) => uploadKnowledgeImage(token, itemId, file))).then(() => loadKnowledgeItems(knowledgeItemBaseId)).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const createItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId) return; setBusyId("knowledge-item"); const input = { title: knowledgeItemForm.title, summary: knowledgeItemForm.summary, content: knowledgeItemForm.content, category: knowledgeItemForm.category, category_id: null, keywords: parseTags(knowledgeItemForm.keywords), source_name: knowledgeItemForm.source_name, source_url: knowledgeItemForm.source_url.trim() || null, visibility: "learner" }; const operation = editingKnowledgeItemId ? updateKnowledgeItem(token, editingKnowledgeItemId, input) : createKnowledgeItem(token, knowledgeItemBaseId, { ...input, images: [] }); void operation.then(() => { setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); setEditingKnowledgeItemId(null); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const uploadItemAttachment = (itemId: string, file: File | null) => { if (!token || !file) return; setBusyId(itemId); void uploadKnowledgeAttachment(token, itemId, file).then(() => loadKnowledgeItems(knowledgeItemBaseId)).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const openItemAttachment = (itemId: string, attachmentId: string, fileName: string) => { if (!token) return; void downloadKnowledgeAttachment(token, itemId, attachmentId).then((blob) => { const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = fileName; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 60_000); }).catch((cause) => setOperationError(errorMessage(cause))); };
+  const createItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId) return; setBusyId("knowledge-item"); const input = { title: knowledgeItemForm.title, summary: knowledgeItemForm.summary, content: knowledgeItemForm.content, category: knowledgeItemForm.category, category_id: null, keywords: parseTags(knowledgeItemForm.keywords), source_name: knowledgeItemForm.source_name, source_url: knowledgeItemForm.source_url.trim() || null, visibility: "learner" }; const operation = editingKnowledgeItemId ? updateKnowledgeItem(token, editingKnowledgeItemId, input) : createKnowledgeItem(token, knowledgeItemBaseId, { ...input, previous_version_id: previousKnowledgeItemId, images: [] }); void operation.then(() => { setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); setEditingKnowledgeItemId(null); setPreviousKnowledgeItemId(null); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
   const editKnowledgeItem = (item: import("../api/learning").KnowledgeItem) => { setEditingKnowledgeItemId(item.knowledge_item_id); setKnowledgeItemForm({ title: item.title, summary: item.summary, content: item.content, category: item.category, keywords: item.keywords.join(", "), source_name: item.source_name, source_url: item.source_url ?? "" }); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  const transitionItem = (itemId: string, action: "deidentify" | "review" | "publish" | "withdraw") => { if (!token) return; setBusyId(itemId); void transitionKnowledgeItem(token, itemId, action).then(() => listKnowledgeItems(token, knowledgeItemBaseId)).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const transitionItem = (itemId: string, action: "deidentify" | "review" | "publish" | "withdraw") => { const reason = reasons[itemId]?.trim(); if (!token || !reason) { setOperationError("请填写本次知识条目治理操作理由。"); return; } setBusyId(itemId); void transitionKnowledgeItem(token, itemId, action, reason).then(() => { setReasons((current) => ({ ...current, [itemId]: "" })); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
   if (isLoading) return <LoadingState label="正在加载学习内容治理记录" />;
   if (loadError)
     return <ErrorState message={loadError} onRetry={() => void load()} />;
@@ -484,11 +498,13 @@ export function LearningGovernancePage() {
     event.preventDefault();
     if (!token) return;
     setOperationError("");
-    const options = optionLines
-      .split("\n")
-      .map((line) => line.split("|"))
-      .filter(([id, text]) => id?.trim() && text?.trim())
-      .map(([id, text]) => ({ id: id.trim(), text: text.trim() }));
+    const options = questionForm.options.map((option) => ({ id: option.id.trim(), text: option.text.trim() }));
+    if (options.length < 2 || options.some((option) => !option.id || !option.text) ||
+        new Set(options.map((option) => option.id)).size !== options.length ||
+        !options.some((option) => option.id === questionForm.correct_option_id)) {
+      setOperationError("请填写至少两个唯一选项，并选择正确答案。");
+      return;
+    }
     setBusyId("new-question");
     void createManagedLearningQuestion(token, {
       ...questionForm,
@@ -500,14 +516,13 @@ export function LearningGovernancePage() {
           ...questionForm,
           prompt: "",
           tags: [],
-          options: [],
+          options: [{ id: "A", text: "" }, { id: "B", text: "" }],
           correct_option_id: "",
           explanation: "",
           previous_version_id: null,
           submission_reason: "",
         });
         setQuestionTags("");
-        setOptionLines("");
         return load();
       })
       .catch((cause) => setOperationError(errorMessage(cause)))
@@ -566,8 +581,18 @@ export function LearningGovernancePage() {
             <Input className="lg:col-span-2" aria-label="摘要" placeholder="摘要" value={knowledgeItemForm.summary} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, summary: event.target.value })} />
             <textarea aria-label="正文" className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm lg:col-span-2" placeholder="正文" value={knowledgeItemForm.content} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, content: event.target.value })} required />
             <Input aria-label="来源链接" placeholder="HTTPS 来源链接" value={knowledgeItemForm.source_url} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, source_url: event.target.value })} />
-            <div className="flex gap-2 lg:col-span-2"><Button type="submit" isDisabled={busyId === "knowledge-item"}>{busyId === "knowledge-item" ? <Spinner size="sm" /> : editingKnowledgeItemId ? "保存草稿修改" : "保存知识条目"}</Button>{editingKnowledgeItemId && <Button type="button" variant="secondary" onPress={() => { setEditingKnowledgeItemId(null); setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); }}>取消编辑</Button>}</div>
+            <div className="flex gap-2 lg:col-span-2"><Button type="submit" isDisabled={busyId === "knowledge-item"}>{busyId === "knowledge-item" ? <Spinner size="sm" /> : editingKnowledgeItemId ? "保存草稿修改" : previousKnowledgeItemId ? "创建更正版本草稿" : "保存知识条目"}</Button>{(editingKnowledgeItemId || previousKnowledgeItemId) && <Button type="button" variant="secondary" onPress={() => { setEditingKnowledgeItemId(null); setPreviousKnowledgeItemId(null); setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); }}>取消编辑</Button>}</div>
           </form>
+          <section className="mt-5 border-y border-slate-200 bg-slate-50 p-4" aria-labelledby="knowledge-term-title">
+            <h4 id="knowledge-term-title" className="m-0 text-sm font-semibold text-slate-900">分类与标签词表</h4>
+            <p className="mb-3 mt-1 text-xs text-slate-600">停用只影响新内容选择，历史条目的分类和标签快照不会被改写。</p>
+            <form className="flex flex-wrap items-end gap-2" onSubmit={addKnowledgeTerm}>
+              <label className="grid gap-1 text-xs text-slate-700">类型<select className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm" value={knowledgeTermKind} onChange={(event) => setKnowledgeTermKind(event.target.value as "category" | "tag")}><option value="category">分类</option><option value="tag">标签</option></select></label>
+              <label className="grid min-w-56 gap-1 text-xs text-slate-700">名称<Input aria-label="词表名称" value={knowledgeTermName} onChange={(event) => setKnowledgeTermName(event.target.value)} placeholder="例如：安全巡查" required /></label>
+              <Button type="submit" size="sm" isDisabled={busyId === "knowledge-term"}>新增词条</Button>
+            </form>
+            <div className="mt-3 flex flex-wrap gap-2">{knowledgeTerms.length === 0 ? <span className="text-xs text-slate-500">暂无词条</span> : knowledgeTerms.map((term) => <span key={term.id} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${term.status === "active" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-100 text-slate-500"}`}><span>{term.kind === "category" ? "分类" : "标签"}：{term.name}</span>{term.status === "active" && <button type="button" className="font-semibold underline" disabled={busyId === term.id} onClick={() => archiveKnowledgeTerm(term)}>停用</button>}</span>)}</div>
+          </section>
           <div className="mt-5 overflow-x-auto border-t border-slate-100">
             <table className="min-w-[1200px] w-full text-left text-sm">
               <caption className="sr-only">Knowledge items</caption>
@@ -616,12 +641,17 @@ export function LearningGovernancePage() {
                     </td>
                     <td className="min-w-56 px-3 py-3">
                       <div className="flex flex-wrap items-center gap-2">
+                        <Input aria-label={`知识条目 ${item.title} 操作理由`} placeholder="操作理由" value={reasons[item.knowledge_item_id] ?? ""} onChange={(event) => setReasons((current) => ({ ...current, [item.knowledge_item_id]: event.target.value }))} />
                         {item.status === "draft" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "deidentify")}>确认脱敏</Button>}
                         {item.status === "draft" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => editKnowledgeItem(item)}>编辑</Button>}
                         {item.status === "submitted" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>审核</Button>}
                         {item.status === "reviewed" && <Button size="sm" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "publish")}>Publish</Button>}
+                        {item.status === "published" && <Button size="sm" variant="secondary" onPress={() => { if (!token) return; setBusyId(item.knowledge_item_id); void previewKnowledgeItemForLearner(token, item.knowledge_item_id).then(setLearnerPreview).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); }}>新人视图预览</Button>}
                         {item.status === "published" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "withdraw")}>Withdraw</Button>}
+                        {(item.status === "published" || item.status === "withdrawn") && <Button size="sm" variant="secondary" onPress={() => { setPreviousKnowledgeItemId(item.knowledge_item_id); setEditingKnowledgeItemId(null); setKnowledgeItemForm({ title: item.title, summary: item.summary, content: item.content, category: item.category, keywords: item.keywords.join(", "), source_name: item.source_name, source_url: item.source_url ?? "" }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>创建更正版本</Button>}
                         {item.status !== "withdrawn" && item.status !== "published" && <label className="text-xs text-slate-700">Upload images<input aria-label={`Upload images for ${item.title}`} className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>}
+                        {item.status === "draft" && <label className="text-xs text-slate-700">上传 PDF 附件<input aria-label={`上传 ${item.title} 的 PDF 附件`} className="ml-2 text-xs" type="file" accept="application/pdf" disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemAttachment(item.knowledge_item_id, event.target.files?.[0] ?? null); event.currentTarget.value = ""; }} /></label>}
+                        {(item.attachments ?? []).map((attachment) => <Button key={attachment.id} size="sm" variant="secondary" onPress={() => openItemAttachment(item.knowledge_item_id, attachment.id, attachment.file_name)}>下载 {attachment.file_name}</Button>)}
                       </div>
                     </td>
                   </tr>
@@ -637,6 +667,7 @@ export function LearningGovernancePage() {
           {knowledgeImport.status === "previewed" && <div className="mt-3 flex gap-2"><Button onPress={() => updateImport("confirm")} isDisabled={busyId === "knowledge-import"}>确认导入</Button><Button variant="secondary" onPress={() => updateImport("cancel")} isDisabled={busyId === "knowledge-import"}>取消</Button></div>}
         </div>}
       </section>
+      {learnerPreview && <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" onClick={() => setLearnerPreview(null)}><section role="dialog" aria-modal="true" aria-label="新人视图预览" className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-md bg-white p-5 text-sm shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-3"><h2 className="m-0 text-lg font-semibold">{learnerPreview.title}</h2><Button size="sm" variant="secondary" onPress={() => setLearnerPreview(null)}>关闭</Button></div><p className="mt-2 text-slate-600">{learnerPreview.summary}</p><p className="mt-3 text-xs text-slate-500">{learnerPreview.category} · {learnerPreview.keywords.join("、")}</p><div className="mt-4 whitespace-pre-wrap leading-7">{learnerPreview.content}</div><div className="mt-4 flex flex-wrap gap-3">{learnerPreview.images.map((image) => knowledgeImageUrls[image.id] ? <img key={image.id} src={knowledgeImageUrls[image.id]} alt={`${learnerPreview.title} 附图`} className="max-h-56 max-w-full rounded-sm object-contain" /> : <Button key={image.id} size="sm" variant="secondary" onPress={() => openKnowledgeImage(learnerPreview.knowledge_item_id, image.id)}>加载附图</Button>)}</div><p className="mt-4 text-xs text-slate-500">来源：{learnerPreview.source_name} · v{learnerPreview.version}</p>{learnerPreview.attachments.length > 0 && <ul className="mt-3 space-y-1">{learnerPreview.attachments.map((attachment) => <li key={attachment.id}><Button size="sm" variant="secondary" onPress={() => openItemAttachment(learnerPreview.knowledge_item_id, attachment.id, attachment.file_name)}>下载 {attachment.file_name}</Button></li>)}</ul>}</section></div>}
       {operationError && (
         <div
           className="mb-5 border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800"
@@ -1002,18 +1033,11 @@ export function LearningGovernancePage() {
             </select>
           </label>
           <label className="grid gap-1 text-sm text-slate-700">
-            正确选项编号
-            <Input
-              aria-label="正确选项编号"
-              value={questionForm.correct_option_id}
-              onChange={(event) =>
-                setQuestionForm({
-                  ...questionForm,
-                  correct_option_id: event.target.value,
-                })
-              }
-              required
-            />
+            正确选项
+            <select className="h-10 rounded-md border border-slate-300 bg-white px-3" aria-label="正确选项" value={questionForm.correct_option_id} onChange={(event) => setQuestionForm({ ...questionForm, correct_option_id: event.target.value })} required>
+              <option value="">请选择</option>
+              {questionForm.options.filter((option) => option.id.trim()).map((option, index) => <option key={index} value={option.id}>{option.id} · {option.text || "未填写"}</option>)}
+            </select>
           </label>
           <label className="grid gap-1 text-sm text-slate-700">
             题目类型
@@ -1046,14 +1070,10 @@ export function LearningGovernancePage() {
             }
             required
           />
-          <TextareaField
-            className="lg:col-span-2"
-            label="选项（每行：编号|文本）"
-            value={optionLines}
-            onChange={(event) => setOptionLines(event.target.value)}
-            minRows={3}
-            required
-          />
+          <fieldset className="grid gap-2 lg:col-span-2"><legend className="text-sm text-slate-700">单选题选项（至少两个）</legend>
+            {questionForm.options.map((option, index) => <div key={index} className="flex gap-2"><Input aria-label={`选项 ${index + 1} 编号`} value={option.id} onChange={(event) => setQuestionForm({ ...questionForm, options: questionForm.options.map((current, position) => position === index ? { ...current, id: event.target.value } : current) })} required /><Input aria-label={`选项 ${index + 1} 内容`} value={option.text} onChange={(event) => setQuestionForm({ ...questionForm, options: questionForm.options.map((current, position) => position === index ? { ...current, text: event.target.value } : current) })} required /><Button type="button" variant="secondary" isDisabled={questionForm.options.length <= 2} onPress={() => setQuestionForm({ ...questionForm, options: questionForm.options.filter((_, position) => position !== index), correct_option_id: questionForm.correct_option_id === option.id ? "" : questionForm.correct_option_id })}>删除</Button></div>)}
+            <Button type="button" variant="secondary" isDisabled={questionForm.options.length >= 12} onPress={() => setQuestionForm({ ...questionForm, options: [...questionForm.options, { id: String.fromCharCode(65 + questionForm.options.length), text: "" }] })}>添加选项</Button>
+          </fieldset>
           <label className="grid gap-1 text-sm text-slate-700">
             标签（逗号分隔）
             <Input

@@ -3,7 +3,7 @@ use actix_web::{
     test,
 };
 use angui::{
-    entities::{audit_events, case_places, clue_attachment_links},
+    entities::{audit_events, clue_attachment_links, clues},
     models::{CreateCasePlaceRequest, PlaceVisibility},
     services::case_resource_service,
 };
@@ -58,11 +58,31 @@ async fn post_case_places_requires_family_or_commander_and_returns_pending_revie
             "name": "Fictional park", "place_type": "frequent", "address": "Fictional park north gate",
             "longitude": 117.2272, "latitude": 31.8206, "visibility": "confirmed"
         })).to_request()).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body: serde_json::Value = test::read_body_json(response).await;
-    assert_eq!(body["review_status"], "pending_review");
-    assert_eq!(body["is_own_submission"], true);
-    assert_eq!(body["source"], "family");
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "legacy place write route is retired"
+    );
+
+    let created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .set_json(json!({
+                "source": "family", "content": "Fictional park: north gate",
+                "location_text": "Fictional park north gate", "location_kind": "point",
+                "longitude": 117.2272, "latitude": 31.8206,
+                "location_precision": "exact", "visibility": "confirmed",
+                "confidence": "unverified"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body: serde_json::Value = test::read_body_json(created).await;
+    assert_eq!(body["status"], "pending_review");
+    assert_eq!(body["location_kind"], "point");
 
     context
         .add_member(&case_id, FAMILY, COMMANDER, "commander")
@@ -75,7 +95,7 @@ async fn post_case_places_requires_family_or_commander_and_returns_pending_revie
         .uri(&format!("/api/cases/{case_id}/places"))
         .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
         .set_json(json!({ "name": "Home", "place_type": "other", "address": "Private", "visibility": "internal" })).to_request()).await;
-    assert_error(denied, StatusCode::FORBIDDEN, "forbidden").await;
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
 }
 
 #[actix_web::test]
@@ -92,13 +112,13 @@ async fn patch_case_place_review_requires_commander_and_records_audited_transiti
     let created = test::call_service(
         &app,
         test::TestRequest::post()
-            .uri(&format!("/api/cases/{case_id}/places"))
+            .uri(&format!("/api/cases/{case_id}/clues"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
             .set_json(json!({
-                "name": "Fictional clinic",
-                "place_type": "medical",
-                "address": "Fictional clinic entrance",
-                "visibility": "confirmed"
+                "source": "family", "content": "Fictional clinic: entrance",
+                "location_text": "Fictional clinic entrance",
+                "location_kind": "point", "location_precision": "approximate",
+                "visibility": "confirmed", "confidence": "unverified"
             }))
             .to_request(),
     )
@@ -106,7 +126,7 @@ async fn patch_case_place_review_requires_commander_and_records_audited_transiti
     assert_eq!(created.status(), StatusCode::CREATED);
     let created: serde_json::Value = test::read_body_json(created).await;
     let place_id = created["id"].as_str().expect("place id");
-    let review_uri = format!("/api/cases/{case_id}/places/{place_id}/review");
+    let review_uri = format!("/api/clues/{place_id}/review");
 
     let family_denied = test::call_service(
         &app,
@@ -147,11 +167,11 @@ async fn patch_case_place_review_requires_commander_and_records_audited_transiti
     .await;
     assert_eq!(confirmed.status(), StatusCode::OK);
     let confirmed: serde_json::Value = test::read_body_json(confirmed).await;
-    assert_eq!(confirmed["review_status"], "confirmed");
+    assert_eq!(confirmed["status"], "confirmed");
 
     let audit = audit_events::Entity::find()
         .filter(audit_events::Column::CaseId.eq(&case_id))
-        .filter(audit_events::Column::Action.eq("case.place_reviewed"))
+        .filter(audit_events::Column::Action.eq("clue.reviewed"))
         .filter(audit_events::Column::EntityId.eq(place_id))
         .one(&context.database)
         .await
@@ -183,7 +203,7 @@ async fn patch_case_place_review_requires_commander_and_records_audited_transiti
             .to_request(),
     )
     .await;
-    assert_error(repeated, StatusCode::CONFLICT, "conflict").await;
+    assert_eq!(repeated.status(), StatusCode::OK);
 }
 
 #[actix_web::test]
@@ -286,15 +306,16 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
     let app = crate::init_api_app!(&context);
     let request_for = |token: String| {
         test::TestRequest::get()
-            .uri(&format!("/api/cases/{case_id}/places"))
+            .uri(&format!("/api/cases/{case_id}"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
             .to_request()
     };
 
-    let family_places: Vec<serde_json::Value> = test::read_body_json(
+    let family_detail: serde_json::Value = test::read_body_json(
         test::call_service(&app, request_for(context.token(FAMILY).await)).await,
     )
     .await;
+    let family_places = family_detail["places"].as_array().expect("family places");
     assert!(
         family_places
             .iter()
@@ -321,10 +342,13 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
             .any(|place| place["id"] == internal_confirmed.id)
     );
 
-    let volunteer_places: Vec<serde_json::Value> = test::read_body_json(
+    let volunteer_detail: serde_json::Value = test::read_body_json(
         test::call_service(&app, request_for(context.token(VOLUNTEER).await)).await,
     )
     .await;
+    let volunteer_places = volunteer_detail["places"]
+        .as_array()
+        .expect("volunteer places");
     assert_eq!(volunteer_places.len(), 2);
     assert!(
         volunteer_places
@@ -342,10 +366,13 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
             .any(|place| place["id"] == internal_confirmed.id)
     );
 
-    let commander_places: Vec<serde_json::Value> = test::read_body_json(
+    let commander_detail: serde_json::Value = test::read_body_json(
         test::call_service(&app, request_for(context.token(COMMANDER).await)).await,
     )
     .await;
+    let commander_places = commander_detail["places"]
+        .as_array()
+        .expect("commander places");
     assert_eq!(commander_places.len(), 5);
 
     let hidden = test::call_service(&app, request_for(context.token(LEARNER).await)).await;
@@ -353,13 +380,13 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
 }
 
 async fn mark_place_confirmed(context: &TestContext, place_id: &str) {
-    let place = case_places::Entity::find_by_id(place_id)
+    let place = clues::Entity::find_by_id(place_id)
         .one(&context.database)
         .await
         .expect("fixture place should load")
         .expect("fixture place should exist");
     let mut place = place.into_active_model();
-    place.review_status = Set("confirmed".to_owned());
+    place.status = Set("confirmed".to_owned());
     place
         .update(&context.database)
         .await
@@ -416,7 +443,7 @@ async fn volunteer_can_search_from_a_confirmed_case_place_with_coordinates() {
 }
 
 #[actix_web::test]
-async fn post_case_places_uses_the_configured_place_type_allowlist() {
+async fn retired_place_write_route_rejects_all_legacy_types() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;
     let family_token = context.token(FAMILY).await;
@@ -440,9 +467,9 @@ async fn post_case_places_uses_the_configured_place_type_allowlist() {
     };
 
     let disallowed = test::call_service(&app, station("frequent")).await;
-    assert_error(disallowed, StatusCode::BAD_REQUEST, "validation_error").await;
+    assert_eq!(disallowed.status(), StatusCode::NOT_FOUND);
     let allowed = test::call_service(&app, station("station")).await;
-    assert_eq!(allowed.status(), StatusCode::CREATED);
+    assert_eq!(allowed.status(), StatusCode::NOT_FOUND);
 }
 
 #[actix_web::test]

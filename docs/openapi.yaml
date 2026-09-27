@@ -1019,8 +1019,9 @@ paths:
       operationId: updateCaseStatus
       summary: 更新案件状态
       description: |
-        仅案件 commander 可以操作。允许 active -> resolved、active -> closed、
-        resolved -> active、resolved -> closed，以及相同状态的幂等更新。closed 不能转回其他状态。
+        仅案件 commander 可以操作。主流程为 active -> ended -> reviewing -> archived；
+        结束和带理由的重开会写入审计，结束时取消未完成任务并关闭活跃协作空间。
+        归档要求已有经过人工脱敏和审核的草稿。重开必须提供理由。
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -1033,7 +1034,8 @@ paths:
             schema:
               $ref: "#/components/schemas/UpdateCaseStatusRequest"
             example:
-              status: resolved
+              status: ended
+              reason: 现场行动已经结束
       responses:
         "200":
           description: 更新后的案件详情
@@ -1166,7 +1168,7 @@ paths:
       summary: 向案件提交待审核线索
       description: |
         family、commander 和 volunteer 案件成员均可提交。服务端忽略客户端对状态的控制，
-        新线索始终写为 pending_review。closed 案件不能再添加线索。
+        新线索始终写为 pending_review。非 active 案件不能再添加线索。
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -1838,101 +1840,13 @@ paths:
       tags: [Cases]
       operationId: createCaseArchiveDraft
       summary: Create a controlled internal archive draft
-      description: Only a case commander may create this deterministic internal draft for a resolved or closed case. It records only allowlisted status and count metadata, remains manual_review_required, and cannot publish, index, export, or print case material.
+      description: Only a case commander may create this internal draft after the case reaches ended, reviewing, or archived. The protected review material may contain case facts; the learner-facing draft remains a placeholder until human de-identification and approval. Creation never publishes the material.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
       x-data-classification: case-restricted
       responses:
         "201": { description: Internal archive draft requiring de-identification review, content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveDraft" } } } }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "500": { $ref: "#/components/responses/InternalError" }
-
-  /api/cases/{case_id}/places:
-    parameters:
-      - $ref: "#/components/parameters/CaseId"
-    get:
-      tags: [Cases]
-      operationId: listCasePlaces
-      summary: 获取按角色裁剪的关键地点
-      description: 服务端按案件角色和审核/可见级别裁剪地点。指挥可见案件内部地点；家属仅见本人提交或已确认的非内部地点；志愿者仅见已确认的公开地点。非成员返回 404。
-      security:
-        - bearerAuth: []
-      x-account-types: [member]
-      x-case-roles: [family, commander, volunteer]
-      x-data-classification: sensitive
-      responses:
-        "200":
-          description: 当前角色可见的地点
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/CasePlace" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "500": { $ref: "#/components/responses/InternalError" }
-    post:
-      tags: [Cases]
-      operationId: createCasePlace
-      summary: 提交常去或关键地点
-      description: 仅 family 和 commander 可提交。服务端验证坐标、地点类型和可见级别；新记录固定为 pending_review。
-      security:
-        - bearerAuth: []
-      x-account-types: [member]
-      x-case-roles: [family, commander]
-      x-data-classification: sensitive
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateCasePlaceRequest"
-      responses:
-        "201":
-          description: 待审核地点已创建
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CasePlace" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "500": { $ref: "#/components/responses/InternalError" }
-
-  /api/cases/{case_id}/places/{place_id}/review:
-    parameters:
-      - $ref: "#/components/parameters/CaseId"
-      - name: place_id
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
-    patch:
-      tags: [Cases]
-      operationId: reviewCasePlace
-      summary: 审核家属或案件成员提交的地点
-      description: 仅当前案件的 commander 可操作。地点必须仍为 pending_review，审核理由必填；确认或驳回会原子更新状态并写入审计事件。
-      security:
-        - bearerAuth: []
-      x-account-types: [member]
-      x-case-roles: [commander]
-      x-data-classification: sensitive
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ReviewCasePlaceRequest" }
-      responses:
-        "200":
-          description: 已审核的地点
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CasePlace" }
-        "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -2339,8 +2253,8 @@ paths:
     patch:
       tags: [Admin]
       operationId: reviewArchiveDraft
-      summary: Publish, reject, or withdraw a reviewed archive draft
-      description: Admin capability only. Publication is allowed only after recorded manual de-identification confirmation. Publishing only marks a controlled archive as a learning_resource; it does not expose a RAG, export, print, public, or cross-case read path. Withdrawal immediately removes that learning-resource designation while preserving the auditable version history.
+      summary: Approve, publish, reject, or withdraw a reviewed archive draft
+      description: Admin capability only. Approval requires a reviewing case, confirmed human de-identification, and explicit retention/access-scope confirmation. The case may then be archived. Publication requires an archived case and independent approval; it creates a learner-visible knowledge item from the approved de-identified content. Withdrawal revokes that item's learner access while preserving audit history.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-global-capabilities: [admin]
@@ -2984,6 +2898,54 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/admin/knowledge-bases/{base_id}/terms:
+    parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeTerms
+      summary: List category and tag vocabulary for a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Active and archived terms, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeTerm" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeTerm
+      summary: Create an active category or tag vocabulary entry
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateKnowledgeTermRequest" } } } }
+      responses:
+        "201": { description: Created term, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeTerm" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-terms/{term_id}/disable:
+    post:
+      tags: [Knowledge]
+      operationId: disableKnowledgeTerm
+      summary: Archive a category or tag vocabulary entry
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: term_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeTermTransitionRequest" } } } }
+      responses:
+        "200": { description: Archived term, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeTerm" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/admin/knowledge-bases/{base_id}/imports/preview:
     post:
       tags: [Knowledge]
@@ -3031,6 +2993,21 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-items/{item_id}/learner-preview:
+    parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: previewKnowledgeItemForLearner
+      summary: Preview only the current published learner-visible knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Learner-visible item projection, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/admin/knowledge-items/{item_id}/review:
     post:
@@ -3150,7 +3127,7 @@ paths:
       tags: [Knowledge]
       operationId: chatKnowledgeBase
       summary: Answer from published visible knowledge items
-      description: Returns retrieved sources and an explicit human-review notice; insufficient sources are not a conclusion.
+      description: Performs the same governed keyword match as search, then supplies every matched published item as source context to the answer workflow (the legacy limit is ignored for this endpoint). Returns retrieved sources and an explicit human-review notice; insufficient sources are not a conclusion.
       security: [{ bearerAuth: [] }]
       x-account-types: [member, learner]
       x-data-classification: training
@@ -3667,7 +3644,7 @@ components:
 
     CaseStatus:
       type: string
-      enum: [active, resolved, closed]
+      enum: [active, ended, reviewing, archived]
 
     TaskStatus:
       type: string
@@ -4175,6 +4152,7 @@ components:
       properties:
         status:
           $ref: "#/components/schemas/CaseStatus"
+        reason: { type: [string, "null"], minLength: 1, maxLength: 1000, description: Required when ending or reopening a case. }
 
     UpdateElderProfileRequest:
       type: object
@@ -4789,26 +4767,6 @@ components:
           minimum: 0
           description: Only tasks visible to the authenticated case role are counted.
 
-    CreateCasePlaceRequest:
-      type: object
-      additionalProperties: false
-      required: [name, place_type, address, visibility]
-      properties:
-        name: { type: string, minLength: 1, maxLength: 120 }
-        place_type: { type: string, description: Value must appear in the current case resource configuration. }
-        address: { type: string, minLength: 1, maxLength: 500 }
-        longitude: { type: [number, "null"], minimum: -180, maximum: 180 }
-        latitude: { type: [number, "null"], minimum: -90, maximum: 90 }
-        visibility: { type: string, enum: [public, confirmed, internal] }
-
-    ReviewCasePlaceRequest:
-      type: object
-      additionalProperties: false
-      required: [status, reason]
-      properties:
-        status: { type: string, enum: [confirmed, rejected] }
-        reason: { type: string, minLength: 1, maxLength: 1000 }
-
     CaseMapView:
       type: object
       additionalProperties: false
@@ -5098,8 +5056,9 @@ components:
       additionalProperties: false
       required: [action, reason]
       properties:
-        action: { type: string, enum: [publish, reject, withdraw] }
+        action: { type: string, enum: [approve, publish, reject, withdraw] }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+        confirm_retention: { type: boolean, description: Must be true when action is approve. }
 
     UpdateAdminUserStatusRequest:
       type: object
@@ -5445,6 +5404,35 @@ components:
         name: { type: string, minLength: 1, maxLength: 160 }
         description: { type: string, maxLength: 2000 }
         visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+
+    KnowledgeTerm:
+      type: object
+      additionalProperties: false
+      required: [id, knowledge_base_id, kind, name, status, created_by_user_id, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        knowledge_base_id: { type: string, format: uuid }
+        kind: { type: string, enum: [category, tag] }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        status: { type: string, enum: [active, archived] }
+        created_by_user_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateKnowledgeTermRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, name]
+      properties:
+        kind: { type: string, enum: [category, tag] }
+        name: { type: string, minLength: 1, maxLength: 160 }
+
+    KnowledgeTermTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
 
     KnowledgeImage:
       type: object

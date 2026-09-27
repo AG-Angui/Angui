@@ -933,6 +933,29 @@ async fn task_feedback_is_an_assignee_only_pending_review_clue_without_task_side
         StatusCode::OK
     );
     context.close_case(&closed_case_id).await;
+    let stopped_task = tasks::Entity::find_by_id(&closed_case_task_id)
+        .one(&context.database)
+        .await
+        .expect("stopped task query")
+        .expect("stopped task exists");
+    assert_eq!(stopped_task.status, "cancelled");
+    assert_error(
+        update_status!(&app, &closed_case_task_id, &volunteer_token, "completed"),
+        StatusCode::CONFLICT,
+        "conflict",
+    )
+    .await;
+    assert_error(
+        submit_location_report!(
+            &app,
+            &closed_case_task_id,
+            &volunteer_token,
+            location_report_json(Utc::now())
+        ),
+        StatusCode::CONFLICT,
+        "conflict",
+    )
+    .await;
     let closed_case_feedback = submit_task_feedback!(
         &app,
         &closed_case_task_id,

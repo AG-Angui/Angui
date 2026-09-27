@@ -148,8 +148,8 @@ impl TestContext {
             &commander,
             case_id,
             UpdateCaseStatusRequest {
-                status: "closed".to_owned(),
-                reason: None,
+                status: "ended".to_owned(),
+                reason: Some("测试中结束案件".to_owned()),
             },
         )
         .await

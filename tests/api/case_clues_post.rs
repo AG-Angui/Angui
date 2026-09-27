@@ -89,8 +89,8 @@ async fn post_case_clues_hides_non_member_cases_and_rejects_non_active_cases() {
         &context.authenticated(COMMANDER).await,
         &resolved_case_id,
         angui::models::UpdateCaseStatusRequest {
-            status: "resolved".to_owned(),
-            reason: None,
+            status: "ended".to_owned(),
+            reason: Some("已完成现场行动".to_owned()),
         },
     )
     .await

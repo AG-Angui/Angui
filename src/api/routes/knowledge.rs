@@ -7,10 +7,11 @@ use crate::{
     error::ApiError,
     models::{
         AuthenticatedUser, CreateKnowledgeBaseRequest, CreateKnowledgeItemRequest,
-        KnowledgeChatRequest, KnowledgeSearchRequest, UpdateKnowledgeBaseRequest,
+        CreateKnowledgeTermRequest, KnowledgeChatRequest, KnowledgeSearchRequest,
+        KnowledgeTermTransitionRequest, KnowledgeTransitionRequest, UpdateKnowledgeBaseRequest,
         UpdateKnowledgeItemRequest,
     },
-    services::knowledge_service,
+    services::{case_service, knowledge_service},
 };
 pub fn configure(config: &mut web::ServiceConfig) {
     config
@@ -24,12 +25,15 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{id}/disable", web::post().to(disable_base))
                 .route("/{id}/items", web::get().to(list_items))
                 .route("/{id}/items", web::post().to(create_item))
+                .route("/{id}/terms", web::get().to(list_terms))
+                .route("/{id}/terms", web::post().to(create_term))
                 .route("/{id}/imports/preview", web::post().to(preview_import))
                 .route("/{id}/overview", web::get().to(overview)),
         )
         .service(
             web::scope("/admin/knowledge-items")
                 .route("/{id}", web::get().to(get_item))
+                .route("/{id}/learner-preview", web::get().to(learner_preview))
                 .route("/{id}", web::patch().to(update_item))
                 .route("/{id}/deidentify", web::post().to(deidentify_item))
                 .route("/{id}/review", web::post().to(review_item))
@@ -42,6 +46,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                     "/{id}/attachments/{attachment_id}",
                     web::get().to(load_attachment),
                 ),
+        )
+        .service(
+            web::scope("/admin/knowledge-terms")
+                .route("/{id}/disable", web::post().to(disable_term)),
         )
         .service(
             web::scope("/knowledge-bases")
@@ -134,12 +142,45 @@ async fn create_item(
     Ok(HttpResponse::Created()
         .json(knowledge_service::create_item(&state.db, &auth, &id, request.into_inner()).await?))
 }
+async fn list_terms(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(knowledge_service::list_terms(&state.db, &auth, &id).await?))
+}
+async fn create_term(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+    request: web::Json<CreateKnowledgeTermRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created()
+        .json(knowledge_service::create_term(&state.db, &auth, &id, request.into_inner()).await?))
+}
+async fn disable_term(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+    request: web::Json<KnowledgeTermTransitionRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(knowledge_service::disable_term(&state.db, &auth, &id, &request.reason).await?))
+}
 async fn get_item(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
     id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(knowledge_service::get_item(&state.db, &auth, &id).await?))
+}
+async fn learner_preview(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(knowledge_service::preview_learner_material(&state.db, &auth, &id).await?))
 }
 async fn upload_image(
     auth: AuthenticatedUser,
@@ -166,6 +207,16 @@ async fn upload_image(
         state.attachment_max_image_bytes,
     )
     .await?;
+    case_service::write_audit(
+        &state.db,
+        None,
+        &auth,
+        "knowledge.image_uploaded",
+        "knowledge_image",
+        image.id.clone(),
+        Some(serde_json::json!({ "knowledge_item_id": id.as_str() })),
+    )
+    .await?;
     Ok(HttpResponse::Created().json(image))
 }
 
@@ -175,14 +226,32 @@ async fn load_image(
     path: web::Path<(String, String)>,
 ) -> Result<HttpResponse, ApiError> {
     let (item_id, image_id) = path.into_inner();
-    let (content_type, bytes) = knowledge_service::load_image(
+    let result = knowledge_service::load_image(
         &state.db,
         &auth,
         &item_id,
         &image_id,
         &state.attachment_storage_directory,
     )
-    .await?;
+    .await;
+    let action = if result.is_ok() {
+        "knowledge.image_downloaded"
+    } else {
+        "knowledge.image_access_denied"
+    };
+    if result.is_ok() || matches!(&result, Err(ApiError::NotFound(_) | ApiError::Forbidden(_))) {
+        case_service::write_audit(
+            &state.db,
+            None,
+            &auth,
+            action,
+            "knowledge_image",
+            image_id,
+            Some(serde_json::json!({ "knowledge_item_id": item_id })),
+        )
+        .await?;
+    }
+    let (content_type, bytes) = result?;
     Ok(HttpResponse::Ok()
         .insert_header((header::CONTENT_TYPE, content_type))
         .insert_header((header::CONTENT_DISPOSITION, "inline"))
@@ -218,19 +287,28 @@ async fn upload_attachment(
             );
         }
     }
-    Ok(HttpResponse::Created().json(
-        knowledge_service::upload_pdf_attachment(
-            &state.db,
-            &auth,
-            &id,
-            &file_name,
-            &content_type,
-            bytes,
-            &state.attachment_storage_directory,
-            state.attachment_max_image_bytes,
-        )
-        .await?,
-    ))
+    let attachment = knowledge_service::upload_pdf_attachment(
+        &state.db,
+        &auth,
+        &id,
+        &file_name,
+        &content_type,
+        bytes,
+        &state.attachment_storage_directory,
+        state.attachment_max_image_bytes,
+    )
+    .await?;
+    case_service::write_audit(
+        &state.db,
+        None,
+        &auth,
+        "knowledge.attachment_uploaded",
+        "knowledge_attachment",
+        attachment.id.clone(),
+        Some(serde_json::json!({ "knowledge_item_id": id.as_str() })),
+    )
+    .await?;
+    Ok(HttpResponse::Created().json(attachment))
 }
 async fn load_attachment(
     auth: AuthenticatedUser,
@@ -238,14 +316,32 @@ async fn load_attachment(
     path: web::Path<(String, String)>,
 ) -> Result<HttpResponse, ApiError> {
     let (item_id, attachment_id) = path.into_inner();
-    let (file_name, bytes) = knowledge_service::load_pdf_attachment(
+    let result = knowledge_service::load_pdf_attachment(
         &state.db,
         &auth,
         &item_id,
         &attachment_id,
         &state.attachment_storage_directory,
     )
-    .await?;
+    .await;
+    let action = if result.is_ok() {
+        "knowledge.attachment_downloaded"
+    } else {
+        "knowledge.attachment_access_denied"
+    };
+    if result.is_ok() || matches!(&result, Err(ApiError::NotFound(_) | ApiError::Forbidden(_))) {
+        case_service::write_audit(
+            &state.db,
+            None,
+            &auth,
+            action,
+            "knowledge_attachment",
+            attachment_id,
+            Some(serde_json::json!({ "knowledge_item_id": item_id })),
+        )
+        .await?;
+    }
+    let (file_name, bytes) = result?;
     Ok(HttpResponse::Ok()
         .insert_header((header::CONTENT_TYPE, "application/pdf"))
         .insert_header((
@@ -269,33 +365,45 @@ async fn review_item(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
     id: web::Path<String>,
+    request: web::Json<KnowledgeTransitionRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok()
-        .json(knowledge_service::transition_item(&state.db, &auth, &id, "review").await?))
+    Ok(HttpResponse::Ok().json(
+        knowledge_service::transition_item(&state.db, &auth, &id, "review", &request.reason)
+            .await?,
+    ))
 }
 async fn deidentify_item(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
     id: web::Path<String>,
+    request: web::Json<KnowledgeTransitionRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok()
-        .json(knowledge_service::transition_item(&state.db, &auth, &id, "deidentify").await?))
+    Ok(HttpResponse::Ok().json(
+        knowledge_service::transition_item(&state.db, &auth, &id, "deidentify", &request.reason)
+            .await?,
+    ))
 }
 async fn publish_item(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
     id: web::Path<String>,
+    request: web::Json<KnowledgeTransitionRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok()
-        .json(knowledge_service::transition_item(&state.db, &auth, &id, "publish").await?))
+    Ok(HttpResponse::Ok().json(
+        knowledge_service::transition_item(&state.db, &auth, &id, "publish", &request.reason)
+            .await?,
+    ))
 }
 async fn withdraw_item(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
     id: web::Path<String>,
+    request: web::Json<KnowledgeTransitionRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok()
-        .json(knowledge_service::transition_item(&state.db, &auth, &id, "withdraw").await?))
+    Ok(HttpResponse::Ok().json(
+        knowledge_service::transition_item(&state.db, &auth, &id, "withdraw", &request.reason)
+            .await?,
+    ))
 }
 async fn search(
     auth: AuthenticatedUser,
@@ -316,12 +424,15 @@ async fn chat(
 ) -> Result<HttpResponse, ApiError> {
     let request = request.into_inner();
     Ok(HttpResponse::Ok().json(
-        knowledge_service::chat_with_gateway(
+        knowledge_service::chat_with_gateway_filtered(
             &state.db,
             &auth,
             &id,
             &request.query,
-            request.limit,
+            knowledge_service::KnowledgeChatFilters {
+                category: request.category.as_deref(),
+                tag: request.tag.as_deref(),
+            },
             &state.ai_gateway,
         )
         .await?,
