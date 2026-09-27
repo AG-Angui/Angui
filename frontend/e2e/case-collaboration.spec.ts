@@ -10,7 +10,9 @@ import {
 } from "./support";
 
 async function useAccount(page: Page, token: string, path: string) {
-  await page.goto("/", { waitUntil: "networkidle" });
+  // Use a same-origin document without the React app so the previous account's
+  // in-flight auth request cannot clear the next account's token on navigation.
+  await page.goto("/api/health", { waitUntil: "domcontentloaded" });
   await page.evaluate((sessionToken) => {
     sessionStorage.clear();
     sessionStorage.setItem("angui.session.token", sessionToken);
@@ -203,20 +205,36 @@ test("a commander creates a collaboration space through the browser and its acti
   );
   await expect(reportResponse).toBeOK();
   const report = (await reportResponse.json()) as {
+    id: string;
     status: string;
     failed_reason: string | null;
   };
-  // There is intentionally no configured ASR provider in the E2E environment.
-  expect(report.status).toBe("failed");
-  expect(report.failed_reason).toBe("ASR provider is not configured");
+  expect(report.status).toBe("uploaded");
+  expect(report.failed_reason).toBeNull();
 
-  const volunteerReports = (await apiGet(
-    request,
-    volunteerToken,
-    `/api/collaboration-spaces/${space!.id}/voice-reports`,
-  )) as Array<{ reporter_id: string; status: string; transcript?: unknown }>;
+  // Upload returns before the asynchronous worker runs. This environment has
+  // no ASR provider, so the persisted report must eventually fail explicitly.
+  let volunteerReports: Array<{
+    id: string;
+    reporter_id: string;
+    status: string;
+    failed_reason: string | null;
+    transcript?: unknown;
+  }> = [];
+  await expect.poll(async () => {
+    volunteerReports = (await apiGet(
+      request,
+      volunteerToken,
+      `/api/collaboration-spaces/${space!.id}/voice-reports`,
+    )) as typeof volunteerReports;
+    return volunteerReports.find((item) => item.id === report.id)?.status;
+  }, { timeout: 30_000 }).toBe("failed");
   expect(volunteerReports).toHaveLength(1);
-  expect(volunteerReports[0]).toMatchObject({ status: "failed" });
+  expect(volunteerReports[0]).toMatchObject({
+    id: report.id,
+    status: "failed",
+    failed_reason: "ASR provider is not configured",
+  });
   expect(volunteerReports[0]).not.toHaveProperty("transcript");
 
   const commanderReports = (await apiGet(

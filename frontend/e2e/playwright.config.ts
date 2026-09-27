@@ -60,6 +60,7 @@ export default defineConfig({
       ANGUI_DEMO_PASSWORD: "e2e-demo-password",
       ANGUI_DEMO_GRANT_REVIEWER_ADMINS: "1",
       ANGUI_ATTACHMENT_STORAGE_DIRECTORY: `.e2e/attachments-${runId}`,
+      ANGUI_AUDIO_STORAGE_DIRECTORY: `.e2e/audio-${runId}`,
       VITE_API_PROXY_TARGET: `http://127.0.0.1:${backendPort}`,
       RUST_LOG: "info,sqlx=warn",
     },
