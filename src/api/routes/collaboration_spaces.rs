@@ -79,7 +79,9 @@ async fn events_websocket(
         loop {
             tokio::select! {
                 Some(Ok(message)) = messages.next() => match message {
-                    Message::Text(text) if text == "ping" => { let _ = session.text("pong"); }
+                    Message::Text(text) if text == "ping" => {
+                        let _ = session.text("pong").await;
+                    }
                     Message::Text(text) => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
                             && value.get("type").and_then(serde_json::Value::as_str) == Some("signal")
@@ -88,7 +90,9 @@ async fn events_websocket(
                             let _ = collaboration_space_service::publish_realtime_signal(&db, &user, &id, signal.clone()).await;
                         }
                     }
-                    Message::Ping(bytes) => { let _ = session.pong(&bytes); }
+                    Message::Ping(bytes) => {
+                        let _ = session.pong(&bytes).await;
+                    }
                     Message::Close(reason) => { let _ = session.close(reason).await; break; }
                     _ => {}
                 },

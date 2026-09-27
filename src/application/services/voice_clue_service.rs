@@ -43,13 +43,13 @@ async fn process_candidate(
     ));
     active.updated_at = Set(now.clone());
     active.update(db).await?;
-    if let Some(report_id) = candidate.voice_report_id {
-        if let Some(report) = voice_reports::Entity::find_by_id(report_id).one(db).await? {
-            let mut report = report.into_active_model();
-            report.status = Set("failed".to_owned());
-            report.failed_reason = Set(Some("ASR provider is not configured".to_owned()));
-            report.update(db).await?;
-        }
+    if let Some(report_id) = candidate.voice_report_id
+        && let Some(report) = voice_reports::Entity::find_by_id(report_id).one(db).await?
+    {
+        let mut report = report.into_active_model();
+        report.status = Set("failed".to_owned());
+        report.failed_reason = Set(Some("ASR provider is not configured".to_owned()));
+        report.update(db).await?;
     }
     Ok(())
 }
