@@ -8,6 +8,8 @@ import {
 } from "../api/collaborationSpaces";
 import { ErrorState, LoadingState } from "./ContentState";
 import { CollaborationSpaceMap } from "./CollaborationSpaceMap";
+import { useCollaborationSocket } from "../hooks/useCollaborationSocket";
+import { VoiceIntercomPanel } from "./VoiceIntercomPanel";
 
 const LOCATION_INTERVAL_MS = 15_000;
 const formatMessageTime = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
@@ -35,6 +37,12 @@ export function CollaborationActivityPanel({ token, spaceId, canBroadcast }: { t
     } catch (cause) { setError(cause instanceof Error ? cause.message : "无法同步协作空间"); }
   }, [spaceId, token]);
   useEffect(() => { void load(); }, [load]);
+  useCollaborationSocket(token, spaceId, version.current, (events) => {
+    if (events.length) {
+      version.current = Math.max(version.current, ...events.map((event) => event.version));
+      applyEvents(events, setMessages);
+    }
+  });
   useEffect(() => {
     const timer = window.setInterval(() => { void getSpaceEvents(token, spaceId, version.current).then((events) => {
       if (events.length) { version.current = Math.max(version.current, ...events.map((event) => event.version)); applyEvents(events, setMessages); void load(); }
@@ -73,6 +81,7 @@ export function CollaborationActivityPanel({ token, spaceId, canBroadcast }: { t
     <div className="mt-3 max-h-48 overflow-auto border border-slate-200 bg-white p-2"><div className="mb-2 flex items-center gap-1 text-xs font-medium text-slate-600"><MessageSquareText size={14} />最近消息</div>{messages.length === 0 ? <p className="m-0 text-xs text-slate-500">暂无消息。</p> : messages.slice().reverse().map((message) => <div className="mb-2 text-sm text-slate-800" key={message.id}>{message.message_type === "broadcast" && <strong className="mr-1 text-red-800">[指挥广播]</strong>}{message.content}<div className="mt-0.5 text-xs text-slate-500">{message.sender_display_name || "未知用户"} · {formatMessageTime(message.sent_at)}</div></div>)}</div>
     <form className="mt-2 flex gap-2" onSubmit={(event) => { event.preventDefault(); const text = content.trim(); if (!text) return; setBusy(true); void sendSpaceMessage(token, spaceId, text).then(() => { setContent(""); return load(); }).catch((cause) => setError(cause instanceof Error ? cause.message : "消息发送失败")).finally(() => setBusy(false)); }}><TextArea aria-label="发送协作消息" value={content} onChange={(event) => setContent(event.target.value)} maxLength={2000} placeholder="发送现场消息" /><Button type="submit" variant="primary" isDisabled={busy || !content.trim()}><Send size={15} />发送</Button>{canBroadcast && <Button type="button" variant="secondary" isDisabled={busy || !content.trim()} onPress={() => { const text = content.trim(); if (!text) return; setBusy(true); void sendSpaceMessage(token, spaceId, text, "broadcast").then(() => { setContent(""); return load(); }).catch((cause) => setError(cause instanceof Error ? cause.message : "广播发送失败")).finally(() => setBusy(false)); }}>广播</Button>}</form>
     <div className="mt-3 border-t border-slate-200 pt-3"><div className="flex items-center gap-1 text-xs font-medium text-slate-700"><Mic size={14} />Voice reports</div><label className="mt-2 flex items-center gap-2 text-xs text-slate-600"><input aria-label="Upload a voice report" accept="audio/mpeg,audio/ogg,audio/wav,audio/webm" className="block max-w-full text-xs" disabled={busy} type="file" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (!file) return; setBusy(true); void uploadVoiceReport(token, spaceId, file).then(() => load()).catch((cause) => setError(cause instanceof Error ? cause.message : "Voice report upload failed")).finally(() => setBusy(false)); }} /><Upload size={14} /></label>{voiceReports.length > 0 && <div className="mt-2 max-h-32 overflow-auto text-xs text-slate-700">{voiceReports.map((report) => <div className="border-b border-slate-100 py-1" key={report.id}><span className="font-medium">{report.status}</span><span className="ml-2">{Math.ceil(report.byte_size / 1024)} KB</span>{report.failed_reason && <span className="ml-2 text-amber-800">{report.failed_reason}</span>}{canBroadcast && report.transcript && <p className="mt-1 whitespace-pre-wrap text-slate-800">{report.transcript.content}</p>}</div>)}</div>}</div>
+    <VoiceIntercomPanel token={token} spaceId={spaceId} onUploaded={() => void load()} />
   </section>;
 }
 

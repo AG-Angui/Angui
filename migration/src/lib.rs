@@ -56,6 +56,9 @@ mod m0053_unify_case_places_as_location_clues;
 mod m0054_link_archive_learning_items;
 mod m0055_unique_knowledge_correction;
 mod m0056_create_knowledge_terms;
+mod m0057_create_case_map_areas;
+mod m0058_create_intercom_recordings;
+mod m0059_create_voice_clue_candidates;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -121,6 +124,9 @@ impl MigratorTrait for Migrator {
             Box::new(m0054_link_archive_learning_items::Migration),
             Box::new(m0055_unique_knowledge_correction::Migration),
             Box::new(m0056_create_knowledge_terms::Migration),
+            Box::new(m0057_create_case_map_areas::Migration),
+            Box::new(m0058_create_intercom_recordings::Migration),
+            Box::new(m0059_create_voice_clue_candidates::Migration),
         ]
     }
 }

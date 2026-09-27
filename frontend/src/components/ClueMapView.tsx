@@ -5,7 +5,7 @@ import { useAMap } from '../hooks/useAMap';
 import { MapTimelineCard } from './MapTimelineCard';
 import type { AMap as AMapType } from '../types/amap';
 import { LoadingState, ErrorState, EmptyState } from './ContentState';
-import { getCaseMapView, type CaseMapItem } from '../api/cases';
+import { getCaseMapView, type CaseMapArea, type CaseMapItem } from '../api/cases';
 
 export interface ClueMapViewProps {
   caseId: string;
@@ -28,6 +28,7 @@ const markerColors: Record<string, string> = {
  */
 export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps) {
   const [items, setItems] = useState<CaseMapItem[]>([]);
+  const [areas, setAreas] = useState<CaseMapArea[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState<Error | null>(null);
 
@@ -45,6 +46,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
     getCaseMapView(token, caseId)
       .then((response) => {
         setItems(response.items as CaseMapItem[]);
+        setAreas(response.areas ?? []);
       })
       .catch((err) => {
         setDataError(err);
@@ -248,6 +250,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
               onClick={() => handleCardClick(item)}
             />
           ))}
+          {areas.length > 0 && <section className="border-t border-slate-200 pt-3" aria-label="案件区域图层"><h3 className="mb-2 text-xs font-semibold text-slate-700">区域图层</h3>{areas.map((area) => <div className="mb-2 border border-slate-200 bg-white p-2 text-xs" key={area.id}><div className="flex items-center justify-between gap-2"><strong>{area.title}</strong><span className="text-slate-500">{area.status === 'approved' ? '已审核' : '待审核'}</span></div><div className="mt-1 text-slate-500">{area.area_type === 'search' ? '搜索区' : area.area_type === 'searched' ? '已搜区' : area.area_type === 'risk' ? '风险区' : '集合区'} · {area.vertices.length} 个顶点</div></div>)}</section>}
         </div>
 
         <Button

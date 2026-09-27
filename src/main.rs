@@ -36,6 +36,7 @@ async fn main() -> io::Result<()> {
         session_ttl_hours: settings.session_ttl_hours,
         intake_answer_hard_max: settings.intake_answer_hard_max,
         attachment_storage_directory: settings.attachment_storage_directory.clone(),
+        audio_storage_directory: settings.audio_storage_directory.clone(),
         attachment_max_image_bytes: settings.attachment_max_image_bytes,
         attachment_max_per_case: settings.attachment_max_per_case,
         case_place_types: settings.case_place_types.clone(),
@@ -52,6 +53,7 @@ async fn main() -> io::Result<()> {
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?,
     });
     task_service::start_location_report_retention_purger(state.db.clone());
+    angui::services::voice_clue_service::start_worker(state.db.clone());
 
     HttpServer::new(move || {
         let cors = Cors::default()

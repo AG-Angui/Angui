@@ -14,6 +14,7 @@ pub struct AppState {
     pub session_ttl_hours: i64,
     pub intake_answer_hard_max: usize,
     pub attachment_storage_directory: PathBuf,
+    pub audio_storage_directory: PathBuf,
     pub attachment_max_image_bytes: usize,
     pub attachment_max_per_case: u64,
     pub case_place_types: Vec<String>,

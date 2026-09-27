@@ -370,6 +370,24 @@ export interface CommandIntakeCase {
 }
 export interface CaseMapView {
   items: CaseMapItem[];
+  areas: CaseMapArea[];
+}
+
+export interface CaseMapArea {
+  id: string;
+  case_id: string;
+  area_type: "search" | "searched" | "risk" | "rally";
+  status: "candidate" | "pending_review" | "approved" | "rejected";
+  title: string;
+  description: string | null;
+  task_id: string | null;
+  clue_id: string | null;
+  version: number;
+  vertices: Array<{ vertex_order: number; latitude: number; longitude: number }>;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 export interface CaseSummaryClue {
   clue_id: string;
@@ -834,6 +852,7 @@ export interface CaseSourceRecord {
 
 export interface CaseMapView {
   items: CaseMapItem[];
+  areas: CaseMapArea[];
 }
 
 export interface CaseMapItem {

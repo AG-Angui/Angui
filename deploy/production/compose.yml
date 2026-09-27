@@ -1,0 +1,32 @@
+services:
+  api:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      ANGUI_HOST: 0.0.0.0
+      ANGUI_PORT: 8080
+      ANGUI_FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:?FRONTEND_ORIGIN is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ANGUI_AUDIO_STORAGE_DIRECTORY: /var/lib/angui/audio
+      ANGUI_AUDIO_RETENTION_DAYS: ${ANGUI_AUDIO_RETENTION_DAYS:-30}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - audio-data:/var/lib/angui/audio
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  web:
+    image: ${WEB_IMAGE:?WEB_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
+
+volumes:
+  audio-data:
+    name: ${AUDIO_VOLUME_NAME:-angui-audio}

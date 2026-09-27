@@ -28,6 +28,7 @@ pub struct Settings {
     pub session_ttl_hours: i64,
     pub intake_answer_hard_max: usize,
     pub attachment_storage_directory: PathBuf,
+    pub audio_storage_directory: PathBuf,
     pub attachment_max_image_bytes: usize,
     pub attachment_max_per_case: u64,
     pub case_place_types: Vec<String>,
@@ -92,6 +93,18 @@ impl Settings {
                     .to_owned(),
             );
         }
+        let audio_storage_directory = PathBuf::from(
+            value("ANGUI_AUDIO_STORAGE_DIRECTORY")?.unwrap_or_else(|| "data/audio".to_owned()),
+        );
+        if audio_storage_directory.as_os_str().is_empty()
+            || audio_storage_directory
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(
+                "ANGUI_AUDIO_STORAGE_DIRECTORY must be a non-empty path without '..'".to_owned(),
+            );
+        }
         let attachment_max_image_bytes = parse_bounded_usize(
             value("ANGUI_ATTACHMENT_MAX_IMAGE_BYTES")?
                 .unwrap_or_else(|| (5 * 1024 * 1024).to_string()),
@@ -143,6 +156,7 @@ impl Settings {
             session_ttl_hours,
             intake_answer_hard_max,
             attachment_storage_directory,
+            audio_storage_directory,
             attachment_max_image_bytes,
             attachment_max_per_case,
             case_place_types,
@@ -486,6 +500,7 @@ mod tests {
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
             attachment_storage_directory: PathBuf::from("data/attachments"),
+            audio_storage_directory: PathBuf::from("data/audio"),
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
             case_place_types: vec!["frequent".to_owned()],

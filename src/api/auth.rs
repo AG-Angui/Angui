@@ -148,13 +148,29 @@ fn bearer_token_from_service_request(request: &ServiceRequest) -> Result<String,
     let value = request
         .headers()
         .get(header::AUTHORIZATION)
-        .ok_or_else(|| ApiError::Unauthorized("authentication required".to_owned()))?
-        .to_str()
-        .map_err(|_| ApiError::Unauthorized("invalid authorization header".to_owned()))?;
+        .and_then(|value| value.to_str().ok());
+    let query_token = (request.path().ends_with("/events/ws"))
+        .then(|| {
+            request
+                .query_string()
+                .split('&')
+                .find_map(|part| part.strip_prefix("access_token="))
+        })
+        .flatten();
+    if value.is_none() {
+        return query_token
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ApiError::Unauthorized("authentication required".to_owned()));
+    }
+    let value = value.expect("checked above");
     let mut parts = value.split_whitespace();
     let scheme = parts.next().unwrap_or_default();
     let token = parts.next().unwrap_or_default();
     if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() || parts.next().is_some() {
+        if let Some(query_token) = query_token.filter(|token| !token.is_empty()) {
+            return Ok(query_token.to_owned());
+        }
         return Err(ApiError::Unauthorized(
             "invalid authorization header".to_owned(),
         ));

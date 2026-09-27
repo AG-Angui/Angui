@@ -1,5 +1,8 @@
 use actix_multipart::Multipart;
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpRequest, HttpResponse, web};
+use actix_ws::Message;
+use futures_util::StreamExt;
+use tokio::time::{Duration, interval};
 
 use crate::{
     app_state::AppState,
@@ -22,6 +25,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             web::scope("/collaboration-spaces")
                 .route("/{space_id}/snapshot", web::get().to(get_snapshot))
                 .route("/{space_id}/events", web::get().to(list_events))
+                .route("/{space_id}/events/ws", web::get().to(events_websocket))
                 .route("/{space_id}/locations", web::post().to(record_location))
                 .route(
                     "/{space_id}/locations/latest",
@@ -53,6 +57,56 @@ pub fn configure(config: &mut web::ServiceConfig) {
                     web::delete().to(revoke_location_consent),
                 ),
         );
+}
+
+async fn events_websocket(
+    request: HttpRequest,
+    body: web::Payload,
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, actix_web::Error> {
+    collaboration_space_service::authorize_space(&state.db, &auth, &space_id)
+        .await
+        .map_err(actix_web::error::ErrorForbidden)?;
+    let (response, mut session, mut messages) = actix_ws::handle(&request, body)?;
+    let db = state.db.clone();
+    let user = auth.clone();
+    let id = space_id.into_inner();
+    actix_web::rt::spawn(async move {
+        let mut version = 0;
+        let mut tick = interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                Some(Ok(message)) = messages.next() => match message {
+                    Message::Text(text) if text == "ping" => { let _ = session.text("pong"); }
+                    Message::Text(text) => {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                            && value.get("type").and_then(serde_json::Value::as_str) == Some("signal")
+                            && let Some(signal) = value.get("payload")
+                        {
+                            let _ = collaboration_space_service::publish_realtime_signal(&db, &user, &id, signal.clone()).await;
+                        }
+                    }
+                    Message::Ping(bytes) => { let _ = session.pong(&bytes); }
+                    Message::Close(reason) => { let _ = session.close(reason).await; break; }
+                    _ => {}
+                },
+                _ = tick.tick() => {
+                    match collaboration_space_service::list_events(&db, &user, &id, version).await {
+                        Ok(events) if !events.is_empty() => {
+                            version = events.iter().map(|event| event.version).max().unwrap_or(version);
+                            if session.text(serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_owned())).await.is_err() { break; }
+                        }
+                        Ok(_) => {}
+                        Err(_) => { let _ = session.close(None).await; break; }
+                    }
+                }
+                else => break,
+            }
+        }
+    });
+    Ok(response)
 }
 
 async fn create_space(
@@ -247,7 +301,7 @@ async fn create_voice_report(
             &filename,
             &content_type,
             &bytes,
-            &state.attachment_storage_directory,
+            &state.audio_storage_directory,
         )
         .await?,
     ))

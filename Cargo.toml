@@ -23,6 +23,7 @@ actix-web = { version = "4.14.0", default-features = false, features = [
     "compat",
     "ws",
 ] }
+actix-ws = "0.3.0"
 argon2 = "0.5.3"
 chrono = "0.4.42"
 dotenvy = "0.15.7"

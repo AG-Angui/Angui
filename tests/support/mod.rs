@@ -68,6 +68,7 @@ impl TestContext {
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
             attachment_storage_directory: std::env::temp_dir().join("angui-api-test-attachments"),
+            audio_storage_directory: std::env::temp_dir().join("angui-api-test-audio"),
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
             case_place_types: vec![

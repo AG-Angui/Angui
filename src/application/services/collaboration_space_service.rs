@@ -17,7 +17,7 @@ use crate::{
     entities::{
         cases, collaboration_spaces, event_outbox, space_events, space_location_consents,
         space_location_samples, space_member_slots, space_members, space_messages, users,
-        voice_reports, voice_transcripts,
+        voice_clue_candidates, voice_reports, voice_transcripts,
     },
     error::ApiError,
     models::{
@@ -465,6 +465,39 @@ pub async fn list_events(
         .collect()
 }
 
+/// Authorizes a realtime connection without exposing the internal membership
+/// tuple used by the HTTP snapshot implementation.
+pub async fn authorize_space(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+) -> Result<(), ApiError> {
+    require_space_access(db, auth, space_id).await.map(|_| ())
+}
+
+pub async fn publish_realtime_signal(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    payload: Value,
+) -> Result<(), ApiError> {
+    let transaction = db.begin().await?;
+    let space = active_space(&transaction, space_id).await?;
+    active_member(&transaction, space_id, &auth.id).await?;
+    let timestamp = now();
+    publish_event(
+        &transaction,
+        &space,
+        "webrtc.signal",
+        "space_members",
+        json!({"sender_id": auth.id, "signal": payload}),
+        &timestamp,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 /// Persists only an authorized volunteer's latest sample. Callers must provide
 /// an operation id so a reconnect cannot create a second sample or event.
 pub async fn record_location(
@@ -691,9 +724,9 @@ pub async fn list_messages(
         .collect())
 }
 
-/// Stores an authorized member's audio report in private storage. There is no
-/// configured ASR adapter in this deployment, so the report is deliberately
-/// finalized as failed instead of inventing a transcript or leaving it queued.
+/// Stores an authorized member's audio report in private storage and queues
+/// downstream transcription. Upload success is independent from provider
+/// availability; a worker may later mark the queue item failed with a reason.
 pub async fn store_voice_report(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -721,9 +754,9 @@ pub async fn store_voice_report(
         object_key: Set(object_key),
         content_type: Set(content_type.to_owned()),
         byte_size: Set(i64::try_from(bytes.len()).map_err(|_| ApiError::Internal)?),
-        status: Set("failed".to_owned()),
+        status: Set("uploaded".to_owned()),
         created_at: Set(timestamp.clone()),
-        failed_reason: Set(Some("ASR provider is not configured".to_owned())),
+        failed_reason: Set(None),
     }
     .insert(&transaction)
     .await;
@@ -737,7 +770,7 @@ pub async fn store_voice_report(
     if let Err(error) = publish_event(
         &transaction,
         &space,
-        "voice_report.processing_failed",
+        "voice_report.processing_queued",
         "commanders",
         json!({"voice_report_id": report.id, "reporter_id": auth.id, "status": report.status}),
         &timestamp,
@@ -746,6 +779,32 @@ pub async fn store_voice_report(
     {
         remove_file_best_effort(storage_path).await;
         return Err(error);
+    }
+    if let Err(error) = (voice_clue_candidates::ActiveModel {
+        id: Set(new_id()),
+        case_id: Set(space.case_id.clone()),
+        voice_report_id: Set(Some(report.id.clone())),
+        intercom_recording_id: Set(None),
+        submitted_by_user_id: Set(auth.id.clone()),
+        discoverer_user_id: Set(None),
+        source_type: Set("voice_report".to_owned()),
+        ai_generated: Set(true),
+        transcript_text: Set(None),
+        candidate_json: Set("{}".to_owned()),
+        asr_version: Set(None),
+        model_version: Set(None),
+        status: Set("queued".to_owned()),
+        retry_count: Set(0),
+        failure_reason: Set(None),
+        promoted_clue_id: Set(None),
+        created_at: Set(timestamp.clone()),
+        updated_at: Set(timestamp.clone()),
+    })
+    .insert(&transaction)
+    .await
+    {
+        remove_file_best_effort(storage_path).await;
+        return Err(ApiError::Database(error));
     }
     if let Err(error) = write_audit(
         &transaction,
@@ -758,6 +817,7 @@ pub async fn store_voice_report(
             "content_type": report.content_type,
             "byte_size": report.byte_size,
             "status": report.status,
+            "processing": "queued",
             "filename_present": !filename.trim().is_empty(),
         })),
     )
