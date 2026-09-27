@@ -200,7 +200,11 @@ export function LearningCenterPage() {
   const askFromKnowledge = () => {
     if (!token || !knowledgeQuery.trim()) return;
     setKnowledgeBusy(true); setKnowledgeMessage("");
-    void askKnowledge(token, knowledgeQuery, { category: knowledgeCategory, tag: knowledgeTag }).then(setKnowledgeAnswer).catch((cause) => setKnowledgeMessage(messageFrom(cause))).finally(() => setKnowledgeBusy(false));
+    const filters = {
+      ...(knowledgeCategory && { category: knowledgeCategory }),
+      ...(knowledgeTag && { tag: knowledgeTag }),
+    };
+    void askKnowledge(token, knowledgeQuery, filters).then(setKnowledgeAnswer).catch((cause) => setKnowledgeMessage(messageFrom(cause))).finally(() => setKnowledgeBusy(false));
   };
 
   const load = useCallback(async () => {

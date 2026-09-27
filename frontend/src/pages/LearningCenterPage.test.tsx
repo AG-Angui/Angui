@@ -254,6 +254,10 @@ describe("LearningCenterPage", () => {
     await waitFor(() => expect(mocked.searchLearningKnowledge).toHaveBeenLastCalledWith(
       "learner-session", { query: "", category_id: "安全", tag: "" },
     ));
+    fireEvent.change(screen.getByLabelText("搜索知识"), { target: { value: "核实" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "基于资料问答" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "基于资料问答" }));
+    expect(mocked.askKnowledge).toHaveBeenCalledWith("learner-session", "核实", { category: "安全" });
   });
 
   it("labels a gateway degradation as source text instead of model output", async () => {
@@ -273,7 +277,7 @@ describe("LearningCenterPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "基于资料问答" }));
 
     expect(await screen.findByText("当前未配置或无法连接可用的 AI Gateway；以下是命中资料原文拼接，不是模型生成回答。")).toBeInTheDocument();
-    expect(mocked.askKnowledge).toHaveBeenCalledWith("learner-session", "如何处理", { category: "", tag: "" });
+    expect(mocked.askKnowledge).toHaveBeenCalledWith("learner-session", "如何处理", {});
     expect(screen.getByText("请由负责人复核。")).toBeInTheDocument();
   });
 

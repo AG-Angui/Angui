@@ -262,6 +262,39 @@ async fn learner_answer_uses_every_keyword_match_even_when_a_legacy_limit_is_sen
     let answer: Value = test::read_body_json(response).await;
     assert_eq!(answer["sources"].as_array().expect("sources").len(), 2);
 
+    let unfiltered = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/knowledge-bases/learning-materials/chat")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "query": "Beacon", "category": "", "tag": "   " }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(unfiltered.status(), StatusCode::OK);
+    let answer: Value = test::read_body_json(unfiltered).await;
+    assert_eq!(answer["sources"].as_array().expect("sources").len(), 2);
+
+    let category_only = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/knowledge-bases/learning-materials/chat")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .set_json(json!({ "query": "Beacon", "category": "search", "tag": "" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(category_only.status(), StatusCode::OK);
+    let answer: Value = test::read_body_json(category_only).await;
+    assert_eq!(answer["sources"].as_array().expect("sources").len(), 1);
+    assert_eq!(answer["sources"][0]["title"], "Beacon field guide");
+
     let filtered = test::call_service(
         &app,
         test::TestRequest::post()

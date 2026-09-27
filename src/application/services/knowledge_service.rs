@@ -847,6 +847,8 @@ pub async fn search_learning_materials(
     }
     let now = now();
     let query = query.map(str::trim).filter(|value| !value.is_empty());
+    let category = non_empty_filter(category);
+    let tag = non_empty_filter(tag);
     if let Some(value) = query {
         validate_query(value)?;
     }
@@ -864,16 +866,11 @@ pub async fn search_learning_materials(
         }
         let tags: Vec<String> = serde_json::from_str(&item.keywords_json).unwrap_or_default();
         if category.is_some_and(|value| {
-            let value = value.trim();
             !item.category.eq_ignore_ascii_case(value) && item.category_id.as_deref() != Some(value)
         }) {
             continue;
         }
-        if tag.is_some_and(|value| {
-            !tags
-                .iter()
-                .any(|tag| tag.eq_ignore_ascii_case(value.trim()))
-        }) {
+        if tag.is_some_and(|value| !tags.iter().any(|tag| tag.eq_ignore_ascii_case(value))) {
             continue;
         }
         let score = match query {
@@ -1203,8 +1200,10 @@ pub async fn chat_with_gateway_filtered(
     filters: KnowledgeChatFilters<'_>,
     gateway: &AiGateway,
 ) -> Result<KnowledgeChatResponse, ApiError> {
+    let category = non_empty_filter(filters.category);
+    let tag = non_empty_filter(filters.tag);
     let results = if base_id == "learning-materials" {
-        search_learning_materials(db, auth, Some(query), filters.category, filters.tag)
+        search_learning_materials(db, auth, Some(query), category, tag)
             .await?
             .results
     } else {
@@ -1225,8 +1224,8 @@ pub async fn chat_with_gateway_filtered(
         metadata_json: Set(Some(
             json!({
                 "source_count": results.len(),
-                "has_category_filter": filters.category.is_some(),
-                "has_tag_filter": filters.tag.is_some(),
+                "has_category_filter": category.is_some(),
+                "has_tag_filter": tag.is_some(),
             })
             .to_string(),
         )),
@@ -2020,6 +2019,9 @@ fn validate_query(value: &str) -> Result<&str, ApiError> {
     } else {
         Ok(value)
     }
+}
+fn non_empty_filter(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 fn validate_limit(value: Option<u32>) -> Result<u32, ApiError> {
     let value = value.unwrap_or(DEFAULT_LIMIT);
