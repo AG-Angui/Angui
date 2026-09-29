@@ -15,3 +15,5 @@ pub mod knowledge_service;
 pub mod learning_service;
 pub mod task_service;
 pub mod voice_clue_service;
+pub mod voice_review_service;
+pub mod voice_room_service;

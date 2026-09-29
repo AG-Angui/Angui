@@ -65,6 +65,17 @@ deploy() {
   require PREVIEW_BACKEND_DIR
   require PREVIEW_FRONTEND_DIR
 
+  # coturn must advertise a numeric relay address. Resolve the public media
+  # hostname when an explicit origin IP is not supplied by the deployment.
+  if [[ -z "${PREVIEW_PUBLIC_IP:-}" ]]; then
+    if ! resolved_ipv4_addresses="$(getent ahostsv4 "livekit-${PREVIEW_HOST}" | awk '{ print $1 }' | sort -u)" \
+      || [[ -z "${resolved_ipv4_addresses}" ]] \
+      || [[ "${resolved_ipv4_addresses}" == *$'\n'* ]]; then
+      die "livekit-${PREVIEW_HOST} must resolve to one public origin IPv4 address, or PREVIEW_PUBLIC_IP must be set"
+    fi
+    PREVIEW_PUBLIC_IP="${resolved_ipv4_addresses}"
+  fi
+
   if [[ "${AMAP_JSAPI_SECURITY_CODE:-}" == *$'\r'* || "${AMAP_JSAPI_SECURITY_CODE:-}" == *$'\n'* ]]; then
     die "AMAP_JSAPI_SECURITY_CODE must be a single-line secret"
   fi
@@ -87,9 +98,48 @@ deploy() {
   export ANGUI_AI_PROVIDERS_JSON="${ai_providers_json:-[]}"
   export ANGUI_PREVIEW_AI_ENDPOINT="${ANGUI_PREVIEW_AI_ENDPOINT:-}"
   export ANGUI_PREVIEW_AI_KEY="${ANGUI_PREVIEW_AI_KEY:-}"
+  export PREVIEW_ASR_IMAGE="${PREVIEW_ASR_IMAGE:-angui-asr:cpu}"
 
+  # Allocate nonoverlapping media ports across previews on the same host.
+  # Keep the allocation lock until the new .env has been installed.
+  install -d -m 750 "${PREVIEW_ROOT}"
+  exec 9>"${PREVIEW_ROOT}/.voice-ports.lock"
+  flock -x 9
   PREVIEW_DIR="${PREVIEW_ROOT}/${PREVIEW_ID}"
   ensure_preview_dir
+  preview_slot=""
+  if [[ -f "${PREVIEW_DIR}/.env" ]]; then
+    preview_slot="$(sed -n 's/^PREVIEW_VOICE_SLOT=//p' "${PREVIEW_DIR}/.env" | head -1)"
+  fi
+  if [[ ! "${preview_slot}" =~ ^[0-9]+$ ]] || (( preview_slot >= 100 )); then
+    used_slots=" "
+    for preview_env in "${PREVIEW_ROOT}"/*/.env; do
+      [[ -f "${preview_env}" ]] || continue
+      existing_slot="$(sed -n 's/^PREVIEW_VOICE_SLOT=//p' "${preview_env}" | head -1)"
+      [[ "${existing_slot}" =~ ^[0-9]+$ ]] && used_slots+="${existing_slot} "
+    done
+    for candidate_slot in $(seq 0 99); do
+      if [[ "${used_slots}" != *" ${candidate_slot} "* ]]; then
+        preview_slot="${candidate_slot}"
+        break
+      fi
+    done
+    [[ -n "${preview_slot}" ]] || die "no free preview voice port blocks remain"
+  fi
+  PREVIEW_LIVEKIT_UDP_PORT="$((21000 + preview_slot))"
+  PREVIEW_LIVEKIT_TCP_PORT="$((22000 + preview_slot))"
+  PREVIEW_TURN_PORT="$((23000 + preview_slot))"
+  PREVIEW_TURN_RELAY_MIN="$((24000 + preview_slot * 20))"
+  PREVIEW_TURN_RELAY_MAX="$((PREVIEW_TURN_RELAY_MIN + 19))"
+  PREVIEW_LIVEKIT_URL="${PREVIEW_SCHEME:-https}://livekit-${PREVIEW_HOST}"
+  PREVIEW_LIVEKIT_URL="${PREVIEW_LIVEKIT_URL/https:/wss:}"
+  PREVIEW_LIVEKIT_URL="${PREVIEW_LIVEKIT_URL/http:/ws:}"
+  PREVIEW_TURN_URL="turn:livekit-${PREVIEW_HOST}:${PREVIEW_TURN_PORT}?transport=udp"
+  LIVEKIT_API_KEY="angui-${PREVIEW_ID}"
+  LIVEKIT_API_SECRET="$(openssl rand -hex 32)"
+  TURN_SECRET="$(openssl rand -hex 32)"
+  ANGUI_ASR_KEY="$(openssl rand -hex 32)"
+
   [[ -f "${PREVIEW_BACKEND_DIR}/angui" ]] || die "backend artifact angui is missing"
   [[ -f "${PREVIEW_BACKEND_DIR}/angui-admin" ]] || die "backend artifact angui-admin is missing"
   [[ -f "${PREVIEW_BACKEND_DIR}/migration" ]] || die "backend artifact migration is missing"
@@ -108,6 +158,10 @@ deploy() {
   fi
 
   ensure_runtime_image
+  if ! docker image inspect "${PREVIEW_ASR_IMAGE}" >/dev/null 2>&1; then
+    docker build --tag "${PREVIEW_ASR_IMAGE}" "${PREVIEW_REPOSITORY_DIR}/deploy/asr"
+  fi
+  docker volume create angui-preview-asr-models >/dev/null
   ensure_proxy
   install -d -m 700 "${PREVIEW_DIR}/runtime"
   install -m 755 "${PREVIEW_BACKEND_DIR}/angui" "${PREVIEW_DIR}/runtime/angui"
@@ -118,6 +172,9 @@ deploy() {
   cp -a "${PREVIEW_FRONTEND_DIR}/." "${PREVIEW_DIR}/frontend/"
   install -m 600 "${PREVIEW_REPOSITORY_DIR}/deploy/preview/compose.local.yml" "${PREVIEW_DIR}/compose.yml"
   install -m 644 "${PREVIEW_REPOSITORY_DIR}/deploy/preview/nginx.conf" "${PREVIEW_DIR}/nginx.conf"
+  sed -e "s/tcp_port: 7881/tcp_port: ${PREVIEW_LIVEKIT_TCP_PORT}/" \
+      -e "s/udp_port: 7882/udp_port: ${PREVIEW_LIVEKIT_UDP_PORT}/" \
+      "${PREVIEW_REPOSITORY_DIR}/deploy/preview/livekit.yaml" > "${PREVIEW_DIR}/livekit.yaml"
 
   umask 077
   cat > "${PREVIEW_DIR}/.env" <<EOF
@@ -131,7 +188,23 @@ PREVIEW_PROXY_NETWORK=${PREVIEW_PROXY_NETWORK:-angui-proxy}
 AMAP_WEBSERVICE_KEY=${AMAP_WEBSERVICE_KEY:-}
 AMAP_JSAPI_SECURITY_CODE=${AMAP_JSAPI_SECURITY_CODE:-}
 ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS=${ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS:-24}
+PREVIEW_SCHEME=${PREVIEW_SCHEME:-https}
+PREVIEW_VOICE_SLOT=${preview_slot}
+PREVIEW_PUBLIC_IP=${PREVIEW_PUBLIC_IP}
+PREVIEW_ASR_IMAGE=${PREVIEW_ASR_IMAGE}
+PREVIEW_LIVEKIT_UDP_PORT=${PREVIEW_LIVEKIT_UDP_PORT}
+PREVIEW_LIVEKIT_TCP_PORT=${PREVIEW_LIVEKIT_TCP_PORT}
+PREVIEW_TURN_PORT=${PREVIEW_TURN_PORT}
+PREVIEW_TURN_RELAY_MIN=${PREVIEW_TURN_RELAY_MIN}
+PREVIEW_TURN_RELAY_MAX=${PREVIEW_TURN_RELAY_MAX}
+PREVIEW_LIVEKIT_URL=${PREVIEW_LIVEKIT_URL}
+PREVIEW_TURN_URL=${PREVIEW_TURN_URL}
+LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+TURN_SECRET=${TURN_SECRET}
+ANGUI_ASR_KEY=${ANGUI_ASR_KEY}
 EOF
+  flock -u 9
 
   # A preview is a fresh, disposable environment. Removing its named SQLite
   # volume before starting ensures prior data, sessions, and demo credentials
@@ -156,10 +229,14 @@ cleanup() {
 
   PREVIEW_DIR="${PREVIEW_ROOT}/${PREVIEW_ID}"
   ensure_preview_dir
+  install -d -m 750 "${PREVIEW_ROOT}"
+  exec 9>"${PREVIEW_ROOT}/.voice-ports.lock"
+  flock -x 9
   if [[ -f "${PREVIEW_DIR}/compose.yml" ]]; then
     compose down --volumes --remove-orphans
   fi
   rm -rf -- "${PREVIEW_DIR}"
+  flock -u 9
 }
 
 case "${1:-}" in

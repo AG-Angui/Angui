@@ -271,7 +271,7 @@ paths:
       tags: [Collaboration spaces]
       operationId: listCollaborationSpaceVoiceReports
       summary: List voice-report status; transcripts are commander-only
-      description: Members only receive their own report status. Raw audio has no download endpoint. Transcripts and AI candidates are never exposed to family users.
+      description: Members only receive their own report status. Commanders may receive transcripts. Raw audio uses a separate authorized download endpoint.
       security: [{ bearerAuth: [] }]
       x-case-roles: [commander, volunteer]
       x-data-classification: sensitive
@@ -283,7 +283,7 @@ paths:
       tags: [Collaboration spaces]
       operationId: createCollaborationSpaceVoiceReport
       summary: Upload a bounded private audio report
-      description: Accepted audio types are MPEG, OGG, WAV, and WebM. Without an approved ASR provider the report is explicitly marked failed; the server never fabricates a transcript or confirms a clue.
+      description: Accepted audio types are MPEG, OGG, WAV, and WebM. ASR and AI run asynchronously; unavailable providers cause an explicit retryable failure without fabricating a transcript or confirming a clue.
       security: [{ bearerAuth: [] }]
       x-case-roles: [commander, volunteer]
       x-data-classification: sensitive
@@ -300,6 +300,210 @@ paths:
       responses:
         "201": { description: Stored report status, content: { application/json: { schema: { $ref: "#/components/schemas/VoiceReport" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/messages/{message_id}/ack:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: message_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: acknowledgeCollaborationSpaceMessage
+      summary: Record a member delivery or acknowledgement receipt
+      description: The receipt is stored as a versioned collaboration event visible to commanders for broadcast auditing.
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AcknowledgeSpaceMessageRequest" } } }
+      responses:
+        "204": { description: Receipt recorded }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-room/ticket:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: createVoiceRoomTicket
+      summary: Issue a short LiveKit room token and TURN credentials
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: Room token and ICE servers }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-room/floor:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: setVoiceRoomFloor
+      summary: Grant or release server controlled microphone publish permission
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [active], properties: { active: { type: boolean } } } } } }
+      responses:
+        "204": { description: Floor updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/events/ticket:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: createSpaceSocketTicket
+      summary: Issue a one time 30 second WebSocket ticket
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: One time ticket }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/recordings:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: createIntercomRecording
+      summary: Save a PCM WAV room segment for asynchronous clue extraction
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      parameters:
+        - { name: started_at, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: ended_at, in: query, required: true, schema: { type: string, format: date-time } }
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
+      responses:
+        "201": { description: Recording and queued candidate }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Collaboration spaces]
+      operationId: listVoiceCandidates
+      summary: List authorized ASR and AI processing status
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: Candidate status and commander only transcript }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/retry:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: retryVoiceCandidate
+      summary: Retry a failed candidate, limited to five attempts
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "204": { description: Queued for retry }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/discoverer:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: confirmVoiceDiscoverer
+      summary: Let the submitter confirm an active space member as discoverer
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [discoverer_user_id], properties: { discoverer_user_id: { type: string, format: uuid } } } } } }
+      responses:
+        "204": { description: Discoverer confirmed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/return:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: returnVoiceCandidate
+      summary: Commander returns a pending voice draft to its submitter
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 1000 } } } } } }
+      responses:
+        "204": { description: Returned for revision }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Draft already reviewed or returned }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/resubmit:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: resubmitVoiceCandidate
+      summary: Submitter edits and resubmits a returned draft
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, description: ClueDraftCandidate JSON } } } }
+      responses:
+        "204": { description: Resubmitted for review }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Draft is not awaiting revision }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/merge:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: mergeVoiceCandidate
+      summary: Commander links a reviewed voice draft to an existing clue
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [target_clue_id, reason], properties: { target_clue_id: { type: string, format: uuid }, reason: { type: string, minLength: 1, maxLength: 1000 } } } } } }
+      responses:
+        "204": { description: Linked to existing clue }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Discoverer unconfirmed or draft returned }
+
+  /api/collaboration-spaces/{space_id}/recordings/{id}/audio:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Collaboration spaces]
+      operationId: downloadIntercomRecording
+      summary: Download a private recording as its owner or commander
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: PCM WAV bytes, content: { audio/wav: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-reports/{id}/audio:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Collaboration spaces]
+      operationId: downloadVoiceReportAudio
+      summary: Download private report audio as its owner or commander
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: Audio bytes }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -5333,6 +5537,13 @@ components:
       properties:
         content: { type: string, minLength: 1, maxLength: 2000 }
         message_type: { type: [string, "null"], enum: [text, broadcast, null] }
+
+    AcknowledgeSpaceMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [delivered, acknowledged] }
 
     SpaceMessage:
       type: object

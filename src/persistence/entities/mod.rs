@@ -50,6 +50,7 @@ pub mod space_location_consents;
 pub mod space_location_samples;
 pub mod space_member_slots;
 pub mod space_members;
+pub mod space_message_receipts;
 pub mod space_messages;
 pub mod summary_drafts;
 pub mod task_applications;

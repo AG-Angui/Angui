@@ -72,6 +72,39 @@ where
                 return Ok(request
                     .into_response(ApiError::Internal.error_response().map_into_right_body()));
             };
+            if request.path().ends_with("/events/ws") {
+                let ticket = request
+                    .query_string()
+                    .split('&')
+                    .find_map(|part| part.strip_prefix("ticket="))
+                    .ok_or_else(|| ApiError::Unauthorized("socket ticket required".to_owned()));
+                let auth = ticket.ok().and_then(|ticket| {
+                    state
+                        .ws_tickets
+                        .lock()
+                        .ok()
+                        .and_then(|mut tickets| tickets.remove(ticket))
+                });
+                let expected_space = request
+                    .path()
+                    .strip_prefix("/api/collaboration-spaces/")
+                    .and_then(|value| value.strip_suffix("/events/ws"));
+                if let Some(ticket) = auth
+                    && ticket.created.elapsed().as_secs() < 30
+                    && expected_space == Some(ticket.space_id.as_str())
+                {
+                    request.extensions_mut().insert(ticket.auth);
+                    return service
+                        .call(request)
+                        .await
+                        .map(ServiceResponse::map_into_left_body);
+                }
+                return Ok(request.into_response(
+                    ApiError::Unauthorized("socket ticket is invalid or expired".to_owned())
+                        .error_response()
+                        .map_into_right_body(),
+                ));
+            }
             let token = match bearer_token_from_service_request(&request) {
                 Ok(token) => token,
                 Err(error) => {
@@ -149,28 +182,14 @@ fn bearer_token_from_service_request(request: &ServiceRequest) -> Result<String,
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
-    let query_token = (request.path().ends_with("/events/ws"))
-        .then(|| {
-            request
-                .query_string()
-                .split('&')
-                .find_map(|part| part.strip_prefix("access_token="))
-        })
-        .flatten();
     if value.is_none() {
-        return query_token
-            .filter(|token| !token.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| ApiError::Unauthorized("authentication required".to_owned()));
+        return Err(ApiError::Unauthorized("authentication required".to_owned()));
     }
     let value = value.expect("checked above");
     let mut parts = value.split_whitespace();
     let scheme = parts.next().unwrap_or_default();
     let token = parts.next().unwrap_or_default();
     if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() || parts.next().is_some() {
-        if let Some(query_token) = query_token.filter(|token| !token.is_empty()) {
-            return Ok(query_token.to_owned());
-        }
         return Err(ApiError::Unauthorized(
             "invalid authorization header".to_owned(),
         ));

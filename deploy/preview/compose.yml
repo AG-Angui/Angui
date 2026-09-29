@@ -38,6 +38,15 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: ${ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS:-24}
       ANGUI_AUDIO_STORAGE_DIRECTORY: ${ANGUI_AUDIO_STORAGE_DIRECTORY:-/app/data/audio}
+      ANGUI_AUDIO_RETENTION_DAYS: ${ANGUI_AUDIO_RETENTION_DAYS:-1}
+      ANGUI_ASR_URL: http://asr:8000/transcribe
+      ANGUI_ASR_KEY: ${ANGUI_ASR_KEY:?ANGUI_ASR_KEY is required}
+      ANGUI_LIVEKIT_URL: ${PREVIEW_LIVEKIT_URL:?PREVIEW_LIVEKIT_URL is required}
+      ANGUI_LIVEKIT_ADMIN_URL: http://livekit:7880
+      ANGUI_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}
+      ANGUI_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
+      ANGUI_TURN_URL: ${PREVIEW_TURN_URL:?PREVIEW_TURN_URL is required}
+      ANGUI_TURN_SECRET: ${TURN_SECRET:?TURN_SECRET is required}
     volumes:
       - preview-data:/app/data
 
@@ -50,5 +59,38 @@ services:
     ports:
       - ${PREVIEW_BIND_ADDRESS:-0.0.0.0}:${PREVIEW_PORT:?PREVIEW_PORT is required}:80
 
+  livekit:
+    image: livekit/livekit-server:v1.9.7
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "${LIVEKIT_HTTP_PORT:-7880}:7880/tcp"
+      - "${LIVEKIT_UDP_PORT:-7882}:7882/udp"
+      - "${LIVEKIT_TCP_PORT:-7881}:7881/tcp"
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    command: ["-n", "--fingerprint", "--use-auth-secret", "--static-auth-secret=${TURN_SECRET:?TURN_SECRET is required}", "--realm=${TURN_REALM:?TURN_REALM is required}", "--external-ip=${PUBLIC_IP:?PUBLIC_IP is required}", "--min-port=${TURN_RELAY_MIN:-49160}", "--max-port=${TURN_RELAY_MAX:-49200}", "--no-cli", "--no-tls", "--no-dtls"]
+    ports:
+      - "${TURN_PORT:-3478}:3478/udp"
+      - "${TURN_RELAY_MIN:-49160}-${TURN_RELAY_MAX:-49200}:${TURN_RELAY_MIN:-49160}-${TURN_RELAY_MAX:-49200}/udp"
+
+  asr:
+    build: ../asr
+    restart: unless-stopped
+    environment:
+      ASR_API_KEY: ${ANGUI_ASR_KEY:?ANGUI_ASR_KEY is required}
+      ASR_MODEL: ${ASR_MODEL:-small}
+      ASR_DEVICE: cpu
+      ASR_COMPUTE_TYPE: int8
+    volumes:
+      - preview-asr-models:/models
+
 volumes:
   preview-data:
+  preview-asr-models:

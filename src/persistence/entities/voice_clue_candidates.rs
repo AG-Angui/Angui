@@ -20,6 +20,8 @@ pub struct Model {
     pub retry_count: i32,
     pub failure_reason: Option<String>,
     pub promoted_clue_id: Option<String>,
+    pub clue_draft_id: Option<String>,
+    pub returned_for_revision: bool,
     pub created_at: String,
     pub updated_at: String,
 }

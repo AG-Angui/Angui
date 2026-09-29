@@ -1,23 +1,19 @@
-use std::{
-    collections::HashMap,
-    env, fs,
-    path::{Path, PathBuf},
-};
-
-use actix_web::web;
 use chrono::{SecondsFormat, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde_json::{Value, json};
+use std::{collections::HashMap, env};
 use uuid::Uuid;
 
 use crate::{
+    audio_storage::AudioStorage,
     entities::{
-        cases, collaboration_spaces, event_outbox, space_events, space_location_consents,
-        space_location_samples, space_member_slots, space_members, space_messages, users,
-        voice_clue_candidates, voice_reports, voice_transcripts,
+        cases, clue_drafts, collaboration_spaces, event_outbox, intercom_recordings, space_events,
+        space_location_consents, space_location_samples, space_member_slots, space_members,
+        space_message_receipts, space_messages, users, voice_clue_candidates, voice_reports,
+        voice_transcripts,
     },
     error::ApiError,
     models::{
@@ -450,6 +446,7 @@ pub async fn list_events(
         .filter(space_events::Column::SpaceId.eq(space_id))
         .filter(space_events::Column::Version.gt(after_version))
         .order_by_asc(space_events::Column::Version)
+        .limit(200)
         .all(db)
         .await?
         .into_iter()
@@ -473,6 +470,28 @@ pub async fn authorize_space(
     space_id: &str,
 ) -> Result<(), ApiError> {
     require_space_access(db, auth, space_id).await.map(|_| ())
+}
+
+/// Requires a currently active case, space, and membership for media access.
+pub async fn authorize_voice(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+) -> Result<String, ApiError> {
+    active_space(db, space_id).await?;
+    let member = active_member(db, space_id, &auth.id).await?;
+    require_case_role(
+        db,
+        &auth.id,
+        &collaboration_spaces::Entity::find_by_id(space_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("collaboration space was not found".to_owned()))?
+            .case_id,
+        &[CaseRole::Commander, CaseRole::Volunteer],
+    )
+    .await?;
+    Ok(member.role)
 }
 
 pub async fn publish_realtime_signal(
@@ -724,6 +743,88 @@ pub async fn list_messages(
         .collect())
 }
 
+/// Records a member's delivery acknowledgement in a unique receipt row and the
+/// durable space event stream. Commanders receive events so broadcasts can be
+/// audited while the receipt row makes retries idempotent.
+pub async fn acknowledge_message(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    message_id: &str,
+    status: &str,
+) -> Result<(), ApiError> {
+    if !matches!(status, "delivered" | "acknowledged") {
+        return Err(ApiError::Validation(
+            "message acknowledgement status must be delivered or acknowledged".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let space = active_space(&transaction, space_id).await?;
+    active_member(&transaction, space_id, &auth.id).await?;
+    let message = space_messages::Entity::find_by_id(message_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("space message was not found".to_owned()))?;
+    if message.space_id != space.id {
+        return Err(ApiError::NotFound("space message was not found".to_owned()));
+    }
+    let timestamp = now();
+    let existing = space_message_receipts::Entity::find()
+        .filter(space_message_receipts::Column::SpaceId.eq(&space.id))
+        .filter(space_message_receipts::Column::MessageId.eq(&message.id))
+        .filter(space_message_receipts::Column::UserId.eq(&auth.id))
+        .one(&transaction)
+        .await?;
+    if let Some(receipt) = existing {
+        if receipt.status == "acknowledged" || receipt.status == status {
+            transaction.commit().await?;
+            return Ok(());
+        }
+        let mut active = receipt.into_active_model();
+        active.status = Set("acknowledged".to_owned());
+        active.acknowledged_at = Set(timestamp.clone());
+        active.update(&transaction).await?;
+    } else {
+        space_message_receipts::ActiveModel {
+            id: Set(new_id()),
+            space_id: Set(space.id.clone()),
+            message_id: Set(message.id.clone()),
+            user_id: Set(auth.id.clone()),
+            status: Set(status.to_owned()),
+            acknowledged_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
+    }
+    publish_event(
+        &transaction,
+        &space,
+        "message.acknowledged",
+        "commanders",
+        json!({
+            "message_id": message.id,
+            "user_id": auth.id,
+            "user_display_name": auth.display_name,
+            "status": status,
+            "acknowledged_at": timestamp,
+        }),
+        &timestamp,
+    )
+    .await?;
+    write_audit(
+        &transaction,
+        Some(space.case_id.clone()),
+        auth,
+        "collaboration_space.message_acknowledged",
+        "space_message",
+        message.id,
+        Some(json!({"status": status})),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 /// Stores an authorized member's audio report in private storage and queues
 /// downstream transcription. Upload success is independent from provider
 /// availability; a worker may later mark the queue item failed with a reason.
@@ -734,7 +835,7 @@ pub async fn store_voice_report(
     filename: &str,
     content_type: &str,
     bytes: &[u8],
-    directory: &Path,
+    storage: &dyn AudioStorage,
 ) -> Result<VoiceReportResponse, ApiError> {
     let extension = voice_extension(content_type)?;
     let transaction = db.begin().await?;
@@ -742,28 +843,31 @@ pub async fn store_voice_report(
     active_member(&transaction, space_id, &auth.id).await?;
 
     let id = Uuid::new_v4().to_string();
-    let object_key = format!("voice/{id}.{extension}");
-    let storage_path = directory.join(&object_key);
-    write_private_audio(&storage_path, bytes.to_vec()).await?;
+    let object_key = storage.report_key(&id, extension);
+    storage
+        .save(&object_key, bytes.to_vec())
+        .await
+        .map_err(|_| ApiError::Internal)?;
     let timestamp = now();
     let report = voice_reports::ActiveModel {
         id: Set(id),
         space_id: Set(space.id.clone()),
         case_id: Set(space.case_id.clone()),
         reporter_id: Set(auth.id.clone()),
-        object_key: Set(object_key),
+        object_key: Set(object_key.clone()),
         content_type: Set(content_type.to_owned()),
         byte_size: Set(i64::try_from(bytes.len()).map_err(|_| ApiError::Internal)?),
         status: Set("uploaded".to_owned()),
         created_at: Set(timestamp.clone()),
         failed_reason: Set(None),
+        audio_deleted_at: Set(None),
     }
     .insert(&transaction)
     .await;
     let report = match report {
         Ok(value) => value,
         Err(error) => {
-            remove_file_best_effort(storage_path).await;
+            let _ = storage.delete(&object_key).await;
             return Err(ApiError::Database(error));
         }
     };
@@ -777,7 +881,7 @@ pub async fn store_voice_report(
     )
     .await
     {
-        remove_file_best_effort(storage_path).await;
+        let _ = storage.delete(&object_key).await;
         return Err(error);
     }
     if let Err(error) = (voice_clue_candidates::ActiveModel {
@@ -797,13 +901,15 @@ pub async fn store_voice_report(
         retry_count: Set(0),
         failure_reason: Set(None),
         promoted_clue_id: Set(None),
+        clue_draft_id: Set(None),
+        returned_for_revision: Set(false),
         created_at: Set(timestamp.clone()),
         updated_at: Set(timestamp.clone()),
     })
     .insert(&transaction)
     .await
     {
-        remove_file_best_effort(storage_path).await;
+        let _ = storage.delete(&object_key).await;
         return Err(ApiError::Database(error));
     }
     if let Err(error) = write_audit(
@@ -823,11 +929,11 @@ pub async fn store_voice_report(
     )
     .await
     {
-        remove_file_best_effort(storage_path).await;
+        let _ = storage.delete(&object_key).await;
         return Err(error);
     }
     if let Err(error) = transaction.commit().await {
-        remove_file_best_effort(storage_path).await;
+        let _ = storage.delete(&object_key).await;
         return Err(ApiError::Database(error));
     }
     Ok(voice_report_response(report, None))
@@ -866,6 +972,314 @@ pub async fn list_voice_reports(
         responses.push(voice_report_response(report, transcript));
     }
     Ok(responses)
+}
+
+/// Saves one actual PCM WAV room segment and queues it without copying the
+/// audio a second time for clue extraction.
+pub async fn store_intercom_recording(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    bytes: &[u8],
+    started_at: &str,
+    ended_at: &str,
+    storage: &dyn AudioStorage,
+) -> Result<Value, ApiError> {
+    if bytes.len() < 44
+        || bytes.len() > MAX_VOICE_REPORT_BYTES
+        || &bytes[..4] != b"RIFF"
+        || &bytes[8..12] != b"WAVE"
+        || &bytes[12..16] != b"fmt "
+        || &bytes[36..40] != b"data"
+        || u16::from_le_bytes([bytes[20], bytes[21]]) != 1
+        || u16::from_le_bytes([bytes[22], bytes[23]]) != 1
+        || u16::from_le_bytes([bytes[34], bytes[35]]) != 16
+        || u32::from_le_bytes(bytes[40..44].try_into().map_err(|_| ApiError::Internal)?) as usize
+            != bytes.len() - 44
+    {
+        return Err(ApiError::Validation(
+            "recording must be a PCM WAV file".to_owned(),
+        ));
+    }
+    let start = chrono::DateTime::parse_from_rfc3339(started_at)
+        .map_err(|_| ApiError::Validation("invalid recording start time".to_owned()))?;
+    let end = chrono::DateTime::parse_from_rfc3339(ended_at)
+        .map_err(|_| ApiError::Validation("invalid recording end time".to_owned()))?;
+    if end <= start
+        || (end - start).num_seconds() > 60
+        || (Utc::now() - end.with_timezone(&Utc)).num_minutes().abs() > 10
+    {
+        return Err(ApiError::Validation(
+            "recording time range is invalid".to_owned(),
+        ));
+    }
+    let transaction = db.begin().await?;
+    let space = active_space(&transaction, space_id).await?;
+    active_member(&transaction, space_id, &auth.id).await?;
+    let id = new_id();
+    let stamp = start.with_timezone(&Utc).format("%Y%m%dT%H%M%S%.3fZ");
+    let object_key = storage.recording_key(space_id, &auth.id, &stamp.to_string(), &id);
+    storage
+        .save(&object_key, bytes.to_vec())
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    let timestamp = now();
+    let result = async {
+        let recording = intercom_recordings::ActiveModel {
+            id: Set(id.clone()), space_id: Set(space_id.to_owned()), case_id: Set(space.case_id.clone()),
+            user_id: Set(auth.id.clone()), object_key: Set(object_key.clone()),
+            source_content_type: Set("audio/wav".to_owned()), final_content_type: Set("audio/wav".to_owned()),
+            byte_size: Set(bytes.len() as i64), started_at: Set(start.to_rfc3339()),
+            ended_at: Set(end.to_rfc3339()), transcription_status: Set("queued".to_owned()),
+            created_at: Set(timestamp.clone()), failed_reason: Set(None),
+            audio_deleted_at: Set(None),
+        }.insert(&transaction).await?;
+        let candidate = voice_clue_candidates::ActiveModel {
+            id: Set(new_id()), case_id: Set(space.case_id.clone()),
+            voice_report_id: Set(None), intercom_recording_id: Set(Some(recording.id.clone())),
+            submitted_by_user_id: Set(auth.id.clone()), discoverer_user_id: Set(None),
+            source_type: Set("intercom_recording".to_owned()), ai_generated: Set(true),
+            transcript_text: Set(None), candidate_json: Set("{}".to_owned()),
+            asr_version: Set(None), model_version: Set(None), status: Set("queued".to_owned()),
+            retry_count: Set(0), failure_reason: Set(None), promoted_clue_id: Set(None),
+            clue_draft_id: Set(None), created_at: Set(timestamp.clone()), updated_at: Set(timestamp.clone()),
+            returned_for_revision: Set(false),
+        }.insert(&transaction).await?;
+        write_audit(&transaction, Some(space.case_id.clone()), auth,
+            "intercom.recording_queued", "intercom_recording", id.clone(),
+            Some(json!({"byte_size":bytes.len(),"candidate_id":candidate.id}))).await?;
+        Ok::<_, ApiError>(json!({"id":id,"candidate_id":candidate.id,"status":"queued","started_at":started_at,"ended_at":ended_at}))
+    }.await;
+    match result {
+        Ok(response) => {
+            if let Err(error) = transaction.commit().await {
+                let _ = storage.delete(&object_key).await;
+                return Err(ApiError::Database(error));
+            }
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = storage.delete(&object_key).await;
+            Err(error)
+        }
+    }
+}
+
+pub async fn read_audio(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    source: &str,
+    id: &str,
+    storage: &dyn AudioStorage,
+) -> Result<(Vec<u8>, String), ApiError> {
+    let (space, own_member) = require_space_access(db, auth, space_id).await?;
+    let commander = own_member.as_ref().is_some_and(|m| m.role == "commander");
+    let (key, mime, owner) = if source == "report" {
+        let report = voice_reports::Entity::find_by_id(id)
+            .one(db)
+            .await?
+            .filter(|r| r.space_id == space.id && r.audio_deleted_at.is_none())
+            .ok_or_else(|| ApiError::NotFound("audio was not found".to_owned()))?;
+        (report.object_key, report.content_type, report.reporter_id)
+    } else {
+        let recording = intercom_recordings::Entity::find_by_id(id)
+            .one(db)
+            .await?
+            .filter(|r| r.space_id == space.id && r.audio_deleted_at.is_none())
+            .ok_or_else(|| ApiError::NotFound("audio was not found".to_owned()))?;
+        (
+            recording.object_key,
+            recording.final_content_type,
+            recording.user_id,
+        )
+    };
+    if !commander && owner != auth.id {
+        return Err(ApiError::NotFound("audio was not found".to_owned()));
+    }
+    let bytes = storage
+        .read(&key)
+        .await
+        .map_err(|_| ApiError::NotFound("audio was not found".to_owned()))?;
+    Ok((bytes, mime))
+}
+
+pub async fn list_voice_candidates(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+) -> Result<Vec<Value>, ApiError> {
+    let (space, member) = require_space_access(db, auth, space_id).await?;
+    let commander = member.as_ref().is_some_and(|m| m.role == "commander");
+    let report_ids: Vec<String> = voice_reports::Entity::find()
+        .filter(voice_reports::Column::SpaceId.eq(space_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    let recording_ids: Vec<String> = intercom_recordings::Entity::find()
+        .filter(intercom_recordings::Column::SpaceId.eq(space_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    let items = voice_clue_candidates::Entity::find()
+        .filter(voice_clue_candidates::Column::CaseId.eq(&space.case_id))
+        .order_by_desc(voice_clue_candidates::Column::CreatedAt)
+        .limit(100)
+        .all(db)
+        .await?;
+    let mut response = Vec::new();
+    for candidate in items {
+        if !(commander || candidate.submitted_by_user_id == auth.id)
+            || !(candidate
+                .voice_report_id
+                .as_ref()
+                .is_some_and(|id| report_ids.contains(id))
+                || candidate
+                    .intercom_recording_id
+                    .as_ref()
+                    .is_some_and(|id| recording_ids.contains(id)))
+        {
+            continue;
+        }
+        let draft = if let Some(draft_id) = &candidate.clue_draft_id {
+            clue_drafts::Entity::find_by_id(draft_id).one(db).await?
+        } else {
+            None
+        };
+        let is_submitter = candidate.submitted_by_user_id == auth.id;
+        let returned = candidate.returned_for_revision;
+        let editable_candidate = if returned && is_submitter {
+            draft
+                .as_ref()
+                .map(|draft| serde_json::from_str::<Value>(&draft.candidate_json))
+                .transpose()
+                .map_err(|_| ApiError::Internal)?
+        } else {
+            None
+        };
+        response.push(json!({
+            "id":candidate.id,"voice_report_id":candidate.voice_report_id,"intercom_recording_id":candidate.intercom_recording_id,
+            "source_type":candidate.source_type,"status":candidate.status,"retry_count":candidate.retry_count,
+            "failure_reason":candidate.failure_reason,"clue_draft_id":candidate.clue_draft_id,
+            "discoverer_user_id":candidate.discoverer_user_id,"submitted_by_user_id":candidate.submitted_by_user_id,
+            "can_confirm_discoverer":is_submitter,
+            "returned_for_revision":returned,
+            "review_note":if is_submitter || commander {draft.as_ref().and_then(|draft| draft.review_reason.clone())} else {None},
+            "editable_candidate":editable_candidate,
+            "transcript":if commander {candidate.transcript_text} else {None},
+        }));
+    }
+    Ok(response)
+}
+
+pub async fn retry_voice_candidate(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    id: &str,
+) -> Result<(), ApiError> {
+    let (space, member) = require_space_access(db, auth, space_id).await?;
+    let candidate = voice_clue_candidates::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .filter(|c| c.case_id == space.case_id)
+        .ok_or_else(|| ApiError::NotFound("voice candidate was not found".to_owned()))?;
+    ensure_candidate_in_space(db, &candidate, space_id).await?;
+    if candidate.submitted_by_user_id != auth.id
+        && !member.as_ref().is_some_and(|m| m.role == "commander")
+    {
+        return Err(ApiError::NotFound(
+            "voice candidate was not found".to_owned(),
+        ));
+    }
+    if candidate.status != "failed" || candidate.retry_count >= 5 {
+        return Err(ApiError::Conflict(
+            "voice candidate cannot be retried".to_owned(),
+        ));
+    }
+    let retry_count = candidate.retry_count;
+    let mut active = candidate.into_active_model();
+    active.status = Set("queued".to_owned());
+    active.failure_reason = Set(None);
+    active.updated_at = Set(now());
+    active.update(db).await?;
+    write_audit(
+        db,
+        Some(space.case_id),
+        auth,
+        "voice_candidate.retried",
+        "voice_clue_candidate",
+        id.to_owned(),
+        Some(json!({"retry_count":retry_count})),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn confirm_voice_discoverer(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    space_id: &str,
+    id: &str,
+    discoverer_id: &str,
+) -> Result<(), ApiError> {
+    let (space, _) = require_space_access(db, auth, space_id).await?;
+    let candidate = voice_clue_candidates::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .filter(|c| c.case_id == space.case_id && c.submitted_by_user_id == auth.id)
+        .ok_or_else(|| ApiError::NotFound("voice candidate was not found".to_owned()))?;
+    ensure_candidate_in_space(db, &candidate, space_id).await?;
+    if candidate.status != "pending_review" {
+        return Err(ApiError::Conflict("candidate is not ready".to_owned()));
+    }
+    active_member(db, space_id, discoverer_id).await?;
+    let mut active = candidate.into_active_model();
+    active.discoverer_user_id = Set(Some(discoverer_id.to_owned()));
+    active.updated_at = Set(now());
+    active.update(db).await?;
+    write_audit(
+        db,
+        Some(space.case_id),
+        auth,
+        "voice_candidate.discoverer_confirmed",
+        "voice_clue_candidate",
+        id.to_owned(),
+        Some(json!({"discoverer_user_id":discoverer_id})),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn ensure_candidate_in_space(
+    db: &DatabaseConnection,
+    candidate: &voice_clue_candidates::Model,
+    space_id: &str,
+) -> Result<(), ApiError> {
+    let belongs = if let Some(id) = &candidate.voice_report_id {
+        voice_reports::Entity::find_by_id(id)
+            .one(db)
+            .await?
+            .is_some_and(|r| r.space_id == space_id)
+    } else if let Some(id) = &candidate.intercom_recording_id {
+        intercom_recordings::Entity::find_by_id(id)
+            .one(db)
+            .await?
+            .is_some_and(|r| r.space_id == space_id)
+    } else {
+        false
+    };
+    if belongs {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound(
+            "voice candidate was not found".to_owned(),
+        ))
+    }
 }
 
 fn event_targets_user(event: &space_events::Model, user_id: &str) -> bool {
@@ -1205,22 +1619,6 @@ fn voice_extension(content_type: &str) -> Result<&'static str, ApiError> {
             "unsupported voice report content type".to_owned(),
         )),
     }
-}
-
-async fn write_private_audio(path: &Path, bytes: Vec<u8>) -> Result<(), ApiError> {
-    let parent = path.parent().ok_or(ApiError::Internal)?.to_path_buf();
-    let path = path.to_path_buf();
-    web::block(move || {
-        fs::create_dir_all(parent)?;
-        fs::write(path, bytes)
-    })
-    .await
-    .map_err(|_| ApiError::Internal)?
-    .map_err(|_| ApiError::Internal)
-}
-
-async fn remove_file_best_effort(path: PathBuf) {
-    let _ = web::block(move || fs::remove_file(path)).await;
 }
 
 fn validate_location(request: &RecordSpaceLocationRequest) -> Result<(), ApiError> {

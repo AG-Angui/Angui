@@ -98,6 +98,12 @@ pub struct CreateSpaceMessageRequest {
     pub message_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgeSpaceMessageRequest {
+    pub status: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SpaceMessageResponse {
     pub id: String,

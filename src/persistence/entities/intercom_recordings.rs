@@ -17,6 +17,7 @@ pub struct Model {
     pub transcription_status: String,
     pub created_at: String,
     pub failed_reason: Option<String>,
+    pub audio_deleted_at: Option<String>,
 }
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}

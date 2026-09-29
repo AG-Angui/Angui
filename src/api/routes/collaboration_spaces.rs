@@ -8,11 +8,35 @@ use crate::{
     app_state::AppState,
     error::ApiError,
     models::{
-        AuthenticatedUser, CreateCollaborationSpaceRequest, CreateSpaceMessageRequest,
-        JoinCollaborationSpaceRequest, RecordSpaceLocationRequest, SpaceEventsQuery,
+        AcknowledgeSpaceMessageRequest, AuthenticatedUser, CreateCollaborationSpaceRequest,
+        CreateSpaceMessageRequest, JoinCollaborationSpaceRequest, RecordSpaceLocationRequest,
+        SpaceEventsQuery,
     },
-    services::collaboration_space_service,
+    services::{collaboration_space_service, voice_review_service, voice_room_service},
 };
+
+#[derive(serde::Deserialize)]
+struct RecordingTimes {
+    started_at: String,
+    ended_at: String,
+}
+#[derive(serde::Deserialize)]
+struct FloorRequest {
+    active: bool,
+}
+#[derive(serde::Deserialize)]
+struct DiscovererRequest {
+    discoverer_user_id: String,
+}
+#[derive(serde::Deserialize)]
+struct ReasonRequest {
+    reason: String,
+}
+#[derive(serde::Deserialize)]
+struct MergeRequest {
+    target_clue_id: String,
+    reason: String,
+}
 
 pub fn configure(config: &mut web::ServiceConfig) {
     config
@@ -26,6 +50,48 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{space_id}/snapshot", web::get().to(get_snapshot))
                 .route("/{space_id}/events", web::get().to(list_events))
                 .route("/{space_id}/events/ws", web::get().to(events_websocket))
+                .route("/{space_id}/events/ticket", web::post().to(events_ticket))
+                .route(
+                    "/{space_id}/voice-room/ticket",
+                    web::post().to(voice_room_ticket),
+                )
+                .route(
+                    "/{space_id}/voice-room/floor",
+                    web::post().to(set_voice_floor),
+                )
+                .route("/{space_id}/recordings", web::post().to(create_recording))
+                .route(
+                    "/{space_id}/recordings/{id}/audio",
+                    web::get().to(read_recording),
+                )
+                .route(
+                    "/{space_id}/voice-reports/{id}/audio",
+                    web::get().to(read_voice_report),
+                )
+                .route(
+                    "/{space_id}/voice-candidates",
+                    web::get().to(list_voice_candidates),
+                )
+                .route(
+                    "/{space_id}/voice-candidates/{id}/retry",
+                    web::post().to(retry_voice_candidate),
+                )
+                .route(
+                    "/{space_id}/voice-candidates/{id}/discoverer",
+                    web::post().to(confirm_discoverer),
+                )
+                .route(
+                    "/{space_id}/voice-candidates/{id}/return",
+                    web::post().to(return_voice_candidate),
+                )
+                .route(
+                    "/{space_id}/voice-candidates/{id}/resubmit",
+                    web::post().to(resubmit_voice_candidate),
+                )
+                .route(
+                    "/{space_id}/voice-candidates/{id}/merge",
+                    web::post().to(merge_voice_candidate),
+                )
                 .route("/{space_id}/locations", web::post().to(record_location))
                 .route(
                     "/{space_id}/locations/latest",
@@ -37,6 +103,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 )
                 .route("/{space_id}/messages", web::get().to(list_messages))
                 .route("/{space_id}/messages", web::post().to(create_message))
+                .route(
+                    "/{space_id}/messages/{message_id}/ack",
+                    web::post().to(acknowledge_message),
+                )
                 .route(
                     "/{space_id}/voice-reports",
                     web::get().to(list_voice_reports),
@@ -73,8 +143,15 @@ async fn events_websocket(
     let db = state.db.clone();
     let user = auth.clone();
     let id = space_id.into_inner();
+    let initial_version = request
+        .query_string()
+        .split('&')
+        .find_map(|part| part.strip_prefix("after_version="))
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0)
+        .max(0);
     actix_web::rt::spawn(async move {
-        let mut version = 0;
+        let mut version = initial_version;
         let mut tick = interval(Duration::from_secs(1));
         loop {
             tokio::select! {
@@ -82,14 +159,7 @@ async fn events_websocket(
                     Message::Text(text) if text == "ping" => {
                         let _ = session.text("pong").await;
                     }
-                    Message::Text(text) => {
-                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
-                            && value.get("type").and_then(serde_json::Value::as_str) == Some("signal")
-                            && let Some(signal) = value.get("payload")
-                        {
-                            let _ = collaboration_space_service::publish_realtime_signal(&db, &user, &id, signal.clone()).await;
-                        }
-                    }
+                    Message::Text(_) => {}
                     Message::Ping(bytes) => {
                         let _ = session.pong(&bytes).await;
                     }
@@ -111,6 +181,31 @@ async fn events_websocket(
         }
     });
     Ok(response)
+}
+
+async fn events_ticket(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    collaboration_space_service::authorize_space(&state.db, &auth, &space_id).await?;
+    let ticket = uuid::Uuid::new_v4().to_string();
+    let mut tickets = state.ws_tickets.lock().map_err(|_| ApiError::Internal)?;
+    tickets.retain(|_, item| item.created.elapsed().as_secs() < 30);
+    if tickets.len() >= 10_000 {
+        return Err(ApiError::Conflict(
+            "too many active socket tickets".to_owned(),
+        ));
+    }
+    tickets.insert(
+        ticket.clone(),
+        crate::app_state::SocketTicket {
+            auth,
+            space_id: space_id.into_inner(),
+            created: std::time::Instant::now(),
+        },
+    );
+    Ok(HttpResponse::Ok().json(serde_json::json!({"ticket":ticket,"expires_in_seconds":30})))
 }
 
 async fn create_space(
@@ -161,6 +256,7 @@ async fn leave_space(
     space_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     collaboration_space_service::leave_space(&state.db, &auth, &space_id).await?;
+    voice_room_service::disconnect_user(&state, &space_id, &auth.id).await;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -169,8 +265,9 @@ async fn archive_space(
     state: web::Data<AppState>,
     space_id: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok()
-        .json(collaboration_space_service::archive_space(&state.db, &auth, &space_id).await?))
+    let archived = collaboration_space_service::archive_space(&state.db, &auth, &space_id).await?;
+    voice_room_service::close_room(&state, &space_id).await;
+    Ok(HttpResponse::Ok().json(archived))
 }
 
 async fn grant_location_consent(
@@ -285,6 +382,24 @@ async fn list_messages(
         .json(collaboration_space_service::list_messages(&state.db, &auth, &space_id).await?))
 }
 
+async fn acknowledge_message(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    request: web::Json<AcknowledgeSpaceMessageRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, message_id) = path.into_inner();
+    collaboration_space_service::acknowledge_message(
+        &state.db,
+        &auth,
+        &space_id,
+        &message_id,
+        &request.status,
+    )
+    .await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
 async fn create_voice_report(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -305,7 +420,7 @@ async fn create_voice_report(
             &filename,
             &content_type,
             &bytes,
-            &state.audio_storage_directory,
+            state.audio_storage.as_ref(),
         )
         .await?,
     ))
@@ -318,4 +433,170 @@ async fn list_voice_reports(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok()
         .json(collaboration_space_service::list_voice_reports(&state.db, &auth, &space_id).await?))
+}
+
+async fn voice_room_ticket(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(voice_room_service::room_ticket(&state, &auth, &space_id).await?))
+}
+
+async fn set_voice_floor(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+    body: web::Json<FloorRequest>,
+) -> Result<HttpResponse, ApiError> {
+    voice_room_service::set_floor(&state, &auth, &space_id, body.active).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn create_recording(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+    times: web::Query<RecordingTimes>,
+    multipart: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    let (_filename, mime, bytes) =
+        crate::services::case_resource_service::read_single_audio_upload(
+            multipart,
+            collaboration_space_service::MAX_VOICE_REPORT_BYTES,
+        )
+        .await?;
+    if mime != "audio/wav" {
+        return Err(ApiError::Validation(
+            "intercom recording must be audio/wav".to_owned(),
+        ));
+    }
+    Ok(HttpResponse::Created().json(
+        collaboration_space_service::store_intercom_recording(
+            &state.db,
+            &auth,
+            &space_id,
+            &bytes,
+            &times.started_at,
+            &times.ended_at,
+            state.audio_storage.as_ref(),
+        )
+        .await?,
+    ))
+}
+
+async fn read_recording(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, id) = path.into_inner();
+    let (bytes, mime) = collaboration_space_service::read_audio(
+        &state.db,
+        &auth,
+        &space_id,
+        "recording",
+        &id,
+        state.audio_storage.as_ref(),
+    )
+    .await?;
+    Ok(HttpResponse::Ok().content_type(mime).body(bytes))
+}
+
+async fn read_voice_report(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, id) = path.into_inner();
+    let (bytes, mime) = collaboration_space_service::read_audio(
+        &state.db,
+        &auth,
+        &space_id,
+        "report",
+        &id,
+        state.audio_storage.as_ref(),
+    )
+    .await?;
+    Ok(HttpResponse::Ok().content_type(mime).body(bytes))
+}
+
+async fn list_voice_candidates(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        collaboration_space_service::list_voice_candidates(&state.db, &auth, &space_id).await?,
+    ))
+}
+
+async fn retry_voice_candidate(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, id) = path.into_inner();
+    collaboration_space_service::retry_voice_candidate(&state.db, &auth, &space_id, &id).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn confirm_discoverer(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<DiscovererRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, id) = path.into_inner();
+    collaboration_space_service::confirm_voice_discoverer(
+        &state.db,
+        &auth,
+        &space_id,
+        &id,
+        &body.discoverer_user_id,
+    )
+    .await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn return_voice_candidate(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<ReasonRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, id) = path.into_inner();
+    voice_review_service::return_candidate(&state.db, &auth, &space_id, &id, &body.reason).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn resubmit_voice_candidate(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<crate::models::ClueDraftCandidate>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, id) = path.into_inner();
+    voice_review_service::resubmit_candidate(&state.db, &auth, &space_id, &id, body.into_inner())
+        .await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn merge_voice_candidate(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<MergeRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (space_id, id) = path.into_inner();
+    voice_review_service::merge_candidate(
+        &state.db,
+        &auth,
+        &space_id,
+        &id,
+        &body.target_clue_id,
+        &body.reason,
+    )
+    .await?;
+    Ok(HttpResponse::NoContent().finish())
 }
