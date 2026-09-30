@@ -75,6 +75,17 @@ deploy() {
     fi
     PREVIEW_PUBLIC_IP="${resolved_ipv4_addresses}"
   fi
+  if [[ ! "${PREVIEW_PUBLIC_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    die "PREVIEW_PUBLIC_IP must be one IPv4 address"
+  fi
+  local -a ip_octets
+  local octet
+  IFS=. read -r -a ip_octets <<< "${PREVIEW_PUBLIC_IP}"
+  for octet in "${ip_octets[@]}"; do
+    if [[ "${octet}" != 0 && "${octet}" == 0* ]] || (( 10#${octet} > 255 )); then
+      die "PREVIEW_PUBLIC_IP must be one IPv4 address"
+    fi
+  done
 
   if [[ "${AMAP_JSAPI_SECURITY_CODE:-}" == *$'\r'* || "${AMAP_JSAPI_SECURITY_CODE:-}" == *$'\n'* ]]; then
     die "AMAP_JSAPI_SECURITY_CODE must be a single-line secret"
