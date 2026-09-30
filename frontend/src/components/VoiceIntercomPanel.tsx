@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Mic, PhoneOff } from "lucide-react";
 import { LocalAudioTrack, Room, RoomEvent, Track, type RemoteTrack } from "livekit-client";
 import { getVoiceRoomTicket, setVoiceFloor, uploadIntercomRecording } from "../api/collaborationSpaces";
+import { ApiClientError } from "../api/client";
 
 const SEGMENT_MS = 20_000;
 
@@ -239,7 +240,9 @@ export function VoiceIntercomPanel({ token, spaceId, onUploaded }: { token: stri
       media?.getTracks().forEach((track) => track.stop());
       void context?.close();
       setConnection("未加入");
-      setError(cause instanceof Error ? cause.message : "无法加入语音房间");
+      setError(cause instanceof ApiClientError && cause.detail
+        ? cause.detail
+        : cause instanceof Error ? cause.message : "无法加入语音房间");
     }
   };
 

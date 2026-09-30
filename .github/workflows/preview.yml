@@ -33,8 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          # Deployment tooling is always loaded from the trusted default branch.
-          ref: ${{ github.event.repository.default_branch }}
+          # Match Compose and deployment scripts to the CI artifacts being deployed.
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Download backend artifact
