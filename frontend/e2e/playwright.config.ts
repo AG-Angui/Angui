@@ -3,13 +3,15 @@ import { defineConfig } from "@playwright/test";
 const runId = (
   process.env.GITHUB_RUN_ID
     ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
-    : process.env.ANGUI_E2E_RUN_ID ?? "local"
+    : (process.env.ANGUI_E2E_RUN_ID ?? "local")
 ).replace(/[^a-zA-Z0-9-]/g, "-");
 const portSeed = [...runId].reduce(
   (hash, character) => (hash * 31 + character.charCodeAt(0)) % 10_000,
   0,
 );
-const backendPort = Number(process.env.ANGUI_E2E_BACKEND_PORT ?? 20_000 + portSeed);
+const backendPort = Number(
+  process.env.ANGUI_E2E_BACKEND_PORT ?? 20_000 + portSeed,
+);
 const frontendPort = Number(
   process.env.ANGUI_E2E_FRONTEND_PORT ?? 40_000 + portSeed,
 );

@@ -118,7 +118,9 @@ function poiRouteErrorMessage(cause: unknown) {
 
 function currentBrowserLocation(): Promise<BrowserPoiLocation> {
   if (!navigator.geolocation) {
-    return Promise.reject(new Error("当前浏览器不支持定位，请使用案件授权中心检索。"));
+    return Promise.reject(
+      new Error("当前浏览器不支持定位，请使用案件授权中心检索。"),
+    );
   }
   return new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(
@@ -127,7 +129,8 @@ function currentBrowserLocation(): Promise<BrowserPoiLocation> {
           longitude: position.coords.longitude,
           latitude: position.coords.latitude,
         }),
-      () => reject(new Error("未获得当前位置授权，请检查浏览器定位权限后重试。")),
+      () =>
+        reject(new Error("未获得当前位置授权，请检查浏览器定位权限后重试。")),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
     );
   });
@@ -237,7 +240,8 @@ export function VolunteerWorkspacePage() {
       if (workspaces.length < volunteerCases.length) {
         setNotice("部分案件暂时无法加载，其他案件仍可正常协作。");
       }
-      setCases(workspaces);      setMyTasks(assigned);
+      setCases(workspaces);
+      setMyTasks(assigned);
     } catch (cause) {
       setFailure({ message: messageFrom(cause), retry: () => void load() });
     } finally {
@@ -807,7 +811,11 @@ export function VolunteerWorkspacePage() {
                             {place.name}
                           </p>
                           <p className="mb-0 mt-1 text-xs text-slate-600">
-                            <MapPin aria-hidden="true" className="mr-1 inline" size={14} />
+                            <MapPin
+                              aria-hidden="true"
+                              className="mr-1 inline"
+                              size={14}
+                            />
                             {place.address}
                           </p>
                         </li>
@@ -1056,8 +1064,7 @@ export function VolunteerWorkspacePage() {
                           "browser_location"
                             ? "当前设备位置（仅本次使用）"
                             : "案件授权位置"}
-                          。
-                          数据来源：
+                          。 数据来源：
                           {poiSourceLabel(pois[workspace.detail.id].source)}
                           {pois[workspace.detail.id].fallback_message
                             ? ` · ${pois[workspace.detail.id].fallback_message}`
@@ -1088,7 +1095,9 @@ export function VolunteerWorkspacePage() {
                                     )}
                                     onPress={() => {
                                       const origin =
-                                        browserPoiLocations[workspace.detail.id];
+                                        browserPoiLocations[
+                                          workspace.detail.id
+                                        ];
                                       if (!token || !origin) return;
                                       void run(
                                         `case-${workspace.detail.id}-poi-route-${poi.id}`,
@@ -1097,16 +1106,23 @@ export function VolunteerWorkspacePage() {
                                             token,
                                             workspace.detail.id,
                                             {
-                                              browser_longitude: origin.longitude,
+                                              browser_longitude:
+                                                origin.longitude,
                                               browser_latitude: origin.latitude,
-                                              selection_token: poi.selection_token!,
+                                              selection_token:
+                                                poi.selection_token!,
                                             },
                                           ).catch((cause) => {
-                                            throw new Error(poiRouteErrorMessage(cause));
+                                            throw new Error(
+                                              poiRouteErrorMessage(cause),
+                                            );
                                           });
                                           setPoiRoutes((value) => ({
                                             ...value,
-                                            [workspace.detail.id]: { poi, route },
+                                            [workspace.detail.id]: {
+                                              poi,
+                                              route,
+                                            },
                                           }));
                                         },
                                         "步行路线已更新。",
@@ -1123,12 +1139,17 @@ export function VolunteerWorkspacePage() {
                         {poiRoutes[workspace.detail.id] && (
                           <div className="mt-3 border-t border-slate-200 pt-3">
                             <p className="m-0 font-medium text-slate-900">
-                              到 {poiRoutes[workspace.detail.id].poi.name} 的步行路线
+                              到 {poiRoutes[workspace.detail.id].poi.name}{" "}
+                              的步行路线
                             </p>
                             <p className="mb-0 mt-1 text-xs text-slate-600">
-                              直线约 {distanceLabel(poiRoutes[workspace.detail.id].route.straight_line_meters)}
-                              {poiRoutes[workspace.detail.id].route.walking_distance_meters !==
-                              null
+                              直线约{" "}
+                              {distanceLabel(
+                                poiRoutes[workspace.detail.id].route
+                                  .straight_line_meters,
+                              )}
+                              {poiRoutes[workspace.detail.id].route
+                                .walking_distance_meters !== null
                                 ? `；步行约 ${distanceLabel(poiRoutes[workspace.detail.id].route.walking_distance_meters)}，预计 ${durationLabel(poiRoutes[workspace.detail.id].route.walking_duration_seconds)}。`
                                 : "；路线服务暂不可用，以上为直线距离估算。"}
                             </p>

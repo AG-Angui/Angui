@@ -1,4 +1,8 @@
-import { expect, type APIRequestContext, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type TestInfo,
+} from "@playwright/test";
 
 export const demoPassword = "e2e-demo-password";
 export const accounts = {
@@ -88,7 +92,10 @@ export async function apiSsePost<T>(
   return JSON.parse(completed) as T;
 }
 
-export async function createCaseFixture(request: APIRequestContext, suffix: string) {
+export async function createCaseFixture(
+  request: APIRequestContext,
+  suffix: string,
+) {
   const familyToken = await tokenFor(request, accounts.family);
   const caseDetail = await apiPost(request, familyToken, "/api/cases", {
     display_name: `E2E case ${suffix}`,
@@ -110,7 +117,10 @@ export async function createCaseFixture(request: APIRequestContext, suffix: stri
     email: accounts.volunteer,
     case_role: "volunteer",
   });
-  return { caseId, displayName: caseDetail.elder_profile.display_name as string };
+  return {
+    caseId,
+    displayName: caseDetail.elder_profile.display_name as string,
+  };
 }
 
 export async function createClueFixture(
@@ -120,14 +130,19 @@ export async function createClueFixture(
 ) {
   const familyToken = await tokenFor(request, accounts.family);
   const content = `E2E clue ${suffix}: sighting near the north gate.`;
-  const clue = await apiPost(request, familyToken, `/api/cases/${caseId}/clues`, {
-    source: "family report",
-    content,
-    occurred_at: "2026-07-13T09:30:00Z",
-    location_text: "Test park north gate",
-    location_precision: "approximate",
-    source_type: "manual_report",
-  });
+  const clue = await apiPost(
+    request,
+    familyToken,
+    `/api/cases/${caseId}/clues`,
+    {
+      source: "family report",
+      content,
+      occurred_at: "2026-07-13T09:30:00Z",
+      location_text: "Test park north gate",
+      location_precision: "approximate",
+      source_type: "manual_report",
+    },
+  );
   return { clueId: clue.id as string, content };
 }
 
@@ -151,20 +166,25 @@ export async function createTaskFixture(
   await confirmClueFixture(request, clue.clueId);
   const commanderToken = await tokenFor(request, accounts.commander);
   const title = `E2E task ${suffix}`;
-  const task = await apiPost(request, commanderToken, `/api/cases/${caseId}/tasks`, {
-    source_clue_id: clue.clueId,
-    title,
-    objective: "Verify the synthetic report and submit observations.",
-    area_text: "Test park north gate",
-    latitude: 31.2,
-    longitude: 121.5,
-    due_at: "2099-07-27T12:00:00Z",
-    background: "A reviewed E2E clue needs field verification.",
-    risk_level: "medium",
-    risk_notes: "Remain in public areas.",
-    safety_briefing: "Keep contact with the commander.",
-    expected_feedback: "Submit a factual report.",
-  });
+  const task = await apiPost(
+    request,
+    commanderToken,
+    `/api/cases/${caseId}/tasks`,
+    {
+      source_clue_id: clue.clueId,
+      title,
+      objective: "Verify the synthetic report and submit observations.",
+      area_text: "Test park north gate",
+      latitude: 31.2,
+      longitude: 121.5,
+      due_at: "2099-07-27T12:00:00Z",
+      background: "A reviewed E2E clue needs field verification.",
+      risk_level: "medium",
+      risk_notes: "Remain in public areas.",
+      safety_briefing: "Keep contact with the commander.",
+      expected_feedback: "Submit a factual report.",
+    },
+  );
   return { taskId: task.id as string, title, clue };
 }
 
@@ -174,19 +194,24 @@ export async function createPublishedLearningResource(
 ) {
   const title = `E2E learning resource ${suffix}`;
   const adminToken = await tokenFor(request, accounts.admin);
-  const resource = await apiPost(request, adminToken, "/api/admin/learning/resources", {
-    title,
-    summary: "Synthetic learning resource for browser verification.",
-    content: "This content exists only to validate the publication workflow.",
-    resource_type: "prevention",
-    tags: ["e2e", "test"],
-    source_name: "E2E approved source",
-    source_url: "https://example.invalid/e2e-source",
-    visibility: "public",
-    effective_at: "2020-01-01T00:00:00.000Z",
-    permitted_use: "public_information",
-    submission_reason: "E2E governance workflow verification.",
-  });
+  const resource = await apiPost(
+    request,
+    adminToken,
+    "/api/admin/learning/resources",
+    {
+      title,
+      summary: "Synthetic learning resource for browser verification.",
+      content: "This content exists only to validate the publication workflow.",
+      resource_type: "prevention",
+      tags: ["e2e", "test"],
+      source_name: "E2E approved source",
+      source_url: "https://example.invalid/e2e-source",
+      visibility: "public",
+      effective_at: "2020-01-01T00:00:00.000Z",
+      permitted_use: "public_information",
+      submission_reason: "E2E governance workflow verification.",
+    },
+  );
   const resourceId = resource.id as string;
   const commanderToken = await tokenFor(request, accounts.commander);
   const volunteerToken = await tokenFor(request, accounts.volunteer);

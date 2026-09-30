@@ -1,5 +1,5 @@
-import { Button, Chip } from '@heroui/react';
-import { MapPin } from 'lucide-react';
+import { Button, Chip } from "@heroui/react";
+import { MapPin } from "lucide-react";
 
 export interface MapTimelineCardProps {
   item: {
@@ -20,20 +20,20 @@ export interface MapTimelineCardProps {
 
 // 类型对应的颜色映射
 const typeColors: Record<string, string> = {
-  clue: '#d84343',        // 红色 - 线索
-  location_clue: '#d84343', // 红色 - 地点线索（兼容旧接口响应）
-  task: '#2e8b57',        // 绿色 - 任务
-  place: '#6a43cf',       // 紫色 - 地点
-  last_seen: '#ef8f26',   // 橙色 - 最后出现
+  clue: "#d84343", // 红色 - 线索
+  location_clue: "#d84343", // 红色 - 地点线索（兼容旧接口响应）
+  task: "#2e8b57", // 绿色 - 任务
+  place: "#6a43cf", // 紫色 - 地点
+  last_seen: "#ef8f26", // 橙色 - 最后出现
 };
 
 // 类型对应的中文标签
 const typeLabels: Record<string, string> = {
-  clue: '线索',
-  location_clue: '地点线索',
-  task: '任务',
-  place: '地点',
-  last_seen: '最后出现',
+  clue: "线索",
+  location_clue: "地点线索",
+  task: "任务",
+  place: "地点",
+  last_seen: "最后出现",
 };
 
 /**
@@ -47,19 +47,19 @@ export function MapTimelineCard({
   onClick,
 }: MapTimelineCardProps) {
   const hasCoordinates = item.longitude !== null && item.latitude !== null;
-  const badgeColor = typeColors[item.object_type] || '#66717f';
+  const badgeColor = typeColors[item.object_type] || "#66717f";
 
   return (
     <Button
       className={`w-full p-3 text-left transition-all ${
         isActive
-          ? 'bg-teal-50 border-teal-300 shadow-md'
-          : 'bg-white/70 border-transparent hover:border-teal-200 hover:shadow-sm'
+          ? "bg-teal-50 border-teal-300 shadow-md"
+          : "bg-white/70 border-transparent hover:border-teal-200 hover:shadow-sm"
       }`}
       variant="ghost"
       onClick={hasCoordinates ? onClick : undefined}
       isDisabled={!hasCoordinates}
-      style={{ borderWidth: '1px', borderRadius: '16px' }}
+      style={{ borderWidth: "1px", borderRadius: "16px" }}
     >
       <div className="grid grid-cols-[40px_1fr] gap-3 w-full">
         {/* 编号徽章 */}
@@ -73,7 +73,7 @@ export function MapTimelineCard({
         {/* 卡片内容 */}
         <div className="flex flex-col gap-1 min-w-0">
           <h3 className="font-bold text-sm leading-tight truncate">
-            {item.display_name || '未命名项目'}
+            {item.display_name || "未命名项目"}
           </h3>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -82,11 +82,11 @@ export function MapTimelineCard({
             </Chip>
             {item.occurred_at && (
               <span className="text-xs text-gray-500">
-                {new Date(item.occurred_at).toLocaleString('zh-CN', {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
+                {new Date(item.occurred_at).toLocaleString("zh-CN", {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
                 })}
               </span>
             )}
@@ -102,7 +102,9 @@ export function MapTimelineCard({
             ) : (
               <>
                 <span className="text-gray-400">📍 仅文字位置</span>
-                <span className="ml-2">{item.location_text || '无位置信息'}</span>
+                <span className="ml-2">
+                  {item.location_text || "无位置信息"}
+                </span>
               </>
             )}
           </p>

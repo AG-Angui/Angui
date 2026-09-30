@@ -706,7 +706,10 @@ function CaseDetailView({
               <h2 className="m-0 text-xl font-bold text-slate-950">
                 {detail.elder_profile.display_name}
               </h2>
-              <StatusTag tone={statusTone(detail.status)} label={statusLabels[detail.status]} />
+              <StatusTag
+                tone={statusTone(detail.status)}
+                label={statusLabels[detail.status]}
+              />
               {pendingCount > 0 && (
                 <Chip size="sm" variant="soft">
                   <Chip.Label>{pendingCount} 条待审核</Chip.Label>
@@ -723,7 +726,8 @@ function CaseDetailView({
         </div>
       </header>
 
-      {(detail.access_role === "commander" || detail.access_role === "volunteer") && (
+      {(detail.access_role === "commander" ||
+        detail.access_role === "volunteer") && (
         <div className="border-b border-slate-200 px-5 py-4 sm:px-6">
           <CollaborationSpacePanel
             token={token}
@@ -803,19 +807,34 @@ function CaseDetailView({
           <Info label="健康注意" value={detail.elder_profile.health_notes} />
         )}
         {detail.elder_profile.mobility_notes && (
-          <Info label="行动能力" value={detail.elder_profile.mobility_notes.summary} />
+          <Info
+            label="行动能力"
+            value={detail.elder_profile.mobility_notes.summary}
+          />
         )}
         {detail.elder_profile.transportation_ability && (
-          <Info label="交通工具使用" value={detail.elder_profile.transportation_ability.summary} />
+          <Info
+            label="交通工具使用"
+            value={detail.elder_profile.transportation_ability.summary}
+          />
         )}
         {detail.elder_profile.frequent_locations && (
-          <Info label="常去地点" value={detail.elder_profile.frequent_locations.summary} />
+          <Info
+            label="常去地点"
+            value={detail.elder_profile.frequent_locations.summary}
+          />
         )}
         {detail.elder_profile.behavior_habits && (
-          <Info label="行为习惯" value={detail.elder_profile.behavior_habits.summary} />
+          <Info
+            label="行为习惯"
+            value={detail.elder_profile.behavior_habits.summary}
+          />
         )}
         {detail.elder_profile.suspicious_motive && (
-          <Info label="疑似动机" value={detail.elder_profile.suspicious_motive.summary} />
+          <Info
+            label="疑似动机"
+            value={detail.elder_profile.suspicious_motive.summary}
+          />
         )}
       </section>
 
@@ -858,7 +877,13 @@ function CaseDetailView({
                   if (!token) return;
                   void run(
                     "status",
-                    () => updateCaseStatus(token, detail.id, nextStatus, statusReason),
+                    () =>
+                      updateCaseStatus(
+                        token,
+                        detail.id,
+                        nextStatus,
+                        statusReason,
+                      ),
                     "案件状态已更新",
                   );
                 }}
@@ -889,12 +914,17 @@ function CaseDetailView({
                       </option>
                     ))}
                   </select>
-                  {((nextStatus === "active" && detail.status !== "active") || nextStatus === "ended") && (
+                  {((nextStatus === "active" && detail.status !== "active") ||
+                    nextStatus === "ended") && (
                     <Input
                       aria-label="重开理由"
                       value={statusReason}
                       maxLength={1000}
-                      placeholder={nextStatus === "ended" ? "结束理由（必填）" : "重开理由（必填）"}
+                      placeholder={
+                        nextStatus === "ended"
+                          ? "结束理由（必填）"
+                          : "重开理由（必填）"
+                      }
                       onChange={(event) => setStatusReason(event.target.value)}
                     />
                   )}
@@ -903,8 +933,12 @@ function CaseDetailView({
                     size="sm"
                     variant="secondary"
                     isDisabled={
-                      busy === "status" || nextStatus === detail.status ||
-                      (((nextStatus === "active" && detail.status !== "active") || nextStatus === "ended") && !statusReason.trim())
+                      busy === "status" ||
+                      nextStatus === detail.status ||
+                      (((nextStatus === "active" &&
+                        detail.status !== "active") ||
+                        nextStatus === "ended") &&
+                        !statusReason.trim())
                     }
                   >
                     保存
@@ -2821,7 +2855,10 @@ function CaseCollaborationPanel({
       "workflow" in payload &&
       typeof payload.workflow === "string"
     ) {
-      setActiveAiExecution({ id: payload.execution_id, workflow: payload.workflow });
+      setActiveAiExecution({
+        id: payload.execution_id,
+        workflow: payload.workflow,
+      });
       setAiReviewStage("queued");
     }
     if (event !== "progress" || !("stage" in payload)) return;
@@ -2914,7 +2951,9 @@ function CaseCollaborationPanel({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const raw = window.sessionStorage.getItem(`angui:case-ai-execution:${detail.id}`);
+    const raw = window.sessionStorage.getItem(
+      `angui:case-ai-execution:${detail.id}`,
+    );
     if (!raw) return;
     try {
       const value = JSON.parse(raw) as { id?: unknown; workflow?: unknown };
@@ -2928,7 +2967,8 @@ function CaseCollaborationPanel({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const key = `angui:case-ai-execution:${detail.id}`;
-    if (activeAiExecution) window.sessionStorage.setItem(key, JSON.stringify(activeAiExecution));
+    if (activeAiExecution)
+      window.sessionStorage.setItem(key, JSON.stringify(activeAiExecution));
     else window.sessionStorage.removeItem(key);
   }, [activeAiExecution, detail.id]);
 
@@ -3231,9 +3271,14 @@ function CaseCollaborationPanel({
                       source_reference: null,
                     },
                   );
-                  const created = await createClueDraft(token, detail.id, {
-                    source_record_id: record.id,
-                  }, updateAiReviewStage);
+                  const created = await createClueDraft(
+                    token,
+                    detail.id,
+                    {
+                      source_record_id: record.id,
+                    },
+                    updateAiReviewStage,
+                  );
                   setClueDrafts((current) => [...created, ...current]);
                   setClueDraftText("");
                   setActiveAiExecution(null);
@@ -4076,7 +4121,8 @@ function ElderProfileEditor({
     last_seen_at: detail.elder_profile.last_seen_at ?? "",
     last_seen_location: detail.elder_profile.last_seen_location ?? "",
     mobility_notes: detail.elder_profile.mobility_notes?.summary ?? "",
-    transportation_ability: detail.elder_profile.transportation_ability?.summary ?? "",
+    transportation_ability:
+      detail.elder_profile.transportation_ability?.summary ?? "",
     frequent_locations: detail.elder_profile.frequent_locations?.summary ?? "",
     behavior_habits: detail.elder_profile.behavior_habits?.summary ?? "",
     suspicious_motive: detail.elder_profile.suspicious_motive?.summary ?? "",
@@ -4096,10 +4142,13 @@ function ElderProfileEditor({
         last_seen_at: detail.elder_profile.last_seen_at ?? "",
         last_seen_location: detail.elder_profile.last_seen_location ?? "",
         mobility_notes: detail.elder_profile.mobility_notes?.summary ?? "",
-        transportation_ability: detail.elder_profile.transportation_ability?.summary ?? "",
-        frequent_locations: detail.elder_profile.frequent_locations?.summary ?? "",
+        transportation_ability:
+          detail.elder_profile.transportation_ability?.summary ?? "",
+        frequent_locations:
+          detail.elder_profile.frequent_locations?.summary ?? "",
         behavior_habits: detail.elder_profile.behavior_habits?.summary ?? "",
-        suspicious_motive: detail.elder_profile.suspicious_motive?.summary ?? "",
+        suspicious_motive:
+          detail.elder_profile.suspicious_motive?.summary ?? "",
       }),
     [detail],
   );

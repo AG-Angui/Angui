@@ -6,7 +6,11 @@ const workspaceRoot = resolve(import.meta.dirname, "../..");
 const frontendRoot = resolve(import.meta.dirname, "..");
 const e2eDirectory = resolve(workspaceRoot, ".e2e");
 const databaseFile = process.env.ANGUI_E2E_DATABASE_FILE ?? ".e2e/angui-e2e.db";
-const databaseFiles = [databaseFile, `${databaseFile}-shm`, `${databaseFile}-wal`];
+const databaseFiles = [
+  databaseFile,
+  `${databaseFile}-shm`,
+  `${databaseFile}-wal`,
+];
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const debugExecutable = (name) =>
   resolve(workspaceRoot, "target", "debug", `${name}${executableSuffix}`);
@@ -14,7 +18,11 @@ const frontendPort = process.env.ANGUI_E2E_FRONTEND_PORT ?? "5174";
 
 function run(program, args, cwd = workspaceRoot) {
   return new Promise((resolveRun, rejectRun) => {
-    const child = spawn(program, args, { cwd, env: process.env, stdio: "inherit" });
+    const child = spawn(program, args, {
+      cwd,
+      env: process.env,
+      stdio: "inherit",
+    });
     child.once("error", rejectRun);
     child.once("exit", (code, signal) => {
       if (code === 0) {
@@ -33,7 +41,9 @@ function run(program, args, cwd = workspaceRoot) {
 async function prepareDatabase() {
   await mkdir(e2eDirectory, { recursive: true });
   await Promise.all(
-    databaseFiles.map((file) => rm(resolve(workspaceRoot, file), { force: true })),
+    databaseFiles.map((file) =>
+      rm(resolve(workspaceRoot, file), { force: true }),
+    ),
   );
   await run("cargo", ["build", "--workspace", "--locked", "--bins"]);
   await run(debugExecutable("migration"), ["up"]);
@@ -81,7 +91,8 @@ function stop(signal = "SIGTERM") {
   }, 5_000).unref();
 }
 
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => stop(signal));
+for (const signal of ["SIGINT", "SIGTERM"])
+  process.once(signal, () => stop(signal));
 
 for (const [name, child] of [
   ["backend", backend],
@@ -94,7 +105,9 @@ for (const [name, child] of [
   });
   child.once("exit", (code, signal) => {
     if (!stopping) {
-      console.error(`${name} exited unexpectedly with ${code ?? signal ?? "an unknown error"}`);
+      console.error(
+        `${name} exited unexpectedly with ${code ?? signal ?? "an unknown error"}`,
+      );
       stop();
       process.exitCode = 1;
     }

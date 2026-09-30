@@ -86,7 +86,10 @@ export function AiReviewProgress({
           </p>
         </div>
       </div>
-      <ol className="mb-0 mt-4 grid grid-cols-4 gap-2 p-0" aria-label="审核进度">
+      <ol
+        className="mb-0 mt-4 grid grid-cols-4 gap-2 p-0"
+        aria-label="审核进度"
+      >
         {["已提交", "准备资料", "生成候选", "校验结果"].map((label, index) => {
           const isComplete = index < detail.completed;
           const isCurrent = index + 1 === detail.completed;

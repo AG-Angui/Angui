@@ -116,7 +116,9 @@ function IntakePhotoPreview({
   photo: IntakePhoto;
 }) {
   const [source, setSource] = useState<string | null>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const [status, setStatus] = useState<"loading" | "ready" | "failed">(
+    "loading",
+  );
 
   useEffect(() => {
     let active = true;
@@ -143,10 +145,18 @@ function IntakePhotoPreview({
   }, [photo.id, sessionId, token]);
 
   if (status === "loading") {
-    return <span className="text-xs text-slate-500" role="status">正在加载照片预览…</span>;
+    return (
+      <span className="text-xs text-slate-500" role="status">
+        正在加载照片预览…
+      </span>
+    );
   }
   if (status === "failed") {
-    return <span className="text-xs text-amber-800" role="status">照片预览暂时无法加载，请稍后重试。</span>;
+    return (
+      <span className="text-xs text-amber-800" role="status">
+        照片预览暂时无法加载，请稍后重试。
+      </span>
+    );
   }
   return source ? (
     <button
@@ -487,8 +497,16 @@ export function FamilyIntakeForm({
       void getIntakeSession(token, initialSessionId)
         .then((remote) => {
           setSession(remote);
-          setBasicInformation(readBasicInformation(remote.initial_answers?.basic_information));
-          if (["ready_for_confirmation", "awaiting_family_review", "ready_for_second_confirmation"].includes(remote.status)) {
+          setBasicInformation(
+            readBasicInformation(remote.initial_answers?.basic_information),
+          );
+          if (
+            [
+              "ready_for_confirmation",
+              "awaiting_family_review",
+              "ready_for_second_confirmation",
+            ].includes(remote.status)
+          ) {
             void loadDraft(remote.id, true, basicInformationRef.current);
           }
         })
@@ -559,13 +577,16 @@ export function FamilyIntakeForm({
         if (workflow === "intake_profile_draft") {
           await loadDraft(sessionId, true, basicInformationRef.current);
         } else if (workflow === "intake_initial_review") {
-          const review = await getIntakeAiInitialReview(sessionToken, sessionId);
+          const review = await getIntakeAiInitialReview(
+            sessionToken,
+            sessionId,
+          );
           if (!cancelled) {
             setInitialReview(review);
-      if (review.reviewed_profile) {
-        setProfile(review.reviewed_profile);
-      }
-      setConfirmedInitialReviewIssues([]);
+            if (review.reviewed_profile) {
+              setProfile(review.reviewed_profile);
+            }
+            setConfirmedInitialReviewIssues([]);
             setSession((current) =>
               current ? { ...current, status: review.status } : current,
             );
@@ -653,7 +674,10 @@ export function FamilyIntakeForm({
       if (shouldRequestAiFollowUp(field, next)) {
         setIsFetchingAiFollowUp(true);
         try {
-          const guidance: IntakeAiFollowUpResponse = await getIntakeAiFollowUp(token, next.id);
+          const guidance: IntakeAiFollowUpResponse = await getIntakeAiFollowUp(
+            token,
+            next.id,
+          );
           guidedSession = guidance.question
             ? {
                 ...next,
@@ -739,7 +763,8 @@ export function FamilyIntakeForm({
   async function saveBasicInformationAndReturn() {
     const nextAnswer = basicInformationAnswer(
       basicInformation,
-      session?.question_set_version !== undefined && session.question_set_version >= 3,
+      session?.question_set_version !== undefined &&
+        session.question_set_version >= 3,
     );
     if (!nextAnswer) {
       setError("请填写姓名或称呼，或返回补充线索继续填写。");
@@ -788,7 +813,9 @@ export function FamilyIntakeForm({
   async function uploadPhoto(file: File | undefined) {
     if (!token || !session || !file) return;
     if (!isSupportedPhotoFile(file)) {
-      setError("请上传 JPG、PNG 或 HEIC 格式的走失者照片。手机相册导出的照片可直接选择。");
+      setError(
+        "请上传 JPG、PNG 或 HEIC 格式的走失者照片。手机相册导出的照片可直接选择。",
+      );
       return;
     }
     setBusyAction("photo");
@@ -812,8 +839,15 @@ export function FamilyIntakeForm({
     setBusyAction("photo");
     setError("");
     try {
-      const updated = await replaceIntakePhoto(token, session.id, photo.id, file);
-      setPhotos((current) => current.map((item) => item.id === photo.id ? updated : item));
+      const updated = await replaceIntakePhoto(
+        token,
+        session.id,
+        photo.id,
+        file,
+      );
+      setPhotos((current) =>
+        current.map((item) => (item.id === photo.id ? updated : item)),
+      );
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -841,7 +875,12 @@ export function FamilyIntakeForm({
     setError("");
     try {
       const updated = await setPrimaryIntakePhoto(token, session.id, photo.id);
-      setPhotos((current) => current.map((item) => ({ ...item, is_primary: item.id === updated.id })));
+      setPhotos((current) =>
+        current.map((item) => ({
+          ...item,
+          is_primary: item.id === updated.id,
+        })),
+      );
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -1311,7 +1350,13 @@ export function FamilyIntakeForm({
               }
               onPress={() =>
                 void (async () => {
-                  if (!token || !session || !comparison?.from || !comparison?.to) return;
+                  if (
+                    !token ||
+                    !session ||
+                    !comparison?.from ||
+                    !comparison?.to
+                  )
+                    return;
                   setBusyAction("compare");
                   setComparisonError("");
                   try {
@@ -1321,7 +1366,11 @@ export function FamilyIntakeForm({
                       comparison.from,
                       comparison.to,
                     );
-                    setComparison({ from: comparison.from, to: comparison.to, fields: diff.changed_fields });
+                    setComparison({
+                      from: comparison.from,
+                      to: comparison.to,
+                      fields: diff.changed_fields,
+                    });
                   } catch (cause) {
                     setComparisonError(messageFrom(cause));
                   } finally {
@@ -1333,24 +1382,70 @@ export function FamilyIntakeForm({
               {busyAction === "compare" ? "正在比较…" : "比较所选版本"}
             </Button>
             {comparisonError ? (
-              <p className="mb-0 mt-2 text-xs text-rose-700">{comparisonError}</p>
+              <p className="mb-0 mt-2 text-xs text-rose-700">
+                {comparisonError}
+              </p>
             ) : comparison?.fields?.length ? (
               <div className="mt-3 space-y-1 text-xs text-slate-700">
-                <p className="mb-1 font-semibold">v{profileVersions.find((item) => item.id === comparison.from)?.version} → v{profileVersions.find((item) => item.id === comparison.to)?.version} 的变更</p>
+                <p className="mb-1 font-semibold">
+                  v
+                  {
+                    profileVersions.find((item) => item.id === comparison.from)
+                      ?.version
+                  }{" "}
+                  → v
+                  {
+                    profileVersions.find((item) => item.id === comparison.to)
+                      ?.version
+                  }{" "}
+                  的变更
+                </p>
                 <ul className="m-0 space-y-1 pl-4">
                   {comparison.fields.map((field) => (
                     <li key={field} className="space-y-1">
-                      <p className="m-0 font-medium">{profileFieldLabels[field] ?? field}</p>
-                      <p className="m-0">v{profileVersions.find((item) => item.id === comparison.from)?.version}：{profileVersions.find((item) => item.id === comparison.from)?.profile[field as keyof IntakeDraftProfile] || "未填写"}</p>
-                      <p className="m-0">v{profileVersions.find((item) => item.id === comparison.to)?.version}：{profileVersions.find((item) => item.id === comparison.to)?.profile[field as keyof IntakeDraftProfile] || "未填写"}</p>
+                      <p className="m-0 font-medium">
+                        {profileFieldLabels[field] ?? field}
+                      </p>
+                      <p className="m-0">
+                        v
+                        {
+                          profileVersions.find(
+                            (item) => item.id === comparison.from,
+                          )?.version
+                        }
+                        ：
+                        {profileVersions.find(
+                          (item) => item.id === comparison.from,
+                        )?.profile[field as keyof IntakeDraftProfile] ||
+                          "未填写"}
+                      </p>
+                      <p className="m-0">
+                        v
+                        {
+                          profileVersions.find(
+                            (item) => item.id === comparison.to,
+                          )?.version
+                        }
+                        ：
+                        {profileVersions.find(
+                          (item) => item.id === comparison.to,
+                        )?.profile[field as keyof IntakeDraftProfile] ||
+                          "未填写"}
+                      </p>
                     </li>
                   ))}
                 </ul>
               </div>
-            ) : comparison?.from && comparison?.to && comparison.fields !== null ? (
-              <p className="mb-0 mt-2 text-xs text-slate-500">所选两个版本的画像字段值一致。</p>
+            ) : comparison?.from &&
+              comparison?.to &&
+              comparison.fields !== null ? (
+              <p className="mb-0 mt-2 text-xs text-slate-500">
+                所选两个版本的画像字段值一致。
+              </p>
             ) : comparison?.from && comparison?.to ? (
-              <p className="mb-0 mt-2 text-xs text-slate-500">点击“比较所选版本”查看字段变更。</p>
+              <p className="mb-0 mt-2 text-xs text-slate-500">
+                点击“比较所选版本”查看字段变更。
+              </p>
             ) : null}
           </section>
         )}
@@ -1716,77 +1811,107 @@ export function FamilyIntakeForm({
       </header>
 
       {isFetchingAiFollowUp && (
-        <AiReviewProgress
-          stage="generating"
-          title="正在准备下一项问询"
-        />
+        <AiReviewProgress stage="generating" title="正在准备下一项问询" />
       )}
       {error && <Alert>{error}</Alert>}
       <AssessmentList items={displayedAssessments} />
 
-      {isReportDetailsSession && <section
-        className="mt-5 rounded-md border border-brand-200 bg-brand-50 p-4"
-        aria-labelledby="intake-photo-title"
-      >
-        <h3 id="intake-photo-title" className="m-0 text-sm font-bold text-slate-950">
-          走失者照片 <span aria-hidden="true">*</span>
-        </h3>
-        <p id="intake-photo-help" className="mb-3 mt-1 text-xs leading-5 text-slate-700">
-          请上传至少一张近期 JPG、PNG 或 HEIC 照片。手机相册导出的照片可直接选择；服务端会安全转换并移除非必要元数据。照片仅用于受控案件处理，不会公开展示、用于人脸识别或写入 AI 审核日志。
-        </p>
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif"
-          aria-describedby="intake-photo-help"
-          aria-label="上传走失者照片"
-          disabled={isBusy || photos.length >= 4}
-          onChange={(event) => {
-            void uploadPhoto(event.target.files?.[0]);
-            event.currentTarget.value = "";
-          }}
-          className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-brand-700 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2 disabled:opacity-60"
-        />
-        {busyAction === "photo" && (
-          <p className="mb-0 mt-2 text-xs text-slate-700" role="status">
-            正在安全转换照片，请稍候…
+      {isReportDetailsSession && (
+        <section
+          className="mt-5 rounded-md border border-brand-200 bg-brand-50 p-4"
+          aria-labelledby="intake-photo-title"
+        >
+          <h3
+            id="intake-photo-title"
+            className="m-0 text-sm font-bold text-slate-950"
+          >
+            走失者照片 <span aria-hidden="true">*</span>
+          </h3>
+          <p
+            id="intake-photo-help"
+            className="mb-3 mt-1 text-xs leading-5 text-slate-700"
+          >
+            请上传至少一张近期 JPG、PNG 或 HEIC
+            照片。手机相册导出的照片可直接选择；服务端会安全转换并移除非必要元数据。照片仅用于受控案件处理，不会公开展示、用于人脸识别或写入
+            AI 审核日志。
           </p>
-        )}
-        {photos.length > 0 ? (
-          <ul className="mb-0 mt-3 space-y-2 p-0 text-xs text-slate-700" aria-live="polite">
-            {photos.map((photo) => (
-              <li key={photo.id} className="flex items-center gap-3 rounded border border-slate-200 bg-white p-2">
-                <IntakePhotoPreview token={token ?? ""} sessionId={session.id} photo={photo} />
-                <span className="min-w-0 break-all">已上传：{photo.original_filename}（{Math.ceil(photo.byte_size / 1024)} KB）</span>
-                <div className="ml-auto flex shrink-0 gap-1">
-                  <Button size="sm" variant={photo.is_primary ? "primary" : "ghost"} isDisabled={isBusy || photo.is_primary} onPress={() => void setPrimaryPhoto(photo)}>
-                    {photo.is_primary ? "主图" : "设为主图"}
-                  </Button>
-                  <label className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
-                    替换
-                    <input
-                      type="file"
-                      className="sr-only"
-                      accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif"
-                      disabled={isBusy}
-                      onChange={(event) => {
-                        void replacePhoto(photo, event.target.files?.[0]);
-                        event.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
-                  <Button size="sm" variant="ghost" isDisabled={isBusy} onPress={() => void deletePhoto(photo)}>
-                    删除
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mb-0 mt-3 text-xs text-amber-800" role="status">
-            创建案件前必须至少上传一张照片。
-          </p>
-        )}
-      </section>}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif"
+            aria-describedby="intake-photo-help"
+            aria-label="上传走失者照片"
+            disabled={isBusy || photos.length >= 4}
+            onChange={(event) => {
+              void uploadPhoto(event.target.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+            className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-brand-700 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2 disabled:opacity-60"
+          />
+          {busyAction === "photo" && (
+            <p className="mb-0 mt-2 text-xs text-slate-700" role="status">
+              正在安全转换照片，请稍候…
+            </p>
+          )}
+          {photos.length > 0 ? (
+            <ul
+              className="mb-0 mt-3 space-y-2 p-0 text-xs text-slate-700"
+              aria-live="polite"
+            >
+              {photos.map((photo) => (
+                <li
+                  key={photo.id}
+                  className="flex items-center gap-3 rounded border border-slate-200 bg-white p-2"
+                >
+                  <IntakePhotoPreview
+                    token={token ?? ""}
+                    sessionId={session.id}
+                    photo={photo}
+                  />
+                  <span className="min-w-0 break-all">
+                    已上传：{photo.original_filename}（
+                    {Math.ceil(photo.byte_size / 1024)} KB）
+                  </span>
+                  <div className="ml-auto flex shrink-0 gap-1">
+                    <Button
+                      size="sm"
+                      variant={photo.is_primary ? "primary" : "ghost"}
+                      isDisabled={isBusy || photo.is_primary}
+                      onPress={() => void setPrimaryPhoto(photo)}
+                    >
+                      {photo.is_primary ? "主图" : "设为主图"}
+                    </Button>
+                    <label className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
+                      替换
+                      <input
+                        type="file"
+                        className="sr-only"
+                        accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif"
+                        disabled={isBusy}
+                        onChange={(event) => {
+                          void replacePhoto(photo, event.target.files?.[0]);
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={isBusy}
+                      onPress={() => void deletePhoto(photo)}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mb-0 mt-3 text-xs text-amber-800" role="status">
+              创建案件前必须至少上传一张照片。
+            </p>
+          )}
+        </section>
+      )}
 
       {question ? (
         <form
@@ -1813,7 +1938,11 @@ export function FamilyIntakeForm({
               }
             />
           ) : question.field === "police_report_status" ? (
-            <Field label="是否报警" required hint="请选择实际情况；系统不会自动判断报警状态。">
+            <Field
+              label="是否报警"
+              required
+              hint="请选择实际情况；系统不会自动判断报警状态。"
+            >
               <select
                 aria-label="是否报警"
                 value={answer}
@@ -1827,7 +1956,11 @@ export function FamilyIntakeForm({
               </select>
             </Field>
           ) : question.field === "family_phone" ? (
-            <Field label="家属电话" required hint="仅向经授权的家属和指挥人员开放，不会出现在公开进展中。">
+            <Field
+              label="家属电话"
+              required
+              hint="仅向经授权的家属和指挥人员开放，不会出现在公开进展中。"
+            >
               <Input
                 type="tel"
                 autoComplete="tel"

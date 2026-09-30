@@ -50,43 +50,67 @@ test("learner cannot see a single-choice answer before submitting and receives r
     uniqueTestSuffix(testInfo),
   );
   const adminToken = await tokenFor(request, accounts.admin);
-  const question = await apiPost(request, adminToken, "/api/admin/learning/questions", {
-    source_resource_id: resource.resourceId,
-    prompt: "E2E: 哪项是经过审核的培训说明？",
-    question_type: "single_choice",
-    difficulty: "basic",
-    tags: ["e2e"],
-    options: [
-      { id: "approved", text: "已审核培训说明" },
-      { id: "other", text: "未经审核的现场传言" },
-    ],
-    correct_option_id: "approved",
-    explanation: "解析只有提交完成后才会由服务端返回。",
-    visibility: "learner",
-    effective_at: "2020-01-01T00:00:00.000Z",
-    permitted_use: "training",
-    submission_reason: "E2E single-choice answer protection.",
-  });
+  const question = await apiPost(
+    request,
+    adminToken,
+    "/api/admin/learning/questions",
+    {
+      source_resource_id: resource.resourceId,
+      prompt: "E2E: 哪项是经过审核的培训说明？",
+      question_type: "single_choice",
+      difficulty: "basic",
+      tags: ["e2e"],
+      options: [
+        { id: "approved", text: "已审核培训说明" },
+        { id: "other", text: "未经审核的现场传言" },
+      ],
+      correct_option_id: "approved",
+      explanation: "解析只有提交完成后才会由服务端返回。",
+      visibility: "learner",
+      effective_at: "2020-01-01T00:00:00.000Z",
+      permitted_use: "training",
+      submission_reason: "E2E single-choice answer protection.",
+    },
+  );
   const questionId = question.id as string;
   const commanderToken = await tokenFor(request, accounts.commander);
   const volunteerToken = await tokenFor(request, accounts.volunteer);
-  await apiPost(request, commanderToken, `/api/admin/learning/questions/${questionId}/deidentify`, {
-    reason: "E2E independent deidentification.",
-  });
-  await apiPost(request, volunteerToken, `/api/admin/learning/questions/${questionId}/review`, {
-    reason: "E2E independent review.",
-  });
-  await apiPost(request, adminToken, `/api/admin/learning/questions/${questionId}/publish`, {
-    reason: "E2E publication approval.",
-  });
+  await apiPost(
+    request,
+    commanderToken,
+    `/api/admin/learning/questions/${questionId}/deidentify`,
+    {
+      reason: "E2E independent deidentification.",
+    },
+  );
+  await apiPost(
+    request,
+    volunteerToken,
+    `/api/admin/learning/questions/${questionId}/review`,
+    {
+      reason: "E2E independent review.",
+    },
+  );
+  await apiPost(
+    request,
+    adminToken,
+    `/api/admin/learning/questions/${questionId}/publish`,
+    {
+      reason: "E2E publication approval.",
+    },
+  );
 
   const learnerToken = await tokenFor(request, accounts.learner);
   await useAccount(page, learnerToken, "/learning");
   await expect(page.getByText("E2E: 哪项是经过审核的培训说明？")).toBeVisible();
-  await expect(page.getByText("解析只有提交完成后才会由服务端返回。")).toHaveCount(0);
+  await expect(
+    page.getByText("解析只有提交完成后才会由服务端返回。"),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "已审核培训说明" }).click();
   await expect(page.getByText("回答正确。", { exact: false })).toBeVisible();
-  await expect(page.getByText("解析只有提交完成后才会由服务端返回。")).toBeVisible();
+  await expect(
+    page.getByText("解析只有提交完成后才会由服务端返回。"),
+  ).toBeVisible();
 });
 
 test("learner category governance carries a draft through publication and filtering", async ({
@@ -129,10 +153,14 @@ test("learner category governance carries a draft through publication and filter
   await page.getByLabel("草稿标签").fill("e2e-tag, onboarding");
   await page.getByLabel("摘要").fill("A categorized E2E learning summary.");
   await page.getByLabel("正文").fill("A categorized E2E learning body.");
-  await page.getByLabel("提交理由").fill("E2E verifies the learner draft workflow.");
+  await page
+    .getByLabel("提交理由")
+    .fill("E2E verifies the learner draft workflow.");
   await draftSection.locator("select").selectOption(categoryId);
   await page.getByRole("button", { name: "提交草稿" }).click();
-  await expect(page.getByText("草稿已提交，等待独立去标识、审核与发布流程。")).toBeVisible();
+  await expect(
+    page.getByText("草稿已提交，等待独立去标识、审核与发布流程。"),
+  ).toBeVisible();
 
   const managedResources = await apiGet(
     request,
@@ -172,7 +200,9 @@ test("learner category governance carries a draft through publication and filter
   );
 
   await page.reload();
-  const publishedCard = page.locator("article").filter({ hasText: resourceTitle });
+  const publishedCard = page
+    .locator("article")
+    .filter({ hasText: resourceTitle });
   await expect(publishedCard).toHaveCount(1);
   await expect(publishedCard).toContainText(categoryName);
   await expect(publishedCard).toContainText("#e2e-tag");
@@ -187,7 +217,9 @@ test("learner category governance carries a draft through publication and filter
     );
   });
   await page.getByLabel("分类筛选").selectOption(categoryId);
-  const categoryResources = (await (await categoryFilterResponse).json()) as Array<{
+  const categoryResources = (await (
+    await categoryFilterResponse
+  ).json()) as Array<{
     id: string;
     category: { id: string } | null;
   }>;

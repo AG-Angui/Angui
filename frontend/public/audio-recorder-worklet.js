@@ -5,7 +5,8 @@ class PcmRecorder extends AudioWorkletProcessor {
     this.offset = 0;
     this.port.onmessage = (event) => {
       if (event.data?.type !== "flush") return;
-      if (this.offset > 0) this.port.postMessage(this.buffer.slice(0, this.offset));
+      if (this.offset > 0)
+        this.port.postMessage(this.buffer.slice(0, this.offset));
       this.buffer = new Float32Array(4096);
       this.offset = 0;
       this.port.postMessage({ type: "flushed" });

@@ -227,7 +227,10 @@ export function LearningGovernancePage() {
       question_type: "single_choice",
       difficulty: "basic",
       tags: [],
-      options: [{ id: "A", text: "" }, { id: "B", text: "" }],
+      options: [
+        { id: "A", text: "" },
+        { id: "B", text: "" },
+      ],
       correct_option_id: "",
       explanation: "",
       visibility: "learner",
@@ -237,27 +240,59 @@ export function LearningGovernancePage() {
     },
   );
   const [questionTags, setQuestionTags] = useState("");
-  const [knowledgeBases, setKnowledgeBases] = useState<import("../api/learning").KnowledgeBase[]>([]);
-  const [knowledgeOverview, setKnowledgeOverview] = useState<import("../api/learning").KnowledgeOverview | null>(null);
+  const [knowledgeBases, setKnowledgeBases] = useState<
+    import("../api/learning").KnowledgeBase[]
+  >([]);
+  const [knowledgeOverview, setKnowledgeOverview] = useState<
+    import("../api/learning").KnowledgeOverview | null
+  >(null);
   const [knowledgeBaseName, setKnowledgeBaseName] = useState("");
   const [knowledgeBaseDescription, setKnowledgeBaseDescription] = useState("");
-  const [knowledgeImport, setKnowledgeImport] = useState<import("../api/learning").KnowledgeImportBatch | null>(null);
-  const [knowledgeItems, setKnowledgeItems] = useState<import("../api/learning").KnowledgeItem[]>([]);
-  const [knowledgeTerms, setKnowledgeTerms] = useState<import("../api/learning").KnowledgeTerm[]>([]);
+  const [knowledgeImport, setKnowledgeImport] = useState<
+    import("../api/learning").KnowledgeImportBatch | null
+  >(null);
+  const [knowledgeItems, setKnowledgeItems] = useState<
+    import("../api/learning").KnowledgeItem[]
+  >([]);
+  const [knowledgeTerms, setKnowledgeTerms] = useState<
+    import("../api/learning").KnowledgeTerm[]
+  >([]);
   const [knowledgeTermName, setKnowledgeTermName] = useState("");
-  const [knowledgeTermKind, setKnowledgeTermKind] = useState<"category" | "tag">("category");
-  const [learnerPreview, setLearnerPreview] = useState<import("../api/learning").KnowledgeSearchResult | null>(null);
-  const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<Record<string, string>>({});
-  const [knowledgeImageStates, setKnowledgeImageStates] = useState<Record<string, "loading" | "failed">>({});
-  const knowledgeImageQueue = useRef<Array<{ itemId: string; imageId: string }>>([]);
+  const [knowledgeTermKind, setKnowledgeTermKind] = useState<
+    "category" | "tag"
+  >("category");
+  const [learnerPreview, setLearnerPreview] = useState<
+    import("../api/learning").KnowledgeSearchResult | null
+  >(null);
+  const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<
+    Record<string, string>
+  >({});
+  const [knowledgeImageStates, setKnowledgeImageStates] = useState<
+    Record<string, "loading" | "failed">
+  >({});
+  const knowledgeImageQueue = useRef<
+    Array<{ itemId: string; imageId: string }>
+  >([]);
   const knowledgeImageActive = useRef(0);
   const knowledgeImageInFlight = useRef(new Set<string>());
   const knowledgeImageControllers = useRef(new Map<string, AbortController>());
   const knowledgeImageGeneration = useRef(0);
   const [knowledgeItemBaseId, setKnowledgeItemBaseId] = useState("");
-  const [knowledgeItemForm, setKnowledgeItemForm] = useState({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" });
-  const [editingKnowledgeItemId, setEditingKnowledgeItemId] = useState<string | null>(null);
-  const [previousKnowledgeItemId, setPreviousKnowledgeItemId] = useState<string | null>(null);
+  const [knowledgeItemForm, setKnowledgeItemForm] = useState({
+    title: "",
+    summary: "",
+    content: "",
+    category: "",
+    keywords: "",
+    source_name: "",
+    source_url: "",
+  });
+  const [editingKnowledgeItemId, setEditingKnowledgeItemId] = useState<
+    string | null
+  >(null);
+  const [previousKnowledgeItemId, setPreviousKnowledgeItemId] = useState<
+    string | null
+  >(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -303,7 +338,9 @@ export function LearningGovernancePage() {
   useEffect(() => {
     knowledgeImageGeneration.current += 1;
     knowledgeImageQueue.current = [];
-    knowledgeImageControllers.current.forEach((controller) => controller.abort());
+    knowledgeImageControllers.current.forEach((controller) =>
+      controller.abort(),
+    );
     knowledgeImageControllers.current.clear();
     knowledgeImageActive.current = 0;
     knowledgeImageInFlight.current.clear();
@@ -315,7 +352,9 @@ export function LearningGovernancePage() {
     return () => {
       knowledgeImageGeneration.current += 1;
       knowledgeImageQueue.current = [];
-      knowledgeImageControllers.current.forEach((controller) => controller.abort());
+      knowledgeImageControllers.current.forEach((controller) =>
+        controller.abort(),
+      );
       knowledgeImageControllers.current.clear();
       knowledgeImageActive.current = 0;
       knowledgeImageInFlight.current.clear();
@@ -329,17 +368,23 @@ export function LearningGovernancePage() {
   const drainKnowledgeImageQueue = () => {
     if (!token) return;
     const generation = knowledgeImageGeneration.current;
-    while (knowledgeImageActive.current < 2 && knowledgeImageQueue.current.length > 0) {
+    while (
+      knowledgeImageActive.current < 2 &&
+      knowledgeImageQueue.current.length > 0
+    ) {
       const request = knowledgeImageQueue.current.shift();
       if (!request) break;
       const key = request.imageId;
-      if (knowledgeImageInFlight.current.has(key) || knowledgeImageUrls[key]) continue;
+      if (knowledgeImageInFlight.current.has(key) || knowledgeImageUrls[key])
+        continue;
       knowledgeImageActive.current += 1;
       knowledgeImageInFlight.current.add(key);
       setKnowledgeImageStates((current) => ({ ...current, [key]: "loading" }));
       const controller = new AbortController();
       knowledgeImageControllers.current.set(key, controller);
-      void downloadKnowledgeImage(token, request.itemId, request.imageId, { signal: controller.signal })
+      void downloadKnowledgeImage(token, request.itemId, request.imageId, {
+        signal: controller.signal,
+      })
         .then((blob) => {
           if (knowledgeImageGeneration.current !== generation) return;
           const url = URL.createObjectURL(blob);
@@ -352,7 +397,10 @@ export function LearningGovernancePage() {
         })
         .catch(() => {
           if (knowledgeImageGeneration.current === generation) {
-            setKnowledgeImageStates((current) => ({ ...current, [key]: "failed" }));
+            setKnowledgeImageStates((current) => ({
+              ...current,
+              [key]: "failed",
+            }));
           }
         })
         .finally(() => {
@@ -365,8 +413,15 @@ export function LearningGovernancePage() {
   };
 
   const openKnowledgeImage = (itemId: string, imageId: string) => {
-    if (!token || knowledgeImageUrls[imageId] || knowledgeImageInFlight.current.has(imageId)) return;
-    knowledgeImageQueue.current = knowledgeImageQueue.current.filter((request) => request.imageId !== imageId);
+    if (
+      !token ||
+      knowledgeImageUrls[imageId] ||
+      knowledgeImageInFlight.current.has(imageId)
+    )
+      return;
+    knowledgeImageQueue.current = knowledgeImageQueue.current.filter(
+      (request) => request.imageId !== imageId,
+    );
     knowledgeImageQueue.current.push({ itemId, imageId });
     drainKnowledgeImageQueue();
   };
@@ -375,8 +430,16 @@ export function LearningGovernancePage() {
     event.preventDefault();
     if (!token || !knowledgeBaseName.trim()) return;
     setBusyId("knowledge-base");
-    void createKnowledgeBase(token, { name: knowledgeBaseName, description: knowledgeBaseDescription, visibility: "learner" })
-      .then((base) => { setKnowledgeBases((current) => [...current, base]); setKnowledgeBaseName(""); setKnowledgeBaseDescription(""); })
+    void createKnowledgeBase(token, {
+      name: knowledgeBaseName,
+      description: knowledgeBaseDescription,
+      visibility: "learner",
+    })
+      .then((base) => {
+        setKnowledgeBases((current) => [...current, base]);
+        setKnowledgeBaseName("");
+        setKnowledgeBaseDescription("");
+      })
       .catch((cause) => setOperationError(errorMessage(cause)))
       .finally(() => setBusyId(""));
   };
@@ -391,18 +454,174 @@ export function LearningGovernancePage() {
   const updateImport = (action: "confirm" | "cancel") => {
     if (!token || !knowledgeImport) return;
     setBusyId("knowledge-import");
-    const operation = action === "confirm" ? confirmKnowledgeImport : cancelKnowledgeImport;
-    void operation(token, knowledgeImport.id).then(setKnowledgeImport).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId(""));
+    const operation =
+      action === "confirm" ? confirmKnowledgeImport : cancelKnowledgeImport;
+    void operation(token, knowledgeImport.id)
+      .then(setKnowledgeImport)
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
   };
-  const loadKnowledgeItems = (baseId: string) => { if (!token || !baseId) return; setKnowledgeItemBaseId(baseId); void Promise.all([listKnowledgeItems(token, baseId), listKnowledgeTerms(token, baseId), getKnowledgeOverview(token, baseId)]).then(([items, terms, overview]) => { setKnowledgeItems(items); setKnowledgeTerms(terms); setKnowledgeOverview(overview); }).catch((cause) => setOperationError(errorMessage(cause))); };
-  const addKnowledgeTerm = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId || !knowledgeTermName.trim()) return; setBusyId("knowledge-term"); void createKnowledgeTerm(token, knowledgeItemBaseId, { kind: knowledgeTermKind, name: knowledgeTermName }).then((term) => { setKnowledgeTerms((current) => [...current, term].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))); setKnowledgeTermName(""); }).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const archiveKnowledgeTerm = (term: import("../api/learning").KnowledgeTerm) => { if (!token) return; const reason = window.prompt(`停用“${term.name}”的理由`); if (!reason?.trim()) return; setBusyId(term.id); void disableKnowledgeTerm(token, term.id, reason).then((updated) => setKnowledgeTerms((current) => current.map((item) => item.id === updated.id ? updated : item))).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const uploadItemImages = (itemId: string, files: FileList | null) => { if (!token || !files?.length) return; setBusyId(itemId); void Promise.all(Array.from(files).map((file) => uploadKnowledgeImage(token, itemId, file))).then(() => loadKnowledgeItems(knowledgeItemBaseId)).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const uploadItemAttachment = (itemId: string, file: File | null) => { if (!token || !file) return; setBusyId(itemId); void uploadKnowledgeAttachment(token, itemId, file).then(() => loadKnowledgeItems(knowledgeItemBaseId)).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const openItemAttachment = (itemId: string, attachmentId: string, fileName: string) => { if (!token) return; void downloadKnowledgeAttachment(token, itemId, attachmentId).then((blob) => { const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = fileName; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 60_000); }).catch((cause) => setOperationError(errorMessage(cause))); };
-  const createItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!token || !knowledgeItemBaseId) return; setBusyId("knowledge-item"); const input = { title: knowledgeItemForm.title, summary: knowledgeItemForm.summary, content: knowledgeItemForm.content, category: knowledgeItemForm.category, category_id: null, keywords: parseTags(knowledgeItemForm.keywords), source_name: knowledgeItemForm.source_name, source_url: knowledgeItemForm.source_url.trim() || null, visibility: "learner" }; const operation = editingKnowledgeItemId ? updateKnowledgeItem(token, editingKnowledgeItemId, input) : createKnowledgeItem(token, knowledgeItemBaseId, { ...input, previous_version_id: previousKnowledgeItemId, images: [] }); void operation.then(() => { setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); setEditingKnowledgeItemId(null); setPreviousKnowledgeItemId(null); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
-  const editKnowledgeItem = (item: import("../api/learning").KnowledgeItem) => { setEditingKnowledgeItemId(item.knowledge_item_id); setKnowledgeItemForm({ title: item.title, summary: item.summary, content: item.content, category: item.category, keywords: item.keywords.join(", "), source_name: item.source_name, source_url: item.source_url ?? "" }); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  const transitionItem = (itemId: string, action: "deidentify" | "review" | "publish" | "withdraw") => { const reason = reasons[itemId]?.trim(); if (!token || !reason) { setOperationError("请填写本次知识条目治理操作理由。"); return; } setBusyId(itemId); void transitionKnowledgeItem(token, itemId, action, reason).then(() => { setReasons((current) => ({ ...current, [itemId]: "" })); return listKnowledgeItems(token, knowledgeItemBaseId); }).then(setKnowledgeItems).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); };
+  const loadKnowledgeItems = (baseId: string) => {
+    if (!token || !baseId) return;
+    setKnowledgeItemBaseId(baseId);
+    void Promise.all([
+      listKnowledgeItems(token, baseId),
+      listKnowledgeTerms(token, baseId),
+      getKnowledgeOverview(token, baseId),
+    ])
+      .then(([items, terms, overview]) => {
+        setKnowledgeItems(items);
+        setKnowledgeTerms(terms);
+        setKnowledgeOverview(overview);
+      })
+      .catch((cause) => setOperationError(errorMessage(cause)));
+  };
+  const addKnowledgeTerm = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !knowledgeItemBaseId || !knowledgeTermName.trim()) return;
+    setBusyId("knowledge-term");
+    void createKnowledgeTerm(token, knowledgeItemBaseId, {
+      kind: knowledgeTermKind,
+      name: knowledgeTermName,
+    })
+      .then((term) => {
+        setKnowledgeTerms((current) =>
+          [...current, term].sort(
+            (a, b) =>
+              a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name),
+          ),
+        );
+        setKnowledgeTermName("");
+      })
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+  const archiveKnowledgeTerm = (
+    term: import("../api/learning").KnowledgeTerm,
+  ) => {
+    if (!token) return;
+    const reason = window.prompt(`停用“${term.name}”的理由`);
+    if (!reason?.trim()) return;
+    setBusyId(term.id);
+    void disableKnowledgeTerm(token, term.id, reason)
+      .then((updated) =>
+        setKnowledgeTerms((current) =>
+          current.map((item) => (item.id === updated.id ? updated : item)),
+        ),
+      )
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+  const uploadItemImages = (itemId: string, files: FileList | null) => {
+    if (!token || !files?.length) return;
+    setBusyId(itemId);
+    void Promise.all(
+      Array.from(files).map((file) =>
+        uploadKnowledgeImage(token, itemId, file),
+      ),
+    )
+      .then(() => loadKnowledgeItems(knowledgeItemBaseId))
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+  const uploadItemAttachment = (itemId: string, file: File | null) => {
+    if (!token || !file) return;
+    setBusyId(itemId);
+    void uploadKnowledgeAttachment(token, itemId, file)
+      .then(() => loadKnowledgeItems(knowledgeItemBaseId))
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+  const openItemAttachment = (
+    itemId: string,
+    attachmentId: string,
+    fileName: string,
+  ) => {
+    if (!token) return;
+    void downloadKnowledgeAttachment(token, itemId, attachmentId)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      })
+      .catch((cause) => setOperationError(errorMessage(cause)));
+  };
+  const createItem = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !knowledgeItemBaseId) return;
+    setBusyId("knowledge-item");
+    const input = {
+      title: knowledgeItemForm.title,
+      summary: knowledgeItemForm.summary,
+      content: knowledgeItemForm.content,
+      category: knowledgeItemForm.category,
+      category_id: null,
+      keywords: parseTags(knowledgeItemForm.keywords),
+      source_name: knowledgeItemForm.source_name,
+      source_url: knowledgeItemForm.source_url.trim() || null,
+      visibility: "learner",
+    };
+    const operation = editingKnowledgeItemId
+      ? updateKnowledgeItem(token, editingKnowledgeItemId, input)
+      : createKnowledgeItem(token, knowledgeItemBaseId, {
+          ...input,
+          previous_version_id: previousKnowledgeItemId,
+          images: [],
+        });
+    void operation
+      .then(() => {
+        setKnowledgeItemForm({
+          title: "",
+          summary: "",
+          content: "",
+          category: "",
+          keywords: "",
+          source_name: "",
+          source_url: "",
+        });
+        setEditingKnowledgeItemId(null);
+        setPreviousKnowledgeItemId(null);
+        return listKnowledgeItems(token, knowledgeItemBaseId);
+      })
+      .then(setKnowledgeItems)
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
+  const editKnowledgeItem = (item: import("../api/learning").KnowledgeItem) => {
+    setEditingKnowledgeItemId(item.knowledge_item_id);
+    setKnowledgeItemForm({
+      title: item.title,
+      summary: item.summary,
+      content: item.content,
+      category: item.category,
+      keywords: item.keywords.join(", "),
+      source_name: item.source_name,
+      source_url: item.source_url ?? "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const transitionItem = (
+    itemId: string,
+    action: "deidentify" | "review" | "publish" | "withdraw",
+  ) => {
+    const reason = reasons[itemId]?.trim();
+    if (!token || !reason) {
+      setOperationError("请填写本次知识条目治理操作理由。");
+      return;
+    }
+    setBusyId(itemId);
+    void transitionKnowledgeItem(token, itemId, action, reason)
+      .then(() => {
+        setReasons((current) => ({ ...current, [itemId]: "" }));
+        return listKnowledgeItems(token, knowledgeItemBaseId);
+      })
+      .then(setKnowledgeItems)
+      .catch((cause) => setOperationError(errorMessage(cause)))
+      .finally(() => setBusyId(""));
+  };
   if (isLoading) return <LoadingState label="正在加载学习内容治理记录" />;
   if (loadError)
     return <ErrorState message={loadError} onRetry={() => void load()} />;
@@ -498,10 +717,16 @@ export function LearningGovernancePage() {
     event.preventDefault();
     if (!token) return;
     setOperationError("");
-    const options = questionForm.options.map((option) => ({ id: option.id.trim(), text: option.text.trim() }));
-    if (options.length < 2 || options.some((option) => !option.id || !option.text) ||
-        new Set(options.map((option) => option.id)).size !== options.length ||
-        !options.some((option) => option.id === questionForm.correct_option_id)) {
+    const options = questionForm.options.map((option) => ({
+      id: option.id.trim(),
+      text: option.text.trim(),
+    }));
+    if (
+      options.length < 2 ||
+      options.some((option) => !option.id || !option.text) ||
+      new Set(options.map((option) => option.id)).size !== options.length ||
+      !options.some((option) => option.id === questionForm.correct_option_id)
+    ) {
       setOperationError("请填写至少两个唯一选项，并选择正确答案。");
       return;
     }
@@ -516,7 +741,10 @@ export function LearningGovernancePage() {
           ...questionForm,
           prompt: "",
           tags: [],
-          options: [{ id: "A", text: "" }, { id: "B", text: "" }],
+          options: [
+            { id: "A", text: "" },
+            { id: "B", text: "" },
+          ],
           correct_option_id: "",
           explanation: "",
           previous_version_id: null,
@@ -529,8 +757,9 @@ export function LearningGovernancePage() {
       .finally(() => setBusyId(""));
   };
   const correctionSourceResourceId = questionForm.previous_version_id
-    ? questions.find((question) => question.id === questionForm.previous_version_id)
-        ?.source_resource_id
+    ? questions.find(
+        (question) => question.id === questionForm.previous_version_id,
+      )?.source_resource_id
     : null;
 
   return (
@@ -546,128 +775,808 @@ export function LearningGovernancePage() {
           <p className="mb-0 mt-1 text-sm text-slate-600">仅管理员可操作</p>
         </div>
       </header>
-      <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="knowledge-library-title">
+      <section
+        className="mb-7 border-y border-slate-200 bg-white"
+        aria-labelledby="knowledge-library-title"
+      >
         <header className="border-b border-slate-200 px-5 py-4">
-          <h2 id="knowledge-library-title" className="m-0 text-base font-bold text-slate-950">资料库管理</h2>
+          <h2
+            id="knowledge-library-title"
+            className="m-0 text-base font-bold text-slate-950"
+          >
+            资料库管理
+          </h2>
         </header>
-        {knowledgeOverview && <div className="grid grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-4">
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Knowledge bases</span><strong>{knowledgeOverview.total_bases}</strong></div>
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Enabled</span><strong>{knowledgeOverview.enabled_bases}</strong></div>
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Items</span><strong>{knowledgeOverview.total_items}</strong></div>
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Published</span><strong>{knowledgeOverview.published_items}</strong></div>
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Waiting review</span><strong>{knowledgeOverview.draft_items}</strong></div>
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Reviewed</span><strong>{knowledgeOverview.reviewed_items}</strong></div>
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Withdrawn</span><strong>{knowledgeOverview.withdrawn_items}</strong></div>
-          <div className="bg-white px-5 py-3 text-sm"><span className="block text-xs text-slate-500">Images</span><strong>{knowledgeOverview.image_count}</strong></div>
-        </div>}
-        <form className="grid gap-3 border-b border-slate-100 p-5 lg:grid-cols-3" onSubmit={createBase}>
-          <label className="grid gap-1 text-sm text-slate-700">资料库名称<Input aria-label="资料库名称" value={knowledgeBaseName} onChange={(event) => setKnowledgeBaseName(event.target.value)} required /></label>
-          <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">说明<Input aria-label="说明" value={knowledgeBaseDescription} onChange={(event) => setKnowledgeBaseDescription(event.target.value)} /></label>
-          <div className="lg:col-span-3"><Button type="submit" isDisabled={busyId === "knowledge-base"}>{busyId === "knowledge-base" ? <Spinner size="sm" /> : "新建资料库"}</Button></div>
+        {knowledgeOverview && (
+          <div className="grid grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-4">
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">
+                Knowledge bases
+              </span>
+              <strong>{knowledgeOverview.total_bases}</strong>
+            </div>
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">Enabled</span>
+              <strong>{knowledgeOverview.enabled_bases}</strong>
+            </div>
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">Items</span>
+              <strong>{knowledgeOverview.total_items}</strong>
+            </div>
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">Published</span>
+              <strong>{knowledgeOverview.published_items}</strong>
+            </div>
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">
+                Waiting review
+              </span>
+              <strong>{knowledgeOverview.draft_items}</strong>
+            </div>
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">Reviewed</span>
+              <strong>{knowledgeOverview.reviewed_items}</strong>
+            </div>
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">Withdrawn</span>
+              <strong>{knowledgeOverview.withdrawn_items}</strong>
+            </div>
+            <div className="bg-white px-5 py-3 text-sm">
+              <span className="block text-xs text-slate-500">Images</span>
+              <strong>{knowledgeOverview.image_count}</strong>
+            </div>
+          </div>
+        )}
+        <form
+          className="grid gap-3 border-b border-slate-100 p-5 lg:grid-cols-3"
+          onSubmit={createBase}
+        >
+          <label className="grid gap-1 text-sm text-slate-700">
+            资料库名称
+            <Input
+              aria-label="资料库名称"
+              value={knowledgeBaseName}
+              onChange={(event) => setKnowledgeBaseName(event.target.value)}
+              required
+            />
+          </label>
+          <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">
+            说明
+            <Input
+              aria-label="说明"
+              value={knowledgeBaseDescription}
+              onChange={(event) =>
+                setKnowledgeBaseDescription(event.target.value)
+              }
+            />
+          </label>
+          <div className="lg:col-span-3">
+            <Button type="submit" isDisabled={busyId === "knowledge-base"}>
+              {busyId === "knowledge-base" ? (
+                <Spinner size="sm" />
+              ) : (
+                "新建资料库"
+              )}
+            </Button>
+          </div>
         </form>
         <div className="divide-y divide-slate-100">
-          {knowledgeBases.map((base) => <article key={base.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
-            <div><h3 className="m-0 text-sm font-semibold text-slate-950">{base.name}</h3><p className="mb-0 mt-1 text-xs text-slate-500">{base.description || "无说明"} · {base.status}</p></div>
-            <div className="flex flex-wrap items-center gap-3"><Button variant="secondary" onPress={() => loadKnowledgeItems(base.id)}>查看条目</Button><label className="text-sm text-slate-700">CSV 导入<input className="ml-2 text-xs" type="file" accept=".csv,text/csv" disabled={busyId === "knowledge-import"} onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) uploadKnowledgeCsv(base.id, file); }} /></label></div>
-          </article>)}
+          {knowledgeBases.map((base) => (
+            <article
+              key={base.id}
+              className="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]"
+            >
+              <div>
+                <h3 className="m-0 text-sm font-semibold text-slate-950">
+                  {base.name}
+                </h3>
+                <p className="mb-0 mt-1 text-xs text-slate-500">
+                  {base.description || "无说明"} · {base.status}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="secondary"
+                  onPress={() => loadKnowledgeItems(base.id)}
+                >
+                  查看条目
+                </Button>
+                <label className="text-sm text-slate-700">
+                  CSV 导入
+                  <input
+                    className="ml-2 text-xs"
+                    type="file"
+                    accept=".csv,text/csv"
+                    disabled={busyId === "knowledge-import"}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.currentTarget.value = "";
+                      if (file) uploadKnowledgeCsv(base.id, file);
+                    }}
+                  />
+                </label>
+              </div>
+            </article>
+          ))}
         </div>
-        {knowledgeItemBaseId && <div className="border-t border-slate-200 p-5">
-          <h3 className="m-0 text-sm font-semibold text-slate-950">手工录入知识条目</h3>
-          <form className="mt-3 grid gap-3 lg:grid-cols-2" onSubmit={createItem}>
-            <Input aria-label="知识条目标题" placeholder="标题" value={knowledgeItemForm.title} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, title: event.target.value })} required />
-            <Input aria-label="来源名称" placeholder="来源名称" value={knowledgeItemForm.source_name} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, source_name: event.target.value })} required />
-            <Input aria-label="分类" placeholder="分类" value={knowledgeItemForm.category} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, category: event.target.value })} />
-            <Input aria-label="关键词" placeholder="关键词，逗号分隔" value={knowledgeItemForm.keywords} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, keywords: event.target.value })} />
-            <Input className="lg:col-span-2" aria-label="摘要" placeholder="摘要" value={knowledgeItemForm.summary} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, summary: event.target.value })} />
-            <textarea aria-label="正文" className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm lg:col-span-2" placeholder="正文" value={knowledgeItemForm.content} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, content: event.target.value })} required />
-            <Input aria-label="来源链接" placeholder="HTTPS 来源链接" value={knowledgeItemForm.source_url} onChange={(event) => setKnowledgeItemForm({ ...knowledgeItemForm, source_url: event.target.value })} />
-            <div className="flex gap-2 lg:col-span-2"><Button type="submit" isDisabled={busyId === "knowledge-item"}>{busyId === "knowledge-item" ? <Spinner size="sm" /> : editingKnowledgeItemId ? "保存草稿修改" : previousKnowledgeItemId ? "创建更正版本草稿" : "保存知识条目"}</Button>{(editingKnowledgeItemId || previousKnowledgeItemId) && <Button type="button" variant="secondary" onPress={() => { setEditingKnowledgeItemId(null); setPreviousKnowledgeItemId(null); setKnowledgeItemForm({ title: "", summary: "", content: "", category: "", keywords: "", source_name: "", source_url: "" }); }}>取消编辑</Button>}</div>
-          </form>
-          <section className="mt-5 border-y border-slate-200 bg-slate-50 p-4" aria-labelledby="knowledge-term-title">
-            <h4 id="knowledge-term-title" className="m-0 text-sm font-semibold text-slate-900">分类与标签词表</h4>
-            <p className="mb-3 mt-1 text-xs text-slate-600">停用只影响新内容选择，历史条目的分类和标签快照不会被改写。</p>
-            <form className="flex flex-wrap items-end gap-2" onSubmit={addKnowledgeTerm}>
-              <label className="grid gap-1 text-xs text-slate-700">类型<select className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm" value={knowledgeTermKind} onChange={(event) => setKnowledgeTermKind(event.target.value as "category" | "tag")}><option value="category">分类</option><option value="tag">标签</option></select></label>
-              <label className="grid min-w-56 gap-1 text-xs text-slate-700">名称<Input aria-label="词表名称" value={knowledgeTermName} onChange={(event) => setKnowledgeTermName(event.target.value)} placeholder="例如：安全巡查" required /></label>
-              <Button type="submit" size="sm" isDisabled={busyId === "knowledge-term"}>新增词条</Button>
+        {knowledgeItemBaseId && (
+          <div className="border-t border-slate-200 p-5">
+            <h3 className="m-0 text-sm font-semibold text-slate-950">
+              手工录入知识条目
+            </h3>
+            <form
+              className="mt-3 grid gap-3 lg:grid-cols-2"
+              onSubmit={createItem}
+            >
+              <Input
+                aria-label="知识条目标题"
+                placeholder="标题"
+                value={knowledgeItemForm.title}
+                onChange={(event) =>
+                  setKnowledgeItemForm({
+                    ...knowledgeItemForm,
+                    title: event.target.value,
+                  })
+                }
+                required
+              />
+              <Input
+                aria-label="来源名称"
+                placeholder="来源名称"
+                value={knowledgeItemForm.source_name}
+                onChange={(event) =>
+                  setKnowledgeItemForm({
+                    ...knowledgeItemForm,
+                    source_name: event.target.value,
+                  })
+                }
+                required
+              />
+              <Input
+                aria-label="分类"
+                placeholder="分类"
+                value={knowledgeItemForm.category}
+                onChange={(event) =>
+                  setKnowledgeItemForm({
+                    ...knowledgeItemForm,
+                    category: event.target.value,
+                  })
+                }
+              />
+              <Input
+                aria-label="关键词"
+                placeholder="关键词，逗号分隔"
+                value={knowledgeItemForm.keywords}
+                onChange={(event) =>
+                  setKnowledgeItemForm({
+                    ...knowledgeItemForm,
+                    keywords: event.target.value,
+                  })
+                }
+              />
+              <Input
+                className="lg:col-span-2"
+                aria-label="摘要"
+                placeholder="摘要"
+                value={knowledgeItemForm.summary}
+                onChange={(event) =>
+                  setKnowledgeItemForm({
+                    ...knowledgeItemForm,
+                    summary: event.target.value,
+                  })
+                }
+              />
+              <textarea
+                aria-label="正文"
+                className="min-h-28 rounded-md border border-slate-300 px-3 py-2 text-sm lg:col-span-2"
+                placeholder="正文"
+                value={knowledgeItemForm.content}
+                onChange={(event) =>
+                  setKnowledgeItemForm({
+                    ...knowledgeItemForm,
+                    content: event.target.value,
+                  })
+                }
+                required
+              />
+              <Input
+                aria-label="来源链接"
+                placeholder="HTTPS 来源链接"
+                value={knowledgeItemForm.source_url}
+                onChange={(event) =>
+                  setKnowledgeItemForm({
+                    ...knowledgeItemForm,
+                    source_url: event.target.value,
+                  })
+                }
+              />
+              <div className="flex gap-2 lg:col-span-2">
+                <Button type="submit" isDisabled={busyId === "knowledge-item"}>
+                  {busyId === "knowledge-item" ? (
+                    <Spinner size="sm" />
+                  ) : editingKnowledgeItemId ? (
+                    "保存草稿修改"
+                  ) : previousKnowledgeItemId ? (
+                    "创建更正版本草稿"
+                  ) : (
+                    "保存知识条目"
+                  )}
+                </Button>
+                {(editingKnowledgeItemId || previousKnowledgeItemId) && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onPress={() => {
+                      setEditingKnowledgeItemId(null);
+                      setPreviousKnowledgeItemId(null);
+                      setKnowledgeItemForm({
+                        title: "",
+                        summary: "",
+                        content: "",
+                        category: "",
+                        keywords: "",
+                        source_name: "",
+                        source_url: "",
+                      });
+                    }}
+                  >
+                    取消编辑
+                  </Button>
+                )}
+              </div>
             </form>
-            <div className="mt-3 flex flex-wrap gap-2">{knowledgeTerms.length === 0 ? <span className="text-xs text-slate-500">暂无词条</span> : knowledgeTerms.map((term) => <span key={term.id} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${term.status === "active" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-100 text-slate-500"}`}><span>{term.kind === "category" ? "分类" : "标签"}：{term.name}</span>{term.status === "active" && <button type="button" className="font-semibold underline" disabled={busyId === term.id} onClick={() => archiveKnowledgeTerm(term)}>停用</button>}</span>)}</div>
-          </section>
-          <div className="mt-5 overflow-x-auto border-t border-slate-100">
-            <table className="min-w-[1200px] w-full text-left text-sm">
-              <caption className="sr-only">Knowledge items</caption>
-              <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
-                <tr>
-                  <th scope="col" className="px-3 py-2">Title</th>
-                  <th scope="col" className="px-3 py-2">Source</th>
-                  <th scope="col" className="px-3 py-2">Category</th>
-                  <th scope="col" className="px-3 py-2">Keywords</th>
-                  <th scope="col" className="min-w-56 px-3 py-2">Summary</th>
-                  <th scope="col" className="min-w-72 px-3 py-2">Content</th>
-                  <th scope="col" className="px-3 py-2">Status</th>
-                  <th scope="col" className="px-3 py-2">Images</th>
-                  <th scope="col" className="px-3 py-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {knowledgeItems.length === 0 ? (
-                  <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-500">No knowledge items loaded.</td></tr>
-                ) : knowledgeItems.map((item) => (
-                  <tr key={item.knowledge_item_id} className="align-top">
-                    <td className="max-w-56 px-3 py-3 font-semibold text-slate-950">{item.title}</td>
-                    <td className="max-w-56 px-3 py-3 text-slate-700">
-                      <div>{item.source_name || "-"}</div>
-                      {item.source_url && <a className="mt-1 block break-all text-xs text-brand-700 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.source_url}</a>}
-                    </td>
-                    <td className="max-w-40 px-3 py-3 text-slate-700">{item.category || "-"}</td>
-                    <td className="max-w-56 px-3 py-3 text-slate-700">{item.keywords.length > 0 ? item.keywords.join("、") : "-"}</td>
-                    <td className="max-w-72 whitespace-pre-wrap px-3 py-3 text-slate-700">{item.summary || "-"}</td>
-                    <td className="max-w-96 whitespace-pre-wrap px-3 py-3 text-slate-700">{item.content}</td>
-                    <td className="px-3 py-3 text-xs text-slate-600">v{item.version}<br />{knowledgeStatusLabel(item.status)}</td>
-                    <td className="min-w-36 px-3 py-3">
-                      {item.images.length === 0 ? <span className="text-xs text-slate-500">-</span> : (
-                        <div className="flex flex-col gap-2">
-                          {item.images.map((image) => knowledgeImageUrls[image.id] ? (
-                            <a key={image.id} className="text-xs text-brand-700 underline" href={knowledgeImageUrls[image.id]} target="_blank" rel="noreferrer">View image</a>
-                          ) : knowledgeImageStates[image.id] === "failed" ? (
-                            <button key={image.id} type="button" className="text-xs text-rose-700 underline" onClick={() => openKnowledgeImage(item.knowledge_item_id, image.id)}>Unable to load image; retry</button>
-                          ) : knowledgeImageStates[image.id] === "loading" ? (
-                            <span key={image.id} className="text-xs text-slate-500">Loading...</span>
-                          ) : (
-                            <button key={image.id} type="button" className="text-xs text-brand-700 underline" onClick={() => openKnowledgeImage(item.knowledge_item_id, image.id)}>View image</button>
-                          ))}
-                        </div>
+            <section
+              className="mt-5 border-y border-slate-200 bg-slate-50 p-4"
+              aria-labelledby="knowledge-term-title"
+            >
+              <h4
+                id="knowledge-term-title"
+                className="m-0 text-sm font-semibold text-slate-900"
+              >
+                分类与标签词表
+              </h4>
+              <p className="mb-3 mt-1 text-xs text-slate-600">
+                停用只影响新内容选择，历史条目的分类和标签快照不会被改写。
+              </p>
+              <form
+                className="flex flex-wrap items-end gap-2"
+                onSubmit={addKnowledgeTerm}
+              >
+                <label className="grid gap-1 text-xs text-slate-700">
+                  类型
+                  <select
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm"
+                    value={knowledgeTermKind}
+                    onChange={(event) =>
+                      setKnowledgeTermKind(
+                        event.target.value as "category" | "tag",
+                      )
+                    }
+                  >
+                    <option value="category">分类</option>
+                    <option value="tag">标签</option>
+                  </select>
+                </label>
+                <label className="grid min-w-56 gap-1 text-xs text-slate-700">
+                  名称
+                  <Input
+                    aria-label="词表名称"
+                    value={knowledgeTermName}
+                    onChange={(event) =>
+                      setKnowledgeTermName(event.target.value)
+                    }
+                    placeholder="例如：安全巡查"
+                    required
+                  />
+                </label>
+                <Button
+                  type="submit"
+                  size="sm"
+                  isDisabled={busyId === "knowledge-term"}
+                >
+                  新增词条
+                </Button>
+              </form>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {knowledgeTerms.length === 0 ? (
+                  <span className="text-xs text-slate-500">暂无词条</span>
+                ) : (
+                  knowledgeTerms.map((term) => (
+                    <span
+                      key={term.id}
+                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${term.status === "active" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-100 text-slate-500"}`}
+                    >
+                      <span>
+                        {term.kind === "category" ? "分类" : "标签"}：
+                        {term.name}
+                      </span>
+                      {term.status === "active" && (
+                        <button
+                          type="button"
+                          className="font-semibold underline"
+                          disabled={busyId === term.id}
+                          onClick={() => archiveKnowledgeTerm(term)}
+                        >
+                          停用
+                        </button>
                       )}
-                    </td>
-                    <td className="min-w-56 px-3 py-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Input aria-label={`知识条目 ${item.title} 操作理由`} placeholder="操作理由" value={reasons[item.knowledge_item_id] ?? ""} onChange={(event) => setReasons((current) => ({ ...current, [item.knowledge_item_id]: event.target.value }))} />
-                        {item.status === "draft" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "deidentify")}>确认脱敏</Button>}
-                        {item.status === "draft" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => editKnowledgeItem(item)}>编辑</Button>}
-                        {item.status === "submitted" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "review")}>审核</Button>}
-                        {item.status === "reviewed" && <Button size="sm" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "publish")}>Publish</Button>}
-                        {item.status === "published" && <Button size="sm" variant="secondary" onPress={() => { if (!token) return; setBusyId(item.knowledge_item_id); void previewKnowledgeItemForLearner(token, item.knowledge_item_id).then(setLearnerPreview).catch((cause) => setOperationError(errorMessage(cause))).finally(() => setBusyId("")); }}>新人视图预览</Button>}
-                        {item.status === "published" && <Button size="sm" variant="secondary" isDisabled={busyId === item.knowledge_item_id} onPress={() => transitionItem(item.knowledge_item_id, "withdraw")}>Withdraw</Button>}
-                        {(item.status === "published" || item.status === "withdrawn") && <Button size="sm" variant="secondary" onPress={() => { setPreviousKnowledgeItemId(item.knowledge_item_id); setEditingKnowledgeItemId(null); setKnowledgeItemForm({ title: item.title, summary: item.summary, content: item.content, category: item.category, keywords: item.keywords.join(", "), source_name: item.source_name, source_url: item.source_url ?? "" }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>创建更正版本</Button>}
-                        {item.status !== "withdrawn" && item.status !== "published" && <label className="text-xs text-slate-700">Upload images<input aria-label={`Upload images for ${item.title}`} className="ml-2 text-xs" type="file" accept="image/jpeg,image/png" multiple disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemImages(item.knowledge_item_id, event.target.files); event.currentTarget.value = ""; }} /></label>}
-                        {item.status === "draft" && <label className="text-xs text-slate-700">上传 PDF 附件<input aria-label={`上传 ${item.title} 的 PDF 附件`} className="ml-2 text-xs" type="file" accept="application/pdf" disabled={busyId === item.knowledge_item_id} onChange={(event) => { uploadItemAttachment(item.knowledge_item_id, event.target.files?.[0] ?? null); event.currentTarget.value = ""; }} /></label>}
-                        {(item.attachments ?? []).map((attachment) => <Button key={attachment.id} size="sm" variant="secondary" onPress={() => openItemAttachment(item.knowledge_item_id, attachment.id, attachment.file_name)}>下载 {attachment.file_name}</Button>)}
-                      </div>
-                    </td>
+                    </span>
+                  ))
+                )}
+              </div>
+            </section>
+            <div className="mt-5 overflow-x-auto border-t border-slate-100">
+              <table className="min-w-[1200px] w-full text-left text-sm">
+                <caption className="sr-only">Knowledge items</caption>
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th scope="col" className="px-3 py-2">
+                      Title
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      Source
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      Category
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      Keywords
+                    </th>
+                    <th scope="col" className="min-w-56 px-3 py-2">
+                      Summary
+                    </th>
+                    <th scope="col" className="min-w-72 px-3 py-2">
+                      Content
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      Status
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      Images
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      Actions
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {knowledgeItems.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={9}
+                        className="px-3 py-6 text-center text-sm text-slate-500"
+                      >
+                        No knowledge items loaded.
+                      </td>
+                    </tr>
+                  ) : (
+                    knowledgeItems.map((item) => (
+                      <tr key={item.knowledge_item_id} className="align-top">
+                        <td className="max-w-56 px-3 py-3 font-semibold text-slate-950">
+                          {item.title}
+                        </td>
+                        <td className="max-w-56 px-3 py-3 text-slate-700">
+                          <div>{item.source_name || "-"}</div>
+                          {item.source_url && (
+                            <a
+                              className="mt-1 block break-all text-xs text-brand-700 underline"
+                              href={item.source_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {item.source_url}
+                            </a>
+                          )}
+                        </td>
+                        <td className="max-w-40 px-3 py-3 text-slate-700">
+                          {item.category || "-"}
+                        </td>
+                        <td className="max-w-56 px-3 py-3 text-slate-700">
+                          {item.keywords.length > 0
+                            ? item.keywords.join("、")
+                            : "-"}
+                        </td>
+                        <td className="max-w-72 whitespace-pre-wrap px-3 py-3 text-slate-700">
+                          {item.summary || "-"}
+                        </td>
+                        <td className="max-w-96 whitespace-pre-wrap px-3 py-3 text-slate-700">
+                          {item.content}
+                        </td>
+                        <td className="px-3 py-3 text-xs text-slate-600">
+                          v{item.version}
+                          <br />
+                          {knowledgeStatusLabel(item.status)}
+                        </td>
+                        <td className="min-w-36 px-3 py-3">
+                          {item.images.length === 0 ? (
+                            <span className="text-xs text-slate-500">-</span>
+                          ) : (
+                            <div className="flex flex-col gap-2">
+                              {item.images.map((image) =>
+                                knowledgeImageUrls[image.id] ? (
+                                  <a
+                                    key={image.id}
+                                    className="text-xs text-brand-700 underline"
+                                    href={knowledgeImageUrls[image.id]}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    View image
+                                  </a>
+                                ) : knowledgeImageStates[image.id] ===
+                                  "failed" ? (
+                                  <button
+                                    key={image.id}
+                                    type="button"
+                                    className="text-xs text-rose-700 underline"
+                                    onClick={() =>
+                                      openKnowledgeImage(
+                                        item.knowledge_item_id,
+                                        image.id,
+                                      )
+                                    }
+                                  >
+                                    Unable to load image; retry
+                                  </button>
+                                ) : knowledgeImageStates[image.id] ===
+                                  "loading" ? (
+                                  <span
+                                    key={image.id}
+                                    className="text-xs text-slate-500"
+                                  >
+                                    Loading...
+                                  </span>
+                                ) : (
+                                  <button
+                                    key={image.id}
+                                    type="button"
+                                    className="text-xs text-brand-700 underline"
+                                    onClick={() =>
+                                      openKnowledgeImage(
+                                        item.knowledge_item_id,
+                                        image.id,
+                                      )
+                                    }
+                                  >
+                                    View image
+                                  </button>
+                                ),
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="min-w-56 px-3 py-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Input
+                              aria-label={`知识条目 ${item.title} 操作理由`}
+                              placeholder="操作理由"
+                              value={reasons[item.knowledge_item_id] ?? ""}
+                              onChange={(event) =>
+                                setReasons((current) => ({
+                                  ...current,
+                                  [item.knowledge_item_id]: event.target.value,
+                                }))
+                              }
+                            />
+                            {item.status === "draft" && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                isDisabled={busyId === item.knowledge_item_id}
+                                onPress={() =>
+                                  transitionItem(
+                                    item.knowledge_item_id,
+                                    "deidentify",
+                                  )
+                                }
+                              >
+                                确认脱敏
+                              </Button>
+                            )}
+                            {item.status === "draft" && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                isDisabled={busyId === item.knowledge_item_id}
+                                onPress={() => editKnowledgeItem(item)}
+                              >
+                                编辑
+                              </Button>
+                            )}
+                            {item.status === "submitted" && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                isDisabled={busyId === item.knowledge_item_id}
+                                onPress={() =>
+                                  transitionItem(
+                                    item.knowledge_item_id,
+                                    "review",
+                                  )
+                                }
+                              >
+                                审核
+                              </Button>
+                            )}
+                            {item.status === "reviewed" && (
+                              <Button
+                                size="sm"
+                                isDisabled={busyId === item.knowledge_item_id}
+                                onPress={() =>
+                                  transitionItem(
+                                    item.knowledge_item_id,
+                                    "publish",
+                                  )
+                                }
+                              >
+                                Publish
+                              </Button>
+                            )}
+                            {item.status === "published" && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onPress={() => {
+                                  if (!token) return;
+                                  setBusyId(item.knowledge_item_id);
+                                  void previewKnowledgeItemForLearner(
+                                    token,
+                                    item.knowledge_item_id,
+                                  )
+                                    .then(setLearnerPreview)
+                                    .catch((cause) =>
+                                      setOperationError(errorMessage(cause)),
+                                    )
+                                    .finally(() => setBusyId(""));
+                                }}
+                              >
+                                新人视图预览
+                              </Button>
+                            )}
+                            {item.status === "published" && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                isDisabled={busyId === item.knowledge_item_id}
+                                onPress={() =>
+                                  transitionItem(
+                                    item.knowledge_item_id,
+                                    "withdraw",
+                                  )
+                                }
+                              >
+                                Withdraw
+                              </Button>
+                            )}
+                            {(item.status === "published" ||
+                              item.status === "withdrawn") && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onPress={() => {
+                                  setPreviousKnowledgeItemId(
+                                    item.knowledge_item_id,
+                                  );
+                                  setEditingKnowledgeItemId(null);
+                                  setKnowledgeItemForm({
+                                    title: item.title,
+                                    summary: item.summary,
+                                    content: item.content,
+                                    category: item.category,
+                                    keywords: item.keywords.join(", "),
+                                    source_name: item.source_name,
+                                    source_url: item.source_url ?? "",
+                                  });
+                                  window.scrollTo({
+                                    top: 0,
+                                    behavior: "smooth",
+                                  });
+                                }}
+                              >
+                                创建更正版本
+                              </Button>
+                            )}
+                            {item.status !== "withdrawn" &&
+                              item.status !== "published" && (
+                                <label className="text-xs text-slate-700">
+                                  Upload images
+                                  <input
+                                    aria-label={`Upload images for ${item.title}`}
+                                    className="ml-2 text-xs"
+                                    type="file"
+                                    accept="image/jpeg,image/png"
+                                    multiple
+                                    disabled={busyId === item.knowledge_item_id}
+                                    onChange={(event) => {
+                                      uploadItemImages(
+                                        item.knowledge_item_id,
+                                        event.target.files,
+                                      );
+                                      event.currentTarget.value = "";
+                                    }}
+                                  />
+                                </label>
+                              )}
+                            {item.status === "draft" && (
+                              <label className="text-xs text-slate-700">
+                                上传 PDF 附件
+                                <input
+                                  aria-label={`上传 ${item.title} 的 PDF 附件`}
+                                  className="ml-2 text-xs"
+                                  type="file"
+                                  accept="application/pdf"
+                                  disabled={busyId === item.knowledge_item_id}
+                                  onChange={(event) => {
+                                    uploadItemAttachment(
+                                      item.knowledge_item_id,
+                                      event.target.files?.[0] ?? null,
+                                    );
+                                    event.currentTarget.value = "";
+                                  }}
+                                />
+                              </label>
+                            )}
+                            {(item.attachments ?? []).map((attachment) => (
+                              <Button
+                                key={attachment.id}
+                                size="sm"
+                                variant="secondary"
+                                onPress={() =>
+                                  openItemAttachment(
+                                    item.knowledge_item_id,
+                                    attachment.id,
+                                    attachment.file_name,
+                                  )
+                                }
+                              >
+                                下载 {attachment.file_name}
+                              </Button>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>}
-        {knowledgeImport && <div className="border-t border-slate-200 p-5">
-          <p className="m-0 text-sm font-semibold text-slate-950">导入预览：{knowledgeImport.file_name}</p>
-          <p className="mb-3 mt-1 text-xs text-slate-600">{knowledgeImport.total_rows} 行，{knowledgeImport.valid_rows} 行有效，{knowledgeImport.invalid_rows} 行有错误，状态：{knowledgeImport.status}</p>
-          <div className="max-h-56 overflow-auto border border-slate-200 text-xs"><table className="w-full text-left"><thead><tr className="border-b bg-slate-50"><th className="p-2">行</th><th className="p-2">状态</th><th className="p-2">错误</th></tr></thead><tbody>{knowledgeImport.rows.map((row) => <tr key={row.id} className="border-b"><td className="p-2">{row.row_number}</td><td className="p-2">{row.status}</td><td className="p-2">{row.error_message ?? "-"}</td></tr>)}</tbody></table></div>
-          {knowledgeImport.status === "previewed" && <div className="mt-3 flex gap-2"><Button onPress={() => updateImport("confirm")} isDisabled={busyId === "knowledge-import"}>确认导入</Button><Button variant="secondary" onPress={() => updateImport("cancel")} isDisabled={busyId === "knowledge-import"}>取消</Button></div>}
-        </div>}
+        )}
+        {knowledgeImport && (
+          <div className="border-t border-slate-200 p-5">
+            <p className="m-0 text-sm font-semibold text-slate-950">
+              导入预览：{knowledgeImport.file_name}
+            </p>
+            <p className="mb-3 mt-1 text-xs text-slate-600">
+              {knowledgeImport.total_rows} 行，{knowledgeImport.valid_rows}{" "}
+              行有效，{knowledgeImport.invalid_rows} 行有错误，状态：
+              {knowledgeImport.status}
+            </p>
+            <div className="max-h-56 overflow-auto border border-slate-200 text-xs">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b bg-slate-50">
+                    <th className="p-2">行</th>
+                    <th className="p-2">状态</th>
+                    <th className="p-2">错误</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {knowledgeImport.rows.map((row) => (
+                    <tr key={row.id} className="border-b">
+                      <td className="p-2">{row.row_number}</td>
+                      <td className="p-2">{row.status}</td>
+                      <td className="p-2">{row.error_message ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {knowledgeImport.status === "previewed" && (
+              <div className="mt-3 flex gap-2">
+                <Button
+                  onPress={() => updateImport("confirm")}
+                  isDisabled={busyId === "knowledge-import"}
+                >
+                  确认导入
+                </Button>
+                <Button
+                  variant="secondary"
+                  onPress={() => updateImport("cancel")}
+                  isDisabled={busyId === "knowledge-import"}
+                >
+                  取消
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
       </section>
-      {learnerPreview && <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" onClick={() => setLearnerPreview(null)}><section role="dialog" aria-modal="true" aria-label="新人视图预览" className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-md bg-white p-5 text-sm shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-3"><h2 className="m-0 text-lg font-semibold">{learnerPreview.title}</h2><Button size="sm" variant="secondary" onPress={() => setLearnerPreview(null)}>关闭</Button></div><p className="mt-2 text-slate-600">{learnerPreview.summary}</p><p className="mt-3 text-xs text-slate-500">{learnerPreview.category} · {learnerPreview.keywords.join("、")}</p><div className="mt-4 whitespace-pre-wrap leading-7">{learnerPreview.content}</div><div className="mt-4 flex flex-wrap gap-3">{learnerPreview.images.map((image) => knowledgeImageUrls[image.id] ? <img key={image.id} src={knowledgeImageUrls[image.id]} alt={`${learnerPreview.title} 附图`} className="max-h-56 max-w-full rounded-sm object-contain" /> : <Button key={image.id} size="sm" variant="secondary" onPress={() => openKnowledgeImage(learnerPreview.knowledge_item_id, image.id)}>加载附图</Button>)}</div><p className="mt-4 text-xs text-slate-500">来源：{learnerPreview.source_name} · v{learnerPreview.version}</p>{learnerPreview.attachments.length > 0 && <ul className="mt-3 space-y-1">{learnerPreview.attachments.map((attachment) => <li key={attachment.id}><Button size="sm" variant="secondary" onPress={() => openItemAttachment(learnerPreview.knowledge_item_id, attachment.id, attachment.file_name)}>下载 {attachment.file_name}</Button></li>)}</ul>}</section></div>}
+      {learnerPreview && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+          role="presentation"
+          onClick={() => setLearnerPreview(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="新人视图预览"
+            className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-md bg-white p-5 text-sm shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="m-0 text-lg font-semibold">
+                {learnerPreview.title}
+              </h2>
+              <Button
+                size="sm"
+                variant="secondary"
+                onPress={() => setLearnerPreview(null)}
+              >
+                关闭
+              </Button>
+            </div>
+            <p className="mt-2 text-slate-600">{learnerPreview.summary}</p>
+            <p className="mt-3 text-xs text-slate-500">
+              {learnerPreview.category} · {learnerPreview.keywords.join("、")}
+            </p>
+            <div className="mt-4 whitespace-pre-wrap leading-7">
+              {learnerPreview.content}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-3">
+              {learnerPreview.images.map((image) =>
+                knowledgeImageUrls[image.id] ? (
+                  <img
+                    key={image.id}
+                    src={knowledgeImageUrls[image.id]}
+                    alt={`${learnerPreview.title} 附图`}
+                    className="max-h-56 max-w-full rounded-sm object-contain"
+                  />
+                ) : (
+                  <Button
+                    key={image.id}
+                    size="sm"
+                    variant="secondary"
+                    onPress={() =>
+                      openKnowledgeImage(
+                        learnerPreview.knowledge_item_id,
+                        image.id,
+                      )
+                    }
+                  >
+                    加载附图
+                  </Button>
+                ),
+              )}
+            </div>
+            <p className="mt-4 text-xs text-slate-500">
+              来源：{learnerPreview.source_name} · v{learnerPreview.version}
+            </p>
+            {learnerPreview.attachments.length > 0 && (
+              <ul className="mt-3 space-y-1">
+                {learnerPreview.attachments.map((attachment) => (
+                  <li key={attachment.id}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onPress={() =>
+                        openItemAttachment(
+                          learnerPreview.knowledge_item_id,
+                          attachment.id,
+                          attachment.file_name,
+                        )
+                      }
+                    >
+                      下载 {attachment.file_name}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      )}
       {operationError && (
         <div
           className="mb-5 border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800"
@@ -681,50 +1590,84 @@ export function LearningGovernancePage() {
         aria-labelledby="category-governance-title"
       >
         <header className="border-b border-slate-200 px-5 py-4">
-          <h2 id="category-governance-title" className="m-0 text-base font-bold text-slate-950">
+          <h2
+            id="category-governance-title"
+            className="m-0 text-base font-bold text-slate-950"
+          >
             知识分类治理
           </h2>
         </header>
         <div className="divide-y divide-slate-100">
           {categories.length === 0 ? (
-            <p className="m-0 px-5 py-6 text-sm text-slate-600">暂无分类申请。</p>
-          ) : categories.map((category, categoryIndex) => (
-            <div key={category.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
-              <div>
-                <p className="m-0 text-sm font-semibold text-slate-950">{category.name}</p>
-                <p className="mb-0 mt-1 text-xs text-slate-500">状态：{category.status}</p>
-              </div>
-              {category.status === "pending" ? (
-                <div className="grid gap-2 sm:min-w-80">
-                  <label className="grid gap-1 text-xs text-slate-600">
-                    资源操作理由
-                    <Input
-                      aria-label={
-                      categories.length > 0 && categoryIndex === 0
-                          ? "操作理由"
-                          : `操作理由：${category.name}`
-                      }
-                      value={reasons[category.id] ?? ""}
-                      onChange={(event) =>
-                        setReasons((current) => ({
-                          ...current,
-                          [category.id]: event.target.value,
-                        }))
-                      }
-                      maxLength={1000}
-                      placeholder="本次分类操作理由"
-                    />
-                  </label>
-                  <div className="flex gap-2">
-                  <Button size="sm" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "enable")}>启用</Button>
-                    <Button size="sm" variant="danger" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "reject")}>驳回</Button>
-                  </div>
+            <p className="m-0 px-5 py-6 text-sm text-slate-600">
+              暂无分类申请。
+            </p>
+          ) : (
+            categories.map((category, categoryIndex) => (
+              <div
+                key={category.id}
+                className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+              >
+                <div>
+                  <p className="m-0 text-sm font-semibold text-slate-950">
+                    {category.name}
+                  </p>
+                  <p className="mb-0 mt-1 text-xs text-slate-500">
+                    状态：{category.status}
+                  </p>
                 </div>
-              ) : category.status === "enabled" ? (
-                <Button size="sm" variant="danger" isDisabled={busyId === category.id} onPress={() => actOnCategory(category, "disable")}>停用</Button>
-              ) : null}
-            </div>
-          ))}
+                {category.status === "pending" ? (
+                  <div className="grid gap-2 sm:min-w-80">
+                    <label className="grid gap-1 text-xs text-slate-600">
+                      资源操作理由
+                      <Input
+                        aria-label={
+                          categories.length > 0 && categoryIndex === 0
+                            ? "操作理由"
+                            : `操作理由：${category.name}`
+                        }
+                        value={reasons[category.id] ?? ""}
+                        onChange={(event) =>
+                          setReasons((current) => ({
+                            ...current,
+                            [category.id]: event.target.value,
+                          }))
+                        }
+                        maxLength={1000}
+                        placeholder="本次分类操作理由"
+                      />
+                    </label>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        isDisabled={busyId === category.id}
+                        onPress={() => actOnCategory(category, "enable")}
+                      >
+                        启用
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        isDisabled={busyId === category.id}
+                        onPress={() => actOnCategory(category, "reject")}
+                      >
+                        驳回
+                      </Button>
+                    </div>
+                  </div>
+                ) : category.status === "enabled" ? (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    isDisabled={busyId === category.id}
+                    onPress={() => actOnCategory(category, "disable")}
+                  >
+                    停用
+                  </Button>
+                ) : null}
+              </div>
+            ))
+          )}
         </div>
       </section>
       <section className="border-y border-slate-200 bg-white">
@@ -1034,9 +1977,26 @@ export function LearningGovernancePage() {
           </label>
           <label className="grid gap-1 text-sm text-slate-700">
             正确选项
-            <select className="h-10 rounded-md border border-slate-300 bg-white px-3" aria-label="正确选项" value={questionForm.correct_option_id} onChange={(event) => setQuestionForm({ ...questionForm, correct_option_id: event.target.value })} required>
+            <select
+              className="h-10 rounded-md border border-slate-300 bg-white px-3"
+              aria-label="正确选项"
+              value={questionForm.correct_option_id}
+              onChange={(event) =>
+                setQuestionForm({
+                  ...questionForm,
+                  correct_option_id: event.target.value,
+                })
+              }
+              required
+            >
               <option value="">请选择</option>
-              {questionForm.options.filter((option) => option.id.trim()).map((option, index) => <option key={index} value={option.id}>{option.id} · {option.text || "未填写"}</option>)}
+              {questionForm.options
+                .filter((option) => option.id.trim())
+                .map((option, index) => (
+                  <option key={index} value={option.id}>
+                    {option.id} · {option.text || "未填写"}
+                  </option>
+                ))}
             </select>
           </label>
           <label className="grid gap-1 text-sm text-slate-700">
@@ -1070,9 +2030,82 @@ export function LearningGovernancePage() {
             }
             required
           />
-          <fieldset className="grid gap-2 lg:col-span-2"><legend className="text-sm text-slate-700">单选题选项（至少两个）</legend>
-            {questionForm.options.map((option, index) => <div key={index} className="flex gap-2"><Input aria-label={`选项 ${index + 1} 编号`} value={option.id} onChange={(event) => setQuestionForm({ ...questionForm, options: questionForm.options.map((current, position) => position === index ? { ...current, id: event.target.value } : current) })} required /><Input aria-label={`选项 ${index + 1} 内容`} value={option.text} onChange={(event) => setQuestionForm({ ...questionForm, options: questionForm.options.map((current, position) => position === index ? { ...current, text: event.target.value } : current) })} required /><Button type="button" variant="secondary" isDisabled={questionForm.options.length <= 2} onPress={() => setQuestionForm({ ...questionForm, options: questionForm.options.filter((_, position) => position !== index), correct_option_id: questionForm.correct_option_id === option.id ? "" : questionForm.correct_option_id })}>删除</Button></div>)}
-            <Button type="button" variant="secondary" isDisabled={questionForm.options.length >= 12} onPress={() => setQuestionForm({ ...questionForm, options: [...questionForm.options, { id: String.fromCharCode(65 + questionForm.options.length), text: "" }] })}>添加选项</Button>
+          <fieldset className="grid gap-2 lg:col-span-2">
+            <legend className="text-sm text-slate-700">
+              单选题选项（至少两个）
+            </legend>
+            {questionForm.options.map((option, index) => (
+              <div key={index} className="flex gap-2">
+                <Input
+                  aria-label={`选项 ${index + 1} 编号`}
+                  value={option.id}
+                  onChange={(event) =>
+                    setQuestionForm({
+                      ...questionForm,
+                      options: questionForm.options.map((current, position) =>
+                        position === index
+                          ? { ...current, id: event.target.value }
+                          : current,
+                      ),
+                    })
+                  }
+                  required
+                />
+                <Input
+                  aria-label={`选项 ${index + 1} 内容`}
+                  value={option.text}
+                  onChange={(event) =>
+                    setQuestionForm({
+                      ...questionForm,
+                      options: questionForm.options.map((current, position) =>
+                        position === index
+                          ? { ...current, text: event.target.value }
+                          : current,
+                      ),
+                    })
+                  }
+                  required
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  isDisabled={questionForm.options.length <= 2}
+                  onPress={() =>
+                    setQuestionForm({
+                      ...questionForm,
+                      options: questionForm.options.filter(
+                        (_, position) => position !== index,
+                      ),
+                      correct_option_id:
+                        questionForm.correct_option_id === option.id
+                          ? ""
+                          : questionForm.correct_option_id,
+                    })
+                  }
+                >
+                  删除
+                </Button>
+              </div>
+            ))}
+            <Button
+              type="button"
+              variant="secondary"
+              isDisabled={questionForm.options.length >= 12}
+              onPress={() =>
+                setQuestionForm({
+                  ...questionForm,
+                  options: [
+                    ...questionForm.options,
+                    {
+                      id: String.fromCharCode(65 + questionForm.options.length),
+                      text: "",
+                    },
+                  ],
+                })
+              }
+            >
+              添加选项
+            </Button>
           </fieldset>
           <label className="grid gap-1 text-sm text-slate-700">
             标签（逗号分隔）

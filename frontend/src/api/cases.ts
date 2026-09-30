@@ -8,7 +8,8 @@ import {
 import type { AccountType, GlobalCapability } from "./auth";
 
 export type CaseRole = "family" | "commander" | "volunteer";
-export type CaseStatus = "active" | "ended" | "reviewing" | "archived" | "resolved" | "closed";
+export type CaseStatus =
+  "active" | "ended" | "reviewing" | "archived" | "resolved" | "closed";
 export type ClueReviewStatus =
   | "needs_verification"
   | "confirmed"
@@ -339,11 +340,7 @@ export interface CasePoiRoute {
   degradation_status: "available" | "degraded";
 }
 export type CaseMapObjectType =
-  | "last_seen"
-  | "place"
-  | "location_clue"
-  | "clue"
-  | "task";
+  "last_seen" | "place" | "location_clue" | "clue" | "task";
 export type MapLocationPrecision = "exact" | "approximate" | "unknown";
 export interface CaseMapItem {
   id: string;
@@ -383,7 +380,11 @@ export interface CaseMapArea {
   task_id: string | null;
   clue_id: string | null;
   version: number;
-  vertices: Array<{ vertex_order: number; latitude: number; longitude: number }>;
+  vertices: Array<{
+    vertex_order: number;
+    latitude: number;
+    longitude: number;
+  }>;
   starts_at: string | null;
   ends_at: string | null;
   created_at: string;
@@ -1057,7 +1058,11 @@ export function listAdminArchiveDrafts(token: string): Promise<ArchiveDraft[]> {
 export function reviewArchiveDraft(
   token: string,
   draftId: string,
-  payload: { action: "approve" | "publish" | "reject" | "withdraw"; reason: string; confirm_retention?: boolean },
+  payload: {
+    action: "approve" | "publish" | "reject" | "withdraw";
+    reason: string;
+    confirm_retention?: boolean;
+  },
 ): Promise<ArchiveDraft> {
   return apiRequest(
     `/admin/archive-drafts/${draftId}/review`,
@@ -1135,8 +1140,7 @@ export function createCasePlace(
     raw_record_reference: `location-type:${payload.place_type}`,
     occurred_at: null,
     location_text: payload.address,
-    location_precision:
-      payload.longitude === null ? "approximate" : "exact",
+    location_precision: payload.longitude === null ? "approximate" : "exact",
     location_kind: "point",
     longitude: payload.longitude,
     latitude: payload.latitude,
@@ -1169,7 +1173,8 @@ function locationClueAsPlace(clue: Clue): CasePlace {
     case_id: clue.case_id,
     name,
     place_type:
-      clue.raw_record_reference?.replace(/^location-type:/, "") ?? "location_clue",
+      clue.raw_record_reference?.replace(/^location-type:/, "") ??
+      "location_clue",
     address,
     longitude: clue.longitude ?? null,
     latitude: clue.latitude ?? null,

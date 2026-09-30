@@ -72,8 +72,10 @@ function App() {
   }
 
   if (!user) {
-    if (window.location.hash.startsWith("#password-setup=")) return <PasswordSetupPage />;
-    if (window.location.hash.startsWith("#access-verify=")) return <AccessRequestPage />;
+    if (window.location.hash.startsWith("#password-setup="))
+      return <PasswordSetupPage />;
+    if (window.location.hash.startsWith("#access-verify="))
+      return <AccessRequestPage />;
     return (
       <Routes>
         <Route path="access-request" element={<AccessRequestPage />} />
@@ -95,7 +97,14 @@ function App() {
           }
         />
         <Route path="profile" element={<ProfilePage />} />
-        <Route path="admin/access-requests" element={<AdminRoute><AccessRequestAdminPage /></AdminRoute>} />
+        <Route
+          path="admin/access-requests"
+          element={
+            <AdminRoute>
+              <AccessRequestAdminPage />
+            </AdminRoute>
+          }
+        />
         <Route
           path="admin/learning"
           element={
