@@ -80,6 +80,28 @@ jobs:
           set -euo pipefail
           printf 'password=%s\n' "$(openssl rand -hex 24)" >> "${GITHUB_OUTPUT}"
 
+      - name: Resolve preview media origin address
+        shell: bash
+        env:
+          PREVIEW_HOST: ${{ steps.preview.outputs.host }}
+          CONFIGURED_PUBLIC_IP: ${{ vars.PREVIEW_PUBLIC_IP }}
+        run: |
+          set -euo pipefail
+          public_ip="${CONFIGURED_PUBLIC_IP:-}"
+          if [[ -z "${public_ip}" ]]; then
+            mapfile -t addresses < <(
+              getent ahostsv4 "livekit-${PREVIEW_HOST}" \
+                | awk '{ print $1 }' \
+                | sort -u
+            )
+            if (( ${#addresses[@]} != 1 )); then
+              echo "livekit-${PREVIEW_HOST} must resolve to exactly one IPv4 address, or set the PREVIEW_PUBLIC_IP Actions variable" >&2
+              exit 1
+            fi
+            public_ip="${addresses[0]}"
+          fi
+          printf 'PREVIEW_PUBLIC_IP=%s\n' "${public_ip}" >> "${GITHUB_ENV}"
+
       - name: Refresh preview runtime image
         shell: bash
         env:
@@ -122,7 +144,6 @@ jobs:
           PREVIEW_HOST: ${{ steps.preview.outputs.host }}
           PREVIEW_ORIGIN: ${{ steps.preview.outputs.origin }}
           PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
-          PREVIEW_PUBLIC_IP: ${{ vars.PREVIEW_PUBLIC_IP }}
           PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'https' }}
           PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
