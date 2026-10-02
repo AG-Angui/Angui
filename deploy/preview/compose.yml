@@ -60,7 +60,7 @@ services:
       - ${PREVIEW_BIND_ADDRESS:-0.0.0.0}:${PREVIEW_PORT:?PREVIEW_PORT is required}:80
 
   livekit:
-    image: livekit/livekit-server:v1.9.7
+    image: livekit/livekit-server:v1.13.7
     restart: unless-stopped
     command: ["--config", "/etc/livekit.yaml"]
     environment:

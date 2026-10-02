@@ -81,6 +81,7 @@ export interface VoiceReport {
 export interface VoiceRoomTicket {
   url: string;
   token: string;
+  participant_identity: string;
   expires_at: number;
   ice_servers: RTCIceServer[];
 }
@@ -256,11 +257,18 @@ export const getVoiceRoomTicket = (token: string, spaceId: string) =>
 export const setVoiceFloor = (
   token: string,
   spaceId: string,
+  participantIdentity: string,
   active: boolean,
 ) =>
   apiRequest<void>(
     `/collaboration-spaces/${spaceId}/voice-room/floor`,
-    { method: "POST", body: JSON.stringify({ active }) },
+    { method: "POST", body: JSON.stringify({ active, participant_identity: participantIdentity }) },
+    token,
+  );
+export const leaveVoiceRoom = (token: string, spaceId: string, participantIdentity: string) =>
+  apiRequest<void>(
+    `/collaboration-spaces/${spaceId}/voice-room/leave`,
+    { method: "POST", body: JSON.stringify({ participant_identity: participantIdentity }) },
     token,
   );
 export const uploadIntercomRecording = (

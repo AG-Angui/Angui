@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Mic, PhoneOff } from "lucide-react";
 import {
+  ConnectionState,
   LocalAudioTrack,
   Room,
   RoomEvent,
@@ -9,6 +10,7 @@ import {
 } from "livekit-client";
 import {
   getVoiceRoomTicket,
+  leaveVoiceRoom,
   setVoiceFloor,
   uploadIntercomRecording,
 } from "../api/collaborationSpaces";
@@ -79,6 +81,13 @@ export function VoiceIntercomPanel({
   const outputIdRef = useRef("");
   const volumeRef = useRef(1);
   const roomRef = useRef<Room | null>(null);
+  const joiningRef = useRef(false);
+  const joinGenerationRef = useRef(0);
+  const stoppingRef = useRef<Promise<void> | null>(null);
+  const participantIdentityRef = useRef<string | null>(null);
+  const floorGrantedRef = useRef(false);
+  const pressPromiseRef = useRef<Promise<void> | null>(null);
+  const releasePromiseRef = useRef<Promise<void> | null>(null);
   const microphoneRef = useRef<LocalAudioTrack | null>(null);
   const contextRef = useRef<AudioContext | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
@@ -174,7 +183,7 @@ export function VoiceIntercomPanel({
     return next;
   };
 
-  const release = async () => {
+  const releaseFloor = async () => {
     pressedRef.current = false;
     if (floorTimerRef.current !== null)
       window.clearInterval(floorTimerRef.current);
@@ -184,54 +193,103 @@ export function VoiceIntercomPanel({
     const microphone = microphoneRef.current;
     if (room && microphone) {
       try {
-        await room.localParticipant.unpublishTrack(microphone, false);
+        if (
+          room.state === ConnectionState.Connected &&
+          Array.from(room.localParticipant.trackPublications.values()).some(
+            (publication) => publication.track === microphone,
+          )
+        )
+          await room.localParticipant.unpublishTrack(microphone, false);
       } catch {
         /* disconnected */
       }
       microphone.mediaStreamTrack.enabled = false;
+    }
+    const identity = participantIdentityRef.current;
+    if (identity && floorGrantedRef.current) {
       try {
-        await setVoiceFloor(token, spaceId, false);
+        await setVoiceFloor(token, spaceId, identity, false);
       } catch {
-        /* lease expires */
+        /* A disconnected participant is removed by LiveKit. */
       }
+      floorGrantedRef.current = false;
     }
     setSpeaking(false);
   };
+  const release = () => {
+    if (releasePromiseRef.current) return releasePromiseRef.current;
+    const pending = releaseFloor();
+    releasePromiseRef.current = pending;
+    void pending.finally(() => {
+      if (releasePromiseRef.current === pending) releasePromiseRef.current = null;
+    });
+    return pending;
+  };
 
-  const stop = async () => {
-    void release();
-    if (segmentTimerRef.current !== null)
-      window.clearInterval(segmentTimerRef.current);
-    segmentTimerRef.current = null;
-    await flush();
-    setRecording(false);
-    const currentRoom = roomRef.current;
-    roomRef.current = null;
-    currentRoom?.disconnect();
-    microphoneRef.current?.stop();
-    microphoneRef.current = null;
-    for (const audio of audioElementsRef.current.values()) audio.remove();
-    audioElementsRef.current.clear();
-    sourcesRef.current.clear();
-    void contextRef.current?.close();
-    contextRef.current = null;
-    workletRef.current = null;
-    mixerRef.current = null;
-    ownGainRef.current = null;
-    setMembers(0);
-    setParticipantNames([]);
-    setConnection("已断开");
+  const stop = () => {
+    if (stoppingRef.current) return stoppingRef.current;
+    joinGenerationRef.current += 1;
+    const pending = (async () => {
+      pressedRef.current = false;
+      if (pressPromiseRef.current) await pressPromiseRef.current;
+      await release();
+      if (segmentTimerRef.current !== null)
+        window.clearInterval(segmentTimerRef.current);
+      segmentTimerRef.current = null;
+      try {
+        await flush();
+      } catch {
+        setError("无法结束录音片段");
+      }
+      setRecording(false);
+      const currentRoom = roomRef.current;
+      roomRef.current = null;
+      await currentRoom?.disconnect();
+      const identity = participantIdentityRef.current;
+      participantIdentityRef.current = null;
+      if (identity) {
+        try {
+          await leaveVoiceRoom(token, spaceId, identity);
+        } catch {
+          /* The server will revoke the room session when membership expires. */
+        }
+      }
+      microphoneRef.current?.stop();
+      microphoneRef.current = null;
+      for (const audio of audioElementsRef.current.values()) audio.remove();
+      audioElementsRef.current.clear();
+      sourcesRef.current.clear();
+      void contextRef.current?.close();
+      contextRef.current = null;
+      workletRef.current = null;
+      mixerRef.current = null;
+      ownGainRef.current = null;
+      setMembers(0);
+      setParticipantNames([]);
+      setConnection("已断开");
+    })();
+    stoppingRef.current = pending;
+    void pending.finally(() => {
+      stoppingRef.current = null;
+    });
+    return pending;
   };
 
   const join = async () => {
-    if (roomRef.current) return;
+    if (joiningRef.current || roomRef.current || stoppingRef.current) return;
+    joiningRef.current = true;
+    const generation = ++joinGenerationRef.current;
     setConnection("正在连接");
     setError("");
     let media: MediaStream | null = null;
     let context: AudioContext | null = null;
     let room: Room | null = null;
+    let identity: string | null = null;
     try {
       const ticket = await getVoiceRoomTicket(token, spaceId);
+      identity = ticket.participant_identity;
+      if (generation !== joinGenerationRef.current) return;
+      participantIdentityRef.current = identity;
       media = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -240,6 +298,7 @@ export function VoiceIntercomPanel({
           ...(microphoneId ? { deviceId: { ideal: microphoneId } } : {}),
         },
       });
+      if (generation !== joinGenerationRef.current) return;
       refreshDevices();
       const rawTrack = media.getAudioTracks()[0];
       rawTrack.enabled = false;
@@ -312,10 +371,23 @@ export function VoiceIntercomPanel({
       };
       room.on(RoomEvent.ParticipantConnected, syncParticipants);
       room.on(RoomEvent.ParticipantDisconnected, syncParticipants);
-      room.on(RoomEvent.Reconnecting, () => setConnection("重连中"));
-      room.on(RoomEvent.Reconnected, () => setConnection("已连接"));
-      room.on(RoomEvent.Disconnected, () => {
-        if (roomRef.current === room) void stop();
+      room.on(RoomEvent.Reconnecting, () => {
+        pressedRef.current = false;
+        microphone.mediaStreamTrack.enabled = false;
+        if (floorTimerRef.current !== null)
+          window.clearInterval(floorTimerRef.current);
+        floorTimerRef.current = null;
+        setSpeaking(false);
+        setConnection("重连中");
+      });
+      room.on(RoomEvent.Reconnected, () => {
+        void release().then(() => setConnection("已连接"));
+      });
+      room.on(RoomEvent.Disconnected, (reason) => {
+        if (roomRef.current === room && !stoppingRef.current) {
+          setError(`语音连接已断开（原因代码 ${reason ?? "未知"}），请检查网络后重新加入`);
+          void stop();
+        }
       });
       await room.connect(ticket.url, ticket.token, {
         autoSubscribe: true,
@@ -323,6 +395,7 @@ export function VoiceIntercomPanel({
           ? { iceServers: ticket.ice_servers }
           : undefined,
       });
+      if (generation !== joinGenerationRef.current) return;
       roomRef.current = room;
       microphoneRef.current = microphone;
       contextRef.current = context;
@@ -339,58 +412,80 @@ export function VoiceIntercomPanel({
       setRecording(true);
       setConnection("已连接");
     } catch (cause) {
-      room?.disconnect();
-      media?.getTracks().forEach((track) => track.stop());
-      void context?.close();
-      setConnection("未加入");
-      setError(
-        cause instanceof ApiClientError && cause.detail
-          ? cause.detail
-          : cause instanceof Error
-            ? cause.message
-            : "无法加入语音房间",
-      );
+      if (generation === joinGenerationRef.current) {
+        setConnection("未加入");
+        setError(
+          cause instanceof ApiClientError && cause.detail
+            ? cause.detail
+            : cause instanceof Error
+              ? cause.message
+              : "无法加入语音房间",
+        );
+      }
+    } finally {
+      if (roomRef.current !== room) {
+        await room?.disconnect();
+        media?.getTracks().forEach((track) => track.stop());
+        void context?.close();
+        if (identity) {
+          if (participantIdentityRef.current === identity)
+            participantIdentityRef.current = null;
+          void leaveVoiceRoom(token, spaceId, identity).catch(() => undefined);
+        }
+      }
+      joiningRef.current = false;
     }
   };
 
-  const press = async () => {
+  const startPress = async () => {
     if (
       pressedRef.current ||
       !roomRef.current ||
       !microphoneRef.current ||
-      publishingRef.current
+      publishingRef.current ||
+      releasePromiseRef.current ||
+      stoppingRef.current ||
+      roomRef.current.state !== ConnectionState.Connected ||
+      !participantIdentityRef.current
     )
       return;
     pressedRef.current = true;
     publishingRef.current = true;
+    const identity = participantIdentityRef.current;
     try {
-      await setVoiceFloor(token, spaceId, true);
+      await setVoiceFloor(token, spaceId, identity, true);
+      floorGrantedRef.current = true;
       if (!pressedRef.current) {
-        await setVoiceFloor(token, spaceId, false);
+        await release();
         return;
       }
-      for (
-        let attempt = 0;
-        attempt < 40 &&
-        !roomRef.current.localParticipant.permissions?.canPublish;
-        attempt += 1
-      ) {
+      for (let attempt = 0;
+        attempt < 40 && roomRef.current && !roomRef.current.localParticipant.permissions?.canPublish;
+        attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 75));
       }
-      if (!roomRef.current.localParticipant.permissions?.canPublish)
+      if (!roomRef.current?.localParticipant.permissions?.canPublish)
         throw new Error("发言许可未同步，请重试");
-      microphoneRef.current.mediaStreamTrack.enabled = true;
-      await roomRef.current.localParticipant.publishTrack(
-        microphoneRef.current,
-        { audioPreset: { maxBitrate: 32000 } },
-      );
+      const microphone = microphoneRef.current;
+      const room = roomRef.current;
+      if (
+        !microphone || !room || !pressedRef.current ||
+        room.state !== ConnectionState.Connected
+      ) {
+        await release();
+        return;
+      }
+      microphone.mediaStreamTrack.enabled = true;
+      await room.localParticipant.publishTrack(microphone, {
+        audioPreset: { maxBitrate: 32000 },
+      });
       if (!pressedRef.current) {
         await release();
         return;
       }
       if (ownGainRef.current) ownGainRef.current.gain.value = 1;
       floorTimerRef.current = window.setInterval(() => {
-        void setVoiceFloor(token, spaceId, true).catch(() => {
+        void setVoiceFloor(token, spaceId, identity, true).catch(() => {
           void release();
           setError("发言许可已失效");
         });
@@ -398,12 +493,28 @@ export function VoiceIntercomPanel({
       setSpeaking(true);
     } catch (cause) {
       pressedRef.current = false;
-      microphoneRef.current.mediaStreamTrack.enabled = false;
-      void setVoiceFloor(token, spaceId, false);
-      setError(cause instanceof Error ? cause.message : "当前无法发言");
+      if (microphoneRef.current)
+        microphoneRef.current.mediaStreamTrack.enabled = false;
+      await release();
+      setError(
+        cause instanceof ApiClientError && cause.detail
+          ? cause.detail
+          : cause instanceof Error
+            ? cause.message
+            : "当前无法发言",
+      );
     } finally {
       publishingRef.current = false;
     }
+  };
+
+  const press = () => {
+    if (pressPromiseRef.current) return;
+    const pending = startPress();
+    pressPromiseRef.current = pending;
+    void pending.finally(() => {
+      if (pressPromiseRef.current === pending) pressPromiseRef.current = null;
+    });
   };
 
   const stopRef = useRef(stop);
@@ -513,6 +624,7 @@ export function VoiceIntercomPanel({
       {connection !== "已连接" && connection !== "重连中" ? (
         <button
           className="mt-2 rounded bg-slate-800 px-3 py-1 text-sm text-white"
+          disabled={connection === "正在连接"}
           onClick={() => void join()}
           type="button"
         >

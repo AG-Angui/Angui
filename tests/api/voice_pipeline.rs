@@ -13,8 +13,98 @@ use angui::{
         ClueDraftCandidate, CreateCollaborationSpaceRequest, CreateSpaceMessageRequest,
         JoinCollaborationSpaceRequest, ReviewClueDraftRequest,
     },
-    services::{case_collaboration_service, collaboration_space_service, voice_review_service},
+    services::{
+        case_collaboration_service, collaboration_space_service, voice_review_service,
+        voice_room_service,
+    },
 };
+
+#[actix_web::test]
+async fn voice_tickets_isolate_browser_sessions_and_old_floor_release() {
+    let context = TestContext::new().await;
+    let case_id = context.create_case().await;
+    context
+        .add_member(&case_id, FAMILY, COMMANDER, "commander")
+        .await;
+    let commander = context.authenticated(COMMANDER).await;
+    let space = collaboration_space_service::create_space(
+        &context.database,
+        &commander,
+        &case_id,
+        CreateCollaborationSpaceRequest {
+            name: "Voice sessions".to_owned(),
+        },
+    )
+    .await
+    .expect("commander can create a space");
+    let mut state = context.app_state();
+    state.livekit_url = Some("wss://livekit.example.invalid".to_owned());
+    state.livekit_api_key = Some("test-key".to_owned());
+    state.livekit_api_secret = Some("a-long-private-test-secret-0123456789".to_owned());
+
+    let first = voice_room_service::room_ticket(&state, &commander, &space.id)
+        .await
+        .expect("first browser can request a ticket");
+    let second = voice_room_service::room_ticket(&state, &commander, &space.id)
+        .await
+        .expect("second browser can request a ticket");
+    assert_ne!(first.participant_identity, second.participant_identity);
+    assert_ne!(first.token, second.token);
+    assert_ne!(first.participant_identity, commander.id);
+
+    state.voice_floors.lock().unwrap().insert(
+        space.id.clone(),
+        (
+            second.participant_identity.clone(),
+            std::time::Instant::now(),
+        ),
+    );
+    voice_room_service::set_floor(
+        &state,
+        &commander,
+        &space.id,
+        &first.participant_identity,
+        false,
+    )
+    .await
+    .expect("old browser release is idempotent");
+    assert_eq!(
+        state.voice_floors.lock().unwrap().get(&space.id).unwrap().0,
+        second.participant_identity,
+    );
+
+    let mut other_login = commander.clone();
+    other_login.session_id = Uuid::new_v4().to_string();
+    assert!(
+        voice_room_service::set_floor(
+            &state,
+            &other_login,
+            &space.id,
+            &second.participant_identity,
+            false,
+        )
+        .await
+        .is_err(),
+        "a different login cannot use this browser's identity"
+    );
+    voice_room_service::leave_room(&state, &commander, &space.id, &first.participant_identity)
+        .await
+        .expect("owner can close its browser session");
+    assert!(
+        !state
+            .voice_sessions
+            .lock()
+            .unwrap()
+            .contains_key(&first.participant_identity)
+    );
+    assert!(
+        state
+            .voice_sessions
+            .lock()
+            .unwrap()
+            .contains_key(&second.participant_identity)
+    );
+}
 
 #[actix_web::test]
 async fn voice_room_and_socket_tickets_require_membership_and_hide_session_tokens() {

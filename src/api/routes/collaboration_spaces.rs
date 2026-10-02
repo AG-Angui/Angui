@@ -23,6 +23,11 @@ struct RecordingTimes {
 #[derive(serde::Deserialize)]
 struct FloorRequest {
     active: bool,
+    participant_identity: String,
+}
+#[derive(serde::Deserialize)]
+struct VoiceSessionRequest {
+    participant_identity: String,
 }
 #[derive(serde::Deserialize)]
 struct DiscovererRequest {
@@ -58,6 +63,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route(
                     "/{space_id}/voice-room/floor",
                     web::post().to(set_voice_floor),
+                )
+                .route(
+                    "/{space_id}/voice-room/leave",
+                    web::post().to(leave_voice_room),
                 )
                 .route("/{space_id}/recordings", web::post().to(create_recording))
                 .route(
@@ -449,7 +458,24 @@ async fn set_voice_floor(
     space_id: web::Path<String>,
     body: web::Json<FloorRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    voice_room_service::set_floor(&state, &auth, &space_id, body.active).await?;
+    voice_room_service::set_floor(
+        &state,
+        &auth,
+        &space_id,
+        &body.participant_identity,
+        body.active,
+    )
+    .await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn leave_voice_room(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    space_id: web::Path<String>,
+    body: web::Json<VoiceSessionRequest>,
+) -> Result<HttpResponse, ApiError> {
+    voice_room_service::leave_room(&state, &auth, &space_id, &body.participant_identity).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 

@@ -39,7 +39,7 @@ services:
       - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
 
   livekit:
-    image: livekit/livekit-server:v1.9.7
+    image: livekit/livekit-server:v1.13.7
     restart: unless-stopped
     command: ["--config", "/etc/livekit.yaml"]
     environment:

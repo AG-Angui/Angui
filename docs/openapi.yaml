@@ -329,11 +329,11 @@ paths:
     post:
       tags: [Collaboration spaces]
       operationId: createVoiceRoomTicket
-      summary: Issue a short LiveKit room token and TURN credentials
+      summary: Issue a short LiveKit room token, unique participant identity and TURN credentials
       security: [{ bearerAuth: [] }]
       x-case-roles: [commander, volunteer]
       responses:
-        "200": { description: Room token and ICE servers }
+        "200": { description: Room token, participant_identity and ICE servers }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -345,11 +345,25 @@ paths:
       summary: Grant or release server controlled microphone publish permission
       security: [{ bearerAuth: [] }]
       x-case-roles: [commander, volunteer]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [active], properties: { active: { type: boolean } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [active, participant_identity], properties: { active: { type: boolean }, participant_identity: { type: string } } } } } }
       responses:
         "204": { description: Floor updated }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Participant is not connected, session is stale, or another member is speaking }
+
+  /api/collaboration-spaces/{space_id}/voice-room/leave:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: leaveVoiceRoom
+      summary: Remove one browser's media participant and release its floor
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [participant_identity], properties: { participant_identity: { type: string } } } } } }
+      responses:
+        "204": { description: Participant removed, or session was already closed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/collaboration-spaces/{space_id}/events/ticket:
     parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]

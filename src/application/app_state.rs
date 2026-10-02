@@ -14,6 +14,12 @@ pub struct SocketTicket {
     pub created: std::time::Instant,
 }
 
+#[derive(Clone)]
+pub struct VoiceSession {
+    pub auth: AuthenticatedUser,
+    pub space_id: String,
+}
+
 use crate::{
     ai_gateway::AiGateway, amap_service::AmapService, message_delivery::MessageDelivery,
     rate_limit::LoginRateLimiter,
@@ -41,7 +47,7 @@ pub struct AppState {
     pub voice_floors: Arc<Mutex<HashMap<String, (String, std::time::Instant)>>>,
     pub voice_floor_gate: Arc<tokio::sync::Mutex<()>>,
     pub ws_tickets: Arc<Mutex<HashMap<String, SocketTicket>>>,
-    pub voice_sessions: Arc<Mutex<HashMap<(String, String), AuthenticatedUser>>>,
+    pub voice_sessions: Arc<Mutex<HashMap<String, VoiceSession>>>,
     pub login_limiter: LoginRateLimiter,
     pub message_delivery: MessageDelivery,
 }

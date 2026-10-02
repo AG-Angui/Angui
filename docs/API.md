@@ -8,7 +8,7 @@
 
 The worker calls the configured private ASR service and AI Gateway asynchronously. If either is unavailable it marks the candidate `failed` with a retryable reason; it never invents a transcript or confirms a clue. Audio bodies, transcript text, and original filenames are excluded from audit metadata and space-event payloads.
 
-`POST /voice-room/ticket` returns a five-minute LiveKit room token and ten-minute signed TURN credentials for an active member. `POST /voice-room/floor` with `{"active":true|false}` grants or releases server-controlled microphone publish permission. `POST /events/ticket` issues a one-time, 30-second WebSocket ticket; `GET /events/ws?ticket=...` uses it instead of the API session token.
+`POST /voice-room/ticket` returns a five-minute LiveKit room token, a unique `participant_identity` for that browser entry, and ten-minute signed TURN credentials for an active member. `POST /voice-room/floor` with `{"active":true|false,"participant_identity":"..."}` grants or releases server-controlled microphone publish permission. The identity is bound to the issuing API login session and space; another browser or login cannot act on it. Releasing an old identity is idempotent and cannot revoke a newer speaker. `POST /voice-room/leave` with `{"participant_identity":"..."}` removes that browser's media participant and clears its floor. `POST /events/ticket` issues a one-time, 30-second WebSocket ticket; `GET /events/ws?ticket=...` uses it instead of the API session token.
 
 `POST /recordings?started_at=...&ended_at=...` accepts a PCM WAV segment and queues ASR/AI extraction; `GET /recordings/{id}/audio` is restricted to the owner and commanders. `GET /voice-candidates` lists permitted processing metadata, `POST /voice-candidates/{id}/retry` retries a failed candidate up to five times, and `POST /voice-candidates/{id}/discoverer` with `{"discoverer_user_id":"..."}` lets the submitter confirm an active space member as discoverer. Voice drafts cannot be accepted until that confirmation.
 
@@ -251,11 +251,13 @@ Example:
 
 `POST /api/intake-sessions/{session_id}/confirm` is available only to that session creator after required answers are complete. The request must set `human_confirmed: true` and contains the family-reviewed profile, so corrected values supersede any draft value. For v3, it also requires at least one controlled missing-person photo. One database transaction creates the active case, elder profile, creator's `family` membership, controlled pending-review family attachment records, `case.created` audit event, and confirmed-session link. A repeat submission returns the already-created case instead of creating a duplicate. See `docs/openapi.yaml` for the exact schemas.
 
-## 地点与图片补充
+## 位置线索与图片补充
 
 `POST /api/cases/{case_id}/clues` 接收位置文本、点或范围及受控可见级别；经纬度需同时提供。服务端记录提交者并强制新线索为 `pending_review`，审核使用 `PATCH /api/clues/{clue_id}/review`。旧 `/places` 写入和审核路由已停用。
 
-`GET /api/cases/{case_id}/clues` 只对案件成员开放，非成员统一返回 `404`。指挥可查看全部线索；家属可查看本人提交和已确认线索；志愿者仅可查看已确认线索。未审核位置和内部搜索方向不会通过该接口暴露给非必要角色。
+建案确认时的最后出现位置、常去地点，以及后续人物资料中更新的位置，会同时生成带来源引用的待审核线索；人物资料仍保留原始摘要。案件详情不再返回 `places` 字段，地图将这些记录显示为线索。
+
+`GET /api/cases/{case_id}/clues` 只对案件成员开放，非成员统一返回 `404`。指挥可查看全部线索；家属和志愿者可查看本人提交的线索，以及其他成员已确认且非 `internal` 的线索。未审核位置和内部搜索方向不会通过该接口暴露给非必要角色。
 
 `GET /api/cases/{case_id}/map-view` 是不依赖地图 SDK 的确定性态势接口。每个地图项都带对象类型、来源、时间、审核/任务状态、坐标或 `null` 与文字地点；无坐标记录保留在响应中作为文本回退。家属申报的最后出现地点始终标为 `pending_review`，其 `display_name` 为 `null`，客户端必须按 `object_type` 本地化标签而不能呈现为确认进展。家属不接收内部任务或线索层，志愿者只接收本人任务和已确认公开地点，指挥可额外查看已确认线索；接口不会返回预测位置。
 
@@ -310,9 +312,8 @@ HEIC/HEIF 支持由 `heic` feature 提供；生产构建应使用 `cargo build -
 
 - `ANGUI_ATTACHMENT_MAX_IMAGE_BYTES`：单图字节上限，默认 `5242880`（5 MiB），允许 `1024` 至 `20971520`。
 - `ANGUI_ATTACHMENT_MAX_PER_CASE`：单案件附件数量上限，默认 `12`，允许 `1` 至 `100`。
-- `ANGUI_CASE_PLACE_TYPES`：逗号分隔的允许地点类型，默认 `frequent,key_location,last_seen_context,medical,shelter,other`；每项只允许小写字母、数字和下划线，最多 16 项，不可重复。
 
-附件下载必须使用带 Bearer 会话的 `GET /api/cases/{case_id}/attachments/{attachment_id}`。指挥可下载该案件附件；家属和志愿者只能下载自己提交的附件，因此家属不会读取志愿者内部反馈图片。所有地点、图片、文字线索和时间补充都从 `pending_review` 开始，客户端不得将其呈现为已确认进展。
+附件下载必须使用带 Bearer 会话的 `GET /api/cases/{case_id}/attachments/{attachment_id}`。指挥可下载该案件附件；家属和志愿者只能下载自己提交的附件，因此家属不会读取志愿者内部反馈图片。所有位置线索、图片、文字线索和时间补充都从 `pending_review` 开始，客户端不得将其呈现为已确认进展。
 
 ## 7. 错误响应
 
