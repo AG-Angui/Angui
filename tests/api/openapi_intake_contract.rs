@@ -380,6 +380,8 @@ fn clue_timeline_openapi_contract_covers_pagination_and_visibility() {
 fn location_clues_openapi_contract_covers_role_filtered_reads() {
     assert!(!OPENAPI.contains("  /api/cases/{case_id}/places:"));
     assert!(!OPENAPI.contains("  /api/cases/{case_id}/places/{place_id}/review:"));
+    assert!(!OPENAPI.contains("\n    CasePlace:\n"));
+    assert!(!schema("CaseDetail").contains("        - places\n"));
     let (_, clues_path) = OPENAPI
         .split_once("  /api/cases/{case_id}/clues:\n")
         .expect("OpenAPI clues path must exist");

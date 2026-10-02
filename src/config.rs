@@ -1,8 +1,5 @@
 use std::env;
-use std::{
-    collections::HashSet,
-    path::{Component, PathBuf},
-};
+use std::path::{Component, PathBuf};
 use uuid::Uuid;
 
 use crate::integrations::ai_gateway::{
@@ -32,7 +29,6 @@ pub struct Settings {
     pub audio_retention_days: u64,
     pub attachment_max_image_bytes: usize,
     pub attachment_max_per_case: u64,
-    pub case_place_types: Vec<String>,
     pub poi_selection_token_secret: String,
     pub amap_webservice_key: Option<String>,
     pub amap_webservice_base_url: String,
@@ -133,10 +129,6 @@ impl Settings {
             1,
             100,
         )?;
-        let case_place_types =
-            parse_case_place_types(&value("ANGUI_CASE_PLACE_TYPES")?.unwrap_or_else(|| {
-                "frequent,key_location,last_seen_context,medical,shelter,other".to_owned()
-            }))?;
         let poi_selection_token_secret = value("ANGUI_POI_SELECTION_TOKEN_SECRET")?
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()));
@@ -220,7 +212,6 @@ impl Settings {
             audio_retention_days,
             attachment_max_image_bytes,
             attachment_max_per_case,
-            case_place_types,
             poi_selection_token_secret,
             amap_webservice_key,
             amap_webservice_base_url,
@@ -297,31 +288,6 @@ fn parse_bounded_u64(value: String, name: &str, minimum: u64, maximum: u64) -> R
     Ok(parsed)
 }
 
-fn parse_case_place_types(value: &str) -> Result<Vec<String>, String> {
-    let place_types: Vec<_> = value
-        .split(',')
-        .map(str::trim)
-        .filter(|place_type| !place_type.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    if place_types.is_empty() || place_types.len() > 16 {
-        return Err("ANGUI_CASE_PLACE_TYPES must contain between 1 and 16 values".to_owned());
-    }
-    if place_types.iter().any(|place_type| {
-        place_type.len() > 64
-            || !place_type.chars().all(|character| {
-                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
-            })
-    }) {
-        return Err("ANGUI_CASE_PLACE_TYPES values must use lowercase letters, digits, or underscores and be at most 64 characters".to_owned());
-    }
-    let unique: HashSet<_> = place_types.iter().collect();
-    if unique.len() != place_types.len() {
-        return Err("ANGUI_CASE_PLACE_TYPES must not contain duplicates".to_owned());
-    }
-    Ok(place_types)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
@@ -352,17 +318,6 @@ mod tests {
         );
         assert_eq!(settings.attachment_max_image_bytes, 5 * 1024 * 1024);
         assert_eq!(settings.attachment_max_per_case, 12);
-        assert_eq!(
-            settings.case_place_types,
-            vec![
-                "frequent",
-                "key_location",
-                "last_seen_context",
-                "medical",
-                "shelter",
-                "other"
-            ]
-        );
         assert_eq!(settings.amap_webservice_key, None);
         assert!(settings.poi_selection_token_secret.len() >= 32);
         assert_eq!(
@@ -385,7 +340,6 @@ mod tests {
             ("ANGUI_ATTACHMENT_STORAGE_DIRECTORY", "private/case-media"),
             ("ANGUI_ATTACHMENT_MAX_IMAGE_BYTES", "10485760"),
             ("ANGUI_ATTACHMENT_MAX_PER_CASE", "24"),
-            ("ANGUI_CASE_PLACE_TYPES", "frequent,station,clinic"),
             (
                 "ANGUI_POI_SELECTION_TOKEN_SECRET",
                 "0123456789abcdef0123456789abcdef",
@@ -409,10 +363,6 @@ mod tests {
         );
         assert_eq!(settings.attachment_max_image_bytes, 10 * 1024 * 1024);
         assert_eq!(settings.attachment_max_per_case, 24);
-        assert_eq!(
-            settings.case_place_types,
-            vec!["frequent", "station", "clinic"]
-        );
         assert_eq!(
             settings.amap_webservice_base_url,
             "https://maps.example.invalid"
@@ -551,12 +501,6 @@ mod tests {
         let malformed_providers = settings_with(&[("ANGUI_AI_PROVIDERS_JSON", "{")])
             .expect_err("provider configuration must be JSON");
         assert!(malformed_providers.starts_with("ANGUI_AI_PROVIDERS_JSON must be a JSON array"));
-
-        for invalid_place_types in ["", "frequent, frequent", "frequent,invalid-type"] {
-            let error = settings_with(&[("ANGUI_CASE_PLACE_TYPES", invalid_place_types)])
-                .expect_err("invalid place type configuration must fail");
-            assert!(error.starts_with("ANGUI_CASE_PLACE_TYPES"));
-        }
     }
 
     #[test]
@@ -573,7 +517,6 @@ mod tests {
             audio_retention_days: 30,
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
-            case_place_types: vec!["frequent".to_owned()],
             poi_selection_token_secret: "0123456789abcdef0123456789abcdef".to_owned(),
             amap_webservice_key: None,
             amap_webservice_base_url: "https://restapi.amap.com".to_owned(),

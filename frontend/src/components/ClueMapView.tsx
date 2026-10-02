@@ -20,15 +20,13 @@ export interface ClueMapViewProps {
 // 类型对应的标记颜色
 const markerColors: Record<string, string> = {
   clue: "#d84343",
-  location_clue: "#d84343",
   task: "#2e8b57",
-  place: "#6a43cf",
   last_seen: "#ef8f26",
 };
 
 /**
  * 线索地图视图组件
- * 使用高德地图展示线索、任务和地点，支持卡片与地图标记的交互同步
+ * 使用高德地图展示线索和任务，支持卡片与地图标记的交互同步
  */
 export function ClueMapView({
   caseId,

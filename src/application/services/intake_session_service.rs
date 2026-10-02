@@ -1693,6 +1693,16 @@ pub async fn confirm_intake_session(
         &timestamp,
     )
     .await?;
+    crate::services::case_service::insert_profile_location_clues(
+        &transaction,
+        auth,
+        &case_model.id,
+        &format!("intake-session:{session_id}"),
+        case_request.last_seen_location.as_deref(),
+        case_request.last_seen_at.clone(),
+        case_request.frequent_locations.as_deref(),
+    )
+    .await?;
     for photo in photos {
         case_attachments::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),

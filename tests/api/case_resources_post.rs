@@ -2,11 +2,7 @@ use actix_web::{
     http::{StatusCode, header},
     test,
 };
-use angui::{
-    entities::{audit_events, clue_attachment_links, clues},
-    models::{CreateCasePlaceRequest, PlaceVisibility},
-    services::case_resource_service,
-};
+use angui::entities::{audit_events, clue_attachment_links, clue_attributions, clues};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
 use serde_json::json;
 
@@ -31,7 +27,7 @@ async fn resource_configuration_is_available_only_to_case_members() {
     let body: serde_json::Value = test::read_body_json(response).await;
     assert_eq!(body["attachment_max_image_bytes"], 5 * 1024 * 1024);
     assert_eq!(body["attachment_max_per_case"], 12);
-    assert_eq!(body["case_place_types"][0], "frequent");
+    assert!(body.get("case_place_types").is_none());
 
     let volunteer_token = context.token(VOLUNTEER).await;
     let hidden = test::call_service(
@@ -46,7 +42,7 @@ async fn resource_configuration_is_available_only_to_case_members() {
 }
 
 #[actix_web::test]
-async fn post_case_places_requires_family_or_commander_and_returns_pending_review() {
+async fn retired_place_submission_uses_pending_location_clues() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;
     let family_token = context.token(FAMILY).await;
@@ -99,7 +95,7 @@ async fn post_case_places_requires_family_or_commander_and_returns_pending_revie
 }
 
 #[actix_web::test]
-async fn patch_case_place_review_requires_commander_and_records_audited_transition() {
+async fn location_clue_review_requires_commander_and_records_audited_transition() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;
     context
@@ -125,8 +121,8 @@ async fn patch_case_place_review_requires_commander_and_records_audited_transiti
     .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let created: serde_json::Value = test::read_body_json(created).await;
-    let place_id = created["id"].as_str().expect("place id");
-    let review_uri = format!("/api/clues/{place_id}/review");
+    let clue_id = created["id"].as_str().expect("clue id");
+    let review_uri = format!("/api/clues/{clue_id}/review");
 
     let family_denied = test::call_service(
         &app,
@@ -172,18 +168,18 @@ async fn patch_case_place_review_requires_commander_and_records_audited_transiti
     let audit = audit_events::Entity::find()
         .filter(audit_events::Column::CaseId.eq(&case_id))
         .filter(audit_events::Column::Action.eq("clue.reviewed"))
-        .filter(audit_events::Column::EntityId.eq(place_id))
+        .filter(audit_events::Column::EntityId.eq(clue_id))
         .one(&context.database)
         .await
         .expect("audit query should succeed")
-        .expect("place review audit should exist");
+        .expect("clue review audit should exist");
     let metadata: serde_json::Value = serde_json::from_str(
         audit
             .metadata_json
             .as_deref()
-            .expect("place review audit should have metadata"),
+            .expect("clue review audit should have metadata"),
     )
-    .expect("place review metadata should be JSON");
+    .expect("clue review metadata should be JSON");
     assert_eq!(metadata["from"], "pending_review");
     assert_eq!(metadata["to"], "confirmed");
     assert_eq!(
@@ -207,7 +203,7 @@ async fn patch_case_place_review_requires_commander_and_records_audited_transiti
 }
 
 #[actix_web::test]
-async fn get_case_places_applies_role_visibility_and_hides_non_members() {
+async fn location_clues_follow_role_visibility_and_do_not_expose_legacy_places() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;
     context
@@ -216,185 +212,107 @@ async fn get_case_places_applies_role_visibility_and_hides_non_members() {
     context
         .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
         .await;
-    let place_types = context.app_state().case_place_types;
-    let family = context.authenticated(FAMILY).await;
-    let commander = context.authenticated(COMMANDER).await;
-    let own_draft = case_resource_service::create_place(
-        &context.database,
-        &family,
-        &case_id,
-        CreateCasePlaceRequest {
-            name: "Family private draft".to_owned(),
-            place_type: "frequent".to_owned(),
-            address: "Fictional family address".to_owned(),
-            longitude: None,
-            latitude: None,
-            visibility: PlaceVisibility::Internal,
-        },
-        &place_types,
-    )
-    .await
-    .expect("fixture place should be created");
-    let public_confirmed = case_resource_service::create_place(
-        &context.database,
-        &commander,
-        &case_id,
-        CreateCasePlaceRequest {
-            name: "Confirmed public meeting point".to_owned(),
-            place_type: "key_location".to_owned(),
-            address: "Fictional public square".to_owned(),
-            longitude: Some(117.2272),
-            latitude: Some(31.8206),
-            visibility: PlaceVisibility::Public,
-        },
-        &place_types,
-    )
-    .await
-    .expect("fixture place should be created");
-    let confirmed_visible = case_resource_service::create_place(
-        &context.database,
-        &family,
-        &case_id,
-        CreateCasePlaceRequest {
-            name: "Confirmed non-public meeting point".to_owned(),
-            place_type: "key_location".to_owned(),
-            address: "Fictional confirmed square".to_owned(),
-            longitude: None,
-            latitude: None,
-            visibility: PlaceVisibility::Confirmed,
-        },
-        &place_types,
-    )
-    .await
-    .expect("fixture place should be created");
-    let unreviewed_public = case_resource_service::create_place(
-        &context.database,
-        &commander,
-        &case_id,
-        CreateCasePlaceRequest {
-            name: "Unreviewed public report".to_owned(),
-            place_type: "other".to_owned(),
-            address: "Fictional unreviewed address".to_owned(),
-            longitude: None,
-            latitude: None,
-            visibility: PlaceVisibility::Public,
-        },
-        &place_types,
-    )
-    .await
-    .expect("fixture place should be created");
-    let internal_confirmed = case_resource_service::create_place(
-        &context.database,
-        &commander,
-        &case_id,
-        CreateCasePlaceRequest {
-            name: "Internal search direction".to_owned(),
-            place_type: "other".to_owned(),
-            address: "Fictional internal address".to_owned(),
-            longitude: None,
-            latitude: None,
-            visibility: PlaceVisibility::Internal,
-        },
-        &place_types,
-    )
-    .await
-    .expect("fixture place should be created");
-    mark_place_confirmed(&context, &public_confirmed.id).await;
-    mark_place_confirmed(&context, &confirmed_visible.id).await;
-    mark_place_confirmed(&context, &internal_confirmed.id).await;
-
+    let family_token = context.token(FAMILY).await;
+    let commander_token = context.token(COMMANDER).await;
     let app = crate::init_api_app!(&context);
-    let request_for = |token: String| {
+    let mut ids = Vec::new();
+    for (content, visibility, token, confirmed) in [
+        ("Family private draft", "internal", &family_token, false),
+        ("Public meeting point", "public", &commander_token, true),
+        ("Confirmed meeting point", "confirmed", &family_token, true),
+        (
+            "Unreviewed public report",
+            "public",
+            &commander_token,
+            false,
+        ),
+        (
+            "Internal search direction",
+            "internal",
+            &commander_token,
+            true,
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/cases/{case_id}/clues"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(
+                    json!({"source": "manual", "content": content, "location_text": content,
+                "location_kind": "point", "longitude": 117.2272, "latitude": 31.8206,
+                "visibility": visibility}),
+                )
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body: serde_json::Value = test::read_body_json(response).await;
+        let id = body["id"].as_str().expect("clue id").to_owned();
+        if content == "Family private draft" {
+            clue_attributions::Entity::delete_by_id(&id)
+                .exec(&context.database)
+                .await
+                .expect("remove attribution to simulate migrated record");
+        }
+        if confirmed {
+            let clue = clues::Entity::find_by_id(&id)
+                .one(&context.database)
+                .await
+                .expect("clue query")
+                .expect("clue");
+            let mut clue = clue.into_active_model();
+            clue.status = Set("confirmed".to_owned());
+            clue.update(&context.database).await.expect("clue update");
+        }
+        ids.push(id);
+    }
+    for (token, expected, has_initial_profile_clue, is_family) in [
+        (family_token, vec![0, 1, 2], true, true),
+        (context.token(VOLUNTEER).await, vec![1, 2], false, false),
+        (commander_token, vec![0, 1, 2, 3, 4], true, false),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/cases/{case_id}"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = test::read_body_json(response).await;
+        assert!(body.get("places").is_none());
+        let clues = body["clues"].as_array().expect("visible clues");
+        let initial_profile_clues = usize::from(has_initial_profile_clue);
+        assert_eq!(clues.len(), expected.len() + initial_profile_clues);
+        for index in expected {
+            assert!(clues.iter().any(|clue| clue["id"] == ids[index]));
+        }
+        if is_family {
+            assert!(
+                clues
+                    .iter()
+                    .any(|clue| { clue["id"] == ids[0] && clue["is_own_submission"] == true })
+            );
+        }
+    }
+    let hidden = test::call_service(
+        &app,
         test::TestRequest::get()
             .uri(&format!("/api/cases/{case_id}"))
-            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
-            .to_request()
-    };
-
-    let family_detail: serde_json::Value = test::read_body_json(
-        test::call_service(&app, request_for(context.token(FAMILY).await)).await,
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .to_request(),
     )
     .await;
-    let family_places = family_detail["places"].as_array().expect("family places");
-    assert!(
-        family_places
-            .iter()
-            .any(|place| place["id"] == own_draft.id)
-    );
-    assert!(
-        family_places
-            .iter()
-            .any(|place| place["id"] == public_confirmed.id)
-    );
-    assert!(
-        family_places
-            .iter()
-            .any(|place| place["id"] == confirmed_visible.id)
-    );
-    assert!(
-        !family_places
-            .iter()
-            .any(|place| place["id"] == unreviewed_public.id)
-    );
-    assert!(
-        !family_places
-            .iter()
-            .any(|place| place["id"] == internal_confirmed.id)
-    );
-
-    let volunteer_detail: serde_json::Value = test::read_body_json(
-        test::call_service(&app, request_for(context.token(VOLUNTEER).await)).await,
-    )
-    .await;
-    let volunteer_places = volunteer_detail["places"]
-        .as_array()
-        .expect("volunteer places");
-    assert_eq!(volunteer_places.len(), 2);
-    assert!(
-        volunteer_places
-            .iter()
-            .any(|place| place["id"] == public_confirmed.id)
-    );
-    assert!(
-        volunteer_places
-            .iter()
-            .any(|place| place["id"] == confirmed_visible.id)
-    );
-    assert!(
-        !volunteer_places
-            .iter()
-            .any(|place| place["id"] == internal_confirmed.id)
-    );
-
-    let commander_detail: serde_json::Value = test::read_body_json(
-        test::call_service(&app, request_for(context.token(COMMANDER).await)).await,
-    )
-    .await;
-    let commander_places = commander_detail["places"]
-        .as_array()
-        .expect("commander places");
-    assert_eq!(commander_places.len(), 5);
-
-    let hidden = test::call_service(&app, request_for(context.token(LEARNER).await)).await;
     assert_error(hidden, StatusCode::NOT_FOUND, "not_found").await;
 }
 
-async fn mark_place_confirmed(context: &TestContext, place_id: &str) {
-    let place = clues::Entity::find_by_id(place_id)
-        .one(&context.database)
-        .await
-        .expect("fixture place should load")
-        .expect("fixture place should exist");
-    let mut place = place.into_active_model();
-    place.status = Set("confirmed".to_owned());
-    place
-        .update(&context.database)
-        .await
-        .expect("fixture place should update");
-}
-
 #[actix_web::test]
-async fn volunteer_can_search_from_a_confirmed_case_place_with_coordinates() {
+async fn volunteer_can_search_from_a_confirmed_location_clue_with_coordinates() {
     let context = TestContext::new().await;
     let case_id = context.create_case().await;
     context
@@ -403,27 +321,33 @@ async fn volunteer_can_search_from_a_confirmed_case_place_with_coordinates() {
     context
         .add_member(&case_id, COMMANDER, VOLUNTEER, "volunteer")
         .await;
-    let family = context.authenticated(FAMILY).await;
-    let place_types = context.app_state().case_place_types;
-    let place = case_resource_service::create_place(
-        &context.database,
-        &family,
-        &case_id,
-        CreateCasePlaceRequest {
-            name: "Confirmed volunteer search center".to_owned(),
-            place_type: "key_location".to_owned(),
-            address: "Fictional confirmed square".to_owned(),
-            longitude: Some(117.2272),
-            latitude: Some(31.8206),
-            visibility: PlaceVisibility::Confirmed,
-        },
-        &place_types,
-    )
-    .await
-    .expect("fixture place should be created");
-    mark_place_confirmed(&context, &place.id).await;
-
     let app = crate::init_api_app!(&context);
+    let created = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/cases/{case_id}/clues"))
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(FAMILY).await),
+            ))
+            .set_json(
+                json!({"source": "family", "content": "Confirmed search center",
+            "location_text": "Fictional confirmed square", "location_kind": "point",
+            "longitude": 117.2272, "latitude": 31.8206, "visibility": "confirmed"}),
+            )
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body: serde_json::Value = test::read_body_json(created).await;
+    let clue = clues::Entity::find_by_id(body["id"].as_str().expect("clue id"))
+        .one(&context.database)
+        .await
+        .expect("clue query")
+        .expect("clue");
+    let mut clue = clue.into_active_model();
+    clue.status = Set("confirmed".to_owned());
+    clue.update(&context.database).await.expect("clue update");
     let response = test::call_service(
         &app,
         test::TestRequest::get()
@@ -435,41 +359,10 @@ async fn volunteer_can_search_from_a_confirmed_case_place_with_coordinates() {
             .to_request(),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
-    let response: serde_json::Value = test::read_body_json(response).await;
-    assert_eq!(response["center_source"], "authorized_case_location");
-    assert_eq!(response["degradation_status"], "degraded");
-}
-
-#[actix_web::test]
-async fn retired_place_write_route_rejects_all_legacy_types() {
-    let context = TestContext::new().await;
-    let case_id = context.create_case().await;
-    let family_token = context.token(FAMILY).await;
-    let mut state = context.app_state();
-    state.case_place_types = vec!["station".to_owned()];
-    let app = test::init_service(
-        actix_web::App::new()
-            .app_data(actix_web::web::Data::new(state))
-            .configure(angui::routes::configure),
-    )
-    .await;
-    let station = |place_type: &str| {
-        test::TestRequest::post()
-            .uri(&format!("/api/cases/{case_id}/places"))
-            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
-            .set_json(json!({
-                "name": "Fictional station", "place_type": place_type, "address": "Fictional station",
-                "visibility": "confirmed"
-            }))
-            .to_request()
-    };
-
-    let disallowed = test::call_service(&app, station("frequent")).await;
-    assert_eq!(disallowed.status(), StatusCode::NOT_FOUND);
-    let allowed = test::call_service(&app, station("station")).await;
-    assert_eq!(allowed.status(), StatusCode::NOT_FOUND);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["center_source"], "authorized_case_location");
+    assert_eq!(body["degradation_status"], "degraded");
 }
 
 #[actix_web::test]

@@ -11,7 +11,6 @@ pub mod case_attachments;
 pub mod case_map_area_vertices;
 pub mod case_map_areas;
 pub mod case_memberships;
-pub mod case_places;
 pub mod case_source_records;
 pub mod cases;
 pub mod clue_attachment_links;

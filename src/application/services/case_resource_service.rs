@@ -10,7 +10,7 @@ use chrono::{SecondsFormat, Utc};
 use futures_util::StreamExt;
 use image::ImageFormat;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, EntityTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde_json::json;
@@ -20,15 +20,9 @@ use uuid::Uuid;
 use crate::{
     entities::{case_attachments, cases, clue_attachment_links, clue_attributions, clues},
     error::ApiError,
-    models::{
-        AuthenticatedUser, CaseAttachmentResponse, CasePlaceResponse, ClueResponse,
-        CreateCasePlaceRequest, CreateClueRequest,
-    },
+    models::{AuthenticatedUser, CaseAttachmentResponse},
     roles::CaseRole,
-    services::{
-        case_service,
-        case_service::{require_case_role, write_audit},
-    },
+    services::case_service::{require_case_role, write_audit},
 };
 
 pub struct AttachmentUpload<'a> {
@@ -132,58 +126,6 @@ pub async fn read_single_audio_upload(
         file = Some((filename, content_type, bytes));
     }
     file.ok_or_else(|| ApiError::Validation("file field is required".to_owned()))
-}
-
-pub async fn create_place(
-    db: &DatabaseConnection,
-    auth: &AuthenticatedUser,
-    case_id: &str,
-    request: CreateCasePlaceRequest,
-    allowed_place_types: &[String],
-) -> Result<CasePlaceResponse, ApiError> {
-    validate_place(&request, allowed_place_types)?;
-    let role = require_case_role(
-        db,
-        &auth.id,
-        case_id,
-        &[CaseRole::Family, CaseRole::Commander],
-    )
-    .await?;
-    let clue = case_service::create_clue(
-        db,
-        auth,
-        case_id,
-        CreateClueRequest {
-            source: role.to_string(),
-            content: format!("{}: {}", request.name.trim(), request.address.trim()),
-            source_type: Some("manual_report".to_owned()),
-            raw_record_reference: Some(format!(
-                "legacy-place-type:{}",
-                request.place_type.trim().to_lowercase()
-            )),
-            occurred_at: None,
-            location_text: Some(request.address.trim().to_owned()),
-            location_precision: Some(
-                if request.longitude.is_some() {
-                    "exact"
-                } else {
-                    "approximate"
-                }
-                .to_owned(),
-            ),
-            location_kind: Some("point".to_owned()),
-            longitude: request.longitude,
-            latitude: request.latitude,
-            location_radius_meters: None,
-            visibility: Some(request.visibility.as_str().to_owned()),
-            confidence: Some("unverified".to_owned()),
-            next_action: None,
-            linked_task_reference: None,
-            attachment_ids: Vec::new(),
-        },
-    )
-    .await?;
-    Ok(location_clue_response(clue, "location_clue"))
 }
 
 pub async fn store_image_attachment(
@@ -310,40 +252,6 @@ pub async fn load_attachment_for_download(
         content_type: attachment.content_type,
         filename: attachment.original_filename,
     })
-}
-
-pub async fn visible_places(
-    db: &DatabaseConnection,
-    case_id: &str,
-    viewer_id: &str,
-    role: CaseRole,
-) -> Result<Vec<CasePlaceResponse>, ApiError> {
-    let mut query = clues::Entity::find()
-        .filter(clues::Column::CaseId.eq(case_id))
-        .filter(clues::Column::LocationKind.is_not_null());
-    query = match role {
-        CaseRole::Commander => query,
-        CaseRole::Family => query.filter(
-            Condition::any()
-                .add(clues::Column::CreatedByUserId.eq(viewer_id))
-                .add(
-                    Condition::all()
-                        .add(clues::Column::Status.eq("confirmed"))
-                        .add(clues::Column::Visibility.ne("internal")),
-                ),
-        ),
-        CaseRole::Volunteer => query
-            .filter(clues::Column::Visibility.is_in(["public", "confirmed"]))
-            .filter(clues::Column::Status.eq("confirmed")),
-    };
-    let records = query
-        .order_by_desc(clues::Column::CreatedAt)
-        .all(db)
-        .await?;
-    Ok(records
-        .into_iter()
-        .map(|clue| location_clue_model_response(clue, viewer_id))
-        .collect())
 }
 
 pub async fn visible_attachments(
@@ -507,42 +415,6 @@ async fn persist_image_attachment(
     Ok((model, storage_path))
 }
 
-fn validate_place(
-    request: &CreateCasePlaceRequest,
-    allowed_place_types: &[String],
-) -> Result<(), ApiError> {
-    for (label, value, maximum) in [
-        ("name", request.name.trim(), 120),
-        ("address", request.address.trim(), 500),
-    ] {
-        if value.is_empty() || value.chars().count() > maximum {
-            return Err(ApiError::Validation(format!(
-                "{label} must contain between 1 and {maximum} characters"
-            )));
-        }
-    }
-    let place_type = request.place_type.trim().to_lowercase();
-    if !allowed_place_types
-        .iter()
-        .any(|allowed| allowed == &place_type)
-    {
-        return Err(ApiError::Validation(
-            "place_type is not supported".to_owned(),
-        ));
-    }
-    match (request.longitude, request.latitude) {
-        (Some(longitude), Some(latitude))
-            if (-180.0..=180.0).contains(&longitude) && (-90.0..=90.0).contains(&latitude) =>
-        {
-            Ok(())
-        }
-        (None, None) => Ok(()),
-        _ => Err(ApiError::Validation(
-            "longitude and latitude must be supplied together and be in range".to_owned(),
-        )),
-    }
-}
-
 fn normalize_image(
     declared_content_type: &str,
     bytes: &[u8],
@@ -682,60 +554,6 @@ async fn ensure_case_is_open<C: sea_orm::ConnectionTrait>(
     Ok(())
 }
 
-fn location_clue_response(clue: ClueResponse, place_type: &str) -> CasePlaceResponse {
-    let (name, address) = split_location_content(&clue.content, clue.location_text.as_deref());
-    CasePlaceResponse {
-        id: clue.id,
-        case_id: clue.case_id,
-        name,
-        place_type: place_type.to_owned(),
-        address,
-        longitude: clue.longitude,
-        latitude: clue.latitude,
-        source: clue.source,
-        visibility: clue.visibility.unwrap_or_else(|| "confirmed".to_owned()),
-        review_status: clue.status,
-        created_at: clue.created_at,
-        updated_at: clue.updated_at,
-        is_own_submission: clue.is_own_submission,
-    }
-}
-
-fn location_clue_model_response(model: clues::Model, viewer_id: &str) -> CasePlaceResponse {
-    let (name, address) = split_location_content(&model.content, model.location_text.as_deref());
-    let place_type = model
-        .raw_record_reference
-        .as_deref()
-        .and_then(|value| value.strip_prefix("legacy-place-type:"))
-        .unwrap_or("location_clue");
-    CasePlaceResponse {
-        id: model.id,
-        case_id: model.case_id,
-        name,
-        place_type: place_type.to_owned(),
-        address,
-        longitude: model.longitude,
-        latitude: model.latitude,
-        source: model.source,
-        visibility: model.visibility.unwrap_or_else(|| "confirmed".to_owned()),
-        review_status: model.status,
-        created_at: model.created_at,
-        updated_at: model.updated_at,
-        is_own_submission: model.created_by_user_id.as_deref() == Some(viewer_id),
-    }
-}
-
-fn split_location_content(content: &str, location_text: Option<&str>) -> (String, String) {
-    content
-        .split_once(": ")
-        .map(|(name, address)| (name.to_owned(), address.to_owned()))
-        .unwrap_or_else(|| {
-            (
-                "地点线索".to_owned(),
-                location_text.unwrap_or(content).to_owned(),
-            )
-        })
-}
 fn attachment_response(model: case_attachments::Model, viewer_id: &str) -> CaseAttachmentResponse {
     CaseAttachmentResponse {
         id: model.id,

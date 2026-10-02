@@ -5,7 +5,6 @@ import {
   ChevronDown,
   FileImage,
   Image as ImageIcon,
-  MapPin,
   MessageCirclePlus,
   RefreshCw,
   Send,
@@ -17,7 +16,6 @@ import { Link, useParams } from "react-router";
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  createCasePlace,
   createClue,
   downloadCaseAttachment,
   getCase,
@@ -29,30 +27,16 @@ import {
   type CaseDetail,
   type CasePublicProgress,
   type CaseResourceConfiguration,
-  type CreateCasePlacePayload,
   type LocationPrecision,
   type PublicClueSourceType,
   type UpdateElderProfilePayload,
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
-import { parseOptionalCoordinatePair } from "../coordinateInput";
 
 const defaultResources: CaseResourceConfiguration = {
   attachment_max_image_bytes: 5 * 1024 * 1024,
   attachment_max_per_case: 10,
-  case_place_types: ["frequent"],
-};
-
-const placeTypeLabels: Record<string, string> = {
-  frequent: "常去地点",
-  key_location: "关键地点",
-  last_seen_context: "最后出现相关",
-};
-
-type PlaceDraft = Omit<CreateCasePlacePayload, "longitude" | "latitude"> & {
-  longitude: string;
-  latitude: string;
 };
 
 function dateLabel(value: string | null) {
@@ -306,27 +290,22 @@ export function FamilyCaseProgressPage() {
   );
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isSubmittingClue, setIsSubmittingClue] = useState(false);
-  const [isSubmittingPlace, setIsSubmittingPlace] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [clue, setClue] = useState("");
   const [clueSourceType, setClueSourceType] =
     useState<PublicClueSourceType>("manual_report");
   const [clueOccurredAt, setClueOccurredAt] = useState("");
   const [clueLocation, setClueLocation] = useState("");
+  const [clueCoordinates, setClueCoordinates] = useState<{
+    longitude: number;
+    latitude: number;
+  } | null>(null);
   const [clueLocationPrecision, setClueLocationPrecision] = useState<
     LocationPrecision | ""
   >("");
   const [clueRawReference, setClueRawReference] = useState("");
   const [clueNextAction, setClueNextAction] = useState("");
   const [linkedAttachmentIds, setLinkedAttachmentIds] = useState<string[]>([]);
-  const [place, setPlace] = useState<PlaceDraft>({
-    name: "",
-    place_type: "frequent",
-    address: "",
-    longitude: "",
-    latitude: "",
-    visibility: "confirmed",
-  });
   const [attachment, setAttachment] = useState<File | null>(null);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [selectedPreview, setSelectedPreview] = useState<{
@@ -364,16 +343,6 @@ export function FamilyCaseProgressPage() {
     () => detail?.attachments.filter((item) => item.is_own_submission) ?? [],
     [detail],
   );
-  const visiblePlaces = useMemo(
-    () =>
-      detail?.places.filter(
-        (item) =>
-          item.visibility !== "internal" &&
-          (item.review_status === "confirmed" || item.is_own_submission),
-      ) ?? [],
-    [detail],
-  );
-
   useEffect(() => {
     if (!token || !caseId || visibleAttachments.length === 0) {
       setPreviews({});
@@ -439,6 +408,9 @@ export function FamilyCaseProgressPage() {
         content: clue.trim(),
         occurred_at: toIsoOrNull(clueOccurredAt),
         location_text: nullable(clueLocation),
+        location_kind: clueCoordinates ? "point" : null,
+        longitude: clueCoordinates?.longitude ?? null,
+        latitude: clueCoordinates?.latitude ?? null,
         location_precision: clueLocationPrecision || null,
         raw_record_reference: nullable(clueRawReference),
         next_action: nullable(clueNextAction),
@@ -447,6 +419,7 @@ export function FamilyCaseProgressPage() {
       setClue("");
       setClueOccurredAt("");
       setClueLocation("");
+      setClueCoordinates(null);
       setClueLocationPrecision("");
       setClueRawReference("");
       setClueNextAction("");
@@ -457,45 +430,6 @@ export function FamilyCaseProgressPage() {
       setError("线索暂时没有提交成功，请检查网络后重试。");
     } finally {
       setIsSubmittingClue(false);
-    }
-  }
-
-  async function submitPlace(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!token || !caseId || !place.name.trim() || !place.address.trim())
-      return;
-    const coordinates = parseOptionalCoordinatePair(
-      place.longitude,
-      place.latitude,
-    );
-    if (!coordinates.ok) {
-      setError(coordinates.message);
-      return;
-    }
-    setIsSubmittingPlace(true);
-    setError("");
-    try {
-      await createCasePlace(token, caseId, {
-        ...place,
-        name: place.name.trim(),
-        address: place.address.trim(),
-        longitude: coordinates.longitude,
-        latitude: coordinates.latitude,
-      });
-      setPlace({
-        name: "",
-        place_type: resources.case_place_types[0] ?? "frequent",
-        address: "",
-        longitude: "",
-        latitude: "",
-        visibility: "confirmed",
-      });
-      setNotice("地点已提交，正在等待人工审核。");
-      await load();
-    } catch {
-      setError("常去地点暂时没有保存成功，请稍后重试。");
-    } finally {
-      setIsSubmittingPlace(false);
     }
   }
 
@@ -754,10 +688,15 @@ export function FamilyCaseProgressPage() {
                       <LocationConfirmationPicker
                         onConfirm={(location) => {
                           setClueLocation(location.address);
+                          setClueCoordinates({
+                            longitude: location.longitude,
+                            latitude: location.latitude,
+                          });
                           setClueLocationPrecision(location.precision);
                         }}
                         onClear={() => {
                           setClueLocation("");
+                          setClueCoordinates(null);
                           setClueLocationPrecision("");
                         }}
                       />
@@ -795,9 +734,10 @@ export function FamilyCaseProgressPage() {
                           className={inputClass}
                           value={clueLocation}
                           maxLength={500}
-                          onChange={(event) =>
-                            setClueLocation(event.target.value)
-                          }
+                          onChange={(event) => {
+                            setClueLocation(event.target.value);
+                            setClueCoordinates(null);
+                          }}
                         />
                       </Field>
                       <Field label="地点精度">
@@ -1025,187 +965,6 @@ export function FamilyCaseProgressPage() {
           </aside>
         </section>
 
-        {canAdd && (
-          <section
-            className="mt-5 border border-[#d8e3e0] bg-white p-5 sm:p-6"
-            aria-labelledby="places-title"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2
-                  id="places-title"
-                  className="flex items-center gap-2 text-xl font-bold text-[#183330]"
-                >
-                  <MapPin
-                    size={20}
-                    className="text-[#1e7d74]"
-                    aria-hidden="true"
-                  />{" "}
-                  常去地点
-                </h2>
-                <p className="mt-1 text-sm text-[#667a78]">
-                  地点提交后由人工审核；可手动填写，也可用高德地图搜索或定位选点。
-                </p>
-              </div>
-              <span className="text-xs font-semibold text-[#1e7d74]">
-                提交后待人工审核
-              </span>
-            </div>
-            <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
-              <div>
-                <h3 className="text-sm font-bold text-[#49615d]">已提交地点</h3>
-                {visiblePlaces.length === 0 ? (
-                  <p className="mt-3 border border-dashed border-[#bcd1cc] px-4 py-5 text-sm text-[#667a78]">
-                    暂无可查看的补充地点
-                  </p>
-                ) : (
-                  <ul className="mt-3 divide-y divide-[#edf1f0] border border-[#d8e3e0] bg-[#fbfcfc]">
-                    {visiblePlaces.map((item) => (
-                      <li key={item.id} className="px-4 py-3 text-sm">
-                        <div className="flex justify-between gap-3">
-                          <strong className="text-[#183330]">
-                            {item.name}
-                          </strong>
-                          <span className="shrink-0 text-xs text-[#667a78]">
-                            {item.review_status === "confirmed"
-                              ? "已审核"
-                              : "待人工审核"}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-[#667a78]">{item.address}</p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <form
-                className="grid gap-4"
-                onSubmit={(event) => void submitPlace(event)}
-              >
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="地点名称" required>
-                    <input
-                      aria-label="地点名称"
-                      className={inputClass}
-                      value={place.name}
-                      maxLength={120}
-                      onChange={(event) =>
-                        setPlace({ ...place, name: event.target.value })
-                      }
-                      required
-                    />
-                  </Field>
-                  <Field label="类型">
-                    <select
-                      aria-label="地点类型"
-                      className={inputClass}
-                      value={place.place_type}
-                      onChange={(event) =>
-                        setPlace({ ...place, place_type: event.target.value })
-                      }
-                    >
-                      {resources.case_place_types.map((type) => (
-                        <option key={type} value={type}>
-                          {placeTypeLabels[type] ?? type}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-                <Field label="文字地址" required>
-                  <input
-                    aria-label="文字地址"
-                    className={inputClass}
-                    value={place.address}
-                    maxLength={500}
-                    onChange={(event) =>
-                      setPlace({ ...place, address: event.target.value })
-                    }
-                    required
-                  />
-                </Field>
-                <LocationConfirmationPicker
-                  onConfirm={(location) =>
-                    setPlace({
-                      ...place,
-                      address: location.address,
-                      longitude: String(location.longitude),
-                      latitude: String(location.latitude),
-                    })
-                  }
-                  onClear={() =>
-                    setPlace({
-                      ...place,
-                      address: "",
-                      longitude: "",
-                      latitude: "",
-                    })
-                  }
-                />
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <Field label="经度（可选）">
-                    <input
-                      aria-label="经度"
-                      className={inputClass}
-                      type="text"
-                      inputMode="decimal"
-                      value={place.longitude}
-                      onChange={(event) =>
-                        setPlace({ ...place, longitude: event.target.value })
-                      }
-                    />
-                  </Field>
-                  <Field label="纬度（可选）">
-                    <input
-                      aria-label="纬度"
-                      className={inputClass}
-                      type="text"
-                      inputMode="decimal"
-                      value={place.latitude}
-                      onChange={(event) =>
-                        setPlace({ ...place, latitude: event.target.value })
-                      }
-                    />
-                  </Field>
-                  <Field label="可见级别">
-                    <select
-                      aria-label="可见级别"
-                      className={inputClass}
-                      value={place.visibility}
-                      onChange={(event) =>
-                        setPlace({
-                          ...place,
-                          visibility: event.target
-                            .value as CreateCasePlacePayload["visibility"],
-                        })
-                      }
-                    >
-                      <option value="confirmed">已确认范围</option>
-                      <option value="public">公开范围</option>
-                      <option value="internal">仅内部</option>
-                    </select>
-                  </Field>
-                </div>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  isDisabled={
-                    isSubmittingPlace ||
-                    !place.name.trim() ||
-                    !place.address.trim()
-                  }
-                >
-                  {isSubmittingPlace ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <MapPin size={16} aria-hidden="true" />
-                  )}{" "}
-                  提交地点
-                </Button>
-              </form>
-            </div>
-          </section>
-        )}
       </div>
       {selectedPreview && (
         <div

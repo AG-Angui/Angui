@@ -199,6 +199,7 @@ pub async fn accept_command_case(
         &now(),
     )
     .await?;
+
     write_audit(
         &transaction,
         Some(case_id.to_owned()),
@@ -238,6 +239,17 @@ pub async fn create_case(
         initial_case_role,
         Some(&auth.id),
         &timestamp,
+    )
+    .await?;
+
+    insert_profile_location_clues(
+        &transaction,
+        auth,
+        &case_id,
+        &format!("case-create:{case_id}"),
+        request.last_seen_location.as_deref(),
+        request.last_seen_at.clone(),
+        request.frequent_locations.as_deref(),
     )
     .await?;
 
@@ -565,6 +577,35 @@ pub async fn update_elder_profile(
     active.updated_at = Set(now());
     let updated = active.update(&transaction).await?;
     let timestamp = now();
+    let updated_response = ElderProfileResponse::from(updated.clone());
+    let last_seen_changed = changed_fields.contains(&"last_seen_location");
+    let frequent_locations_changed = changed_fields.contains(&"frequent_locations");
+    if (last_seen_changed || frequent_locations_changed)
+        && cases::Entity::find_by_id(case_id)
+            .one(&transaction)
+            .await?
+            .is_some_and(|case| case.status == "active")
+    {
+        insert_profile_location_clues(
+            &transaction,
+            auth,
+            case_id,
+            &format!("elder-profile-revision:{}:{timestamp}", updated.id),
+            last_seen_changed
+                .then_some(updated_response.last_seen_location.as_deref())
+                .flatten(),
+            updated_response.last_seen_at.clone(),
+            frequent_locations_changed
+                .then_some(
+                    updated_response
+                        .frequent_locations
+                        .as_ref()
+                        .and_then(|field| field.summary.as_deref()),
+                )
+                .flatten(),
+        )
+        .await?;
+    }
     elder_profile_revisions::ActiveModel {
         id: Set(new_id()),
         elder_profile_id: Set(updated.id.clone()),
@@ -593,6 +634,71 @@ pub async fn update_elder_profile(
     .await?;
     transaction.commit().await?;
     get_case(db, auth, case_id).await
+}
+
+pub(crate) async fn insert_profile_location_clues<C: ConnectionTrait>(
+    db: &C,
+    auth: &AuthenticatedUser,
+    case_id: &str,
+    source_reference: &str,
+    last_seen_location: Option<&str>,
+    last_seen_at: Option<String>,
+    frequent_locations: Option<&str>,
+) -> Result<(), ApiError> {
+    let role = require_case_role(
+        db,
+        &auth.id,
+        case_id,
+        &[CaseRole::Family, CaseRole::Commander],
+    )
+    .await?;
+    for (field, label, text, occurred_at, kind, precision) in [
+        (
+            "last_seen_location",
+            "最后出现位置",
+            last_seen_location,
+            last_seen_at,
+            "point",
+            "unknown",
+        ),
+        (
+            "frequent_locations",
+            "常去地点",
+            frequent_locations,
+            None,
+            "area",
+            "approximate",
+        ),
+    ] {
+        let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
+            continue;
+        };
+        create_clue_in_transaction(
+            db,
+            auth,
+            case_id,
+            CreateClueRequest {
+                source: role.to_string(),
+                content: format!("{label}：{text}"),
+                source_type: Some("manual_report".to_owned()),
+                raw_record_reference: Some(format!("{source_reference}:{field}")),
+                occurred_at,
+                location_text: Some(text.to_owned()),
+                location_precision: Some(precision.to_owned()),
+                location_kind: Some(kind.to_owned()),
+                longitude: None,
+                latitude: None,
+                location_radius_meters: None,
+                visibility: Some("confirmed".to_owned()),
+                confidence: Some("unverified".to_owned()),
+                next_action: None,
+                linked_task_reference: None,
+                attachment_ids: Vec::new(),
+            },
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn create_clue(
@@ -1214,26 +1320,18 @@ async fn load_case_detail(
         }
     }
 
-    let (places, attachments) = futures_util::try_join!(
-        crate::services::case_resource_service::visible_places(
-            db,
-            &membership.case_id,
-            &auth.id,
-            case_role,
-        ),
-        crate::services::case_resource_service::visible_attachments(
-            db,
-            &membership.case_id,
-            &auth.id,
-            case_role,
-        ),
-    )?;
+    let attachments = crate::services::case_resource_service::visible_attachments(
+        db,
+        &membership.case_id,
+        &auth.id,
+        case_role,
+    )
+    .await?;
 
     Ok(CaseDetail::new(
         case_model,
         profile_response,
         visible_clues,
-        places,
         attachments,
         case_role,
         family_contact_emails,
@@ -1286,11 +1384,13 @@ fn visible_clue_response(
     let own = attribution
         .as_ref()
         .and_then(|value| value.submitted_by_user_id.as_deref())
+        .or(clue.created_by_user_id.as_deref())
         == Some(auth.id.as_str());
     let visible = match case_role {
         CaseRole::Commander => true,
-        CaseRole::Family => clue.status == "confirmed" || own,
-        CaseRole::Volunteer => clue.status == "confirmed" || own,
+        CaseRole::Family | CaseRole::Volunteer => {
+            own || (clue.status == "confirmed" && clue.visibility.as_deref() != Some("internal"))
+        }
     };
     let can_see_attachment_references = case_role == CaseRole::Commander || own;
     visible.then(|| {

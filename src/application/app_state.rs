@@ -29,7 +29,6 @@ pub struct AppState {
     pub audio_storage: SharedAudioStorage,
     pub attachment_max_image_bytes: usize,
     pub attachment_max_per_case: u64,
-    pub case_place_types: Vec<String>,
     pub poi_selection_token_secret: String,
     pub amap_service: AmapService,
     pub ai_gateway: AiGateway,

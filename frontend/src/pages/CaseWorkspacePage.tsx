@@ -2,7 +2,6 @@ import { AlertDialog, Button, Chip, Input, TextArea } from "@heroui/react";
 import {
   CheckCircle2,
   ChevronRight,
-  CircleX,
   CirclePlus,
   FileSearch,
   MapPin,
@@ -16,7 +15,6 @@ import {
   addCaseMember,
   acceptCommandCase,
   applyForTask,
-  createCasePlace,
   createCaseSourceRecord,
   createClueDraft,
   createArchiveDraft,
@@ -41,7 +39,6 @@ import {
   listCommandIntake,
   reviewClue,
   reviewClueDraft,
-  reviewCasePlace,
   reviewSummaryDraft,
   updateCaseStatus,
   updateElderProfile,
@@ -68,13 +65,10 @@ import type {
   ClueReviewStatus,
   ClueSourceType,
   ClueStatus,
-  CreateCasePlacePayload,
   LocationPrecision,
   PublicClueSourceType,
   SummaryDraft,
   SummaryDraftDiff,
-  PlaceType,
-  PlaceVisibility,
 } from "../api/cases";
 import { ApiClientError, type SseEvent } from "../api/client";
 import { getAiExecution } from "../api/aiExecutions";
@@ -92,7 +86,6 @@ import { LocationConfirmationPicker } from "../components/LocationConfirmationPi
 import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
 import { ClueMapView } from "../components/ClueMapView";
 import { StatusTag, statusTone } from "../components/StatusTag";
-import { parseOptionalCoordinatePair } from "../coordinateInput";
 import { FamilyIntakeForm } from "./FamilyIntakeForm";
 
 type WorkspaceMode = "family" | "commander" | "volunteer";
@@ -100,10 +93,6 @@ type ReviewDraft = {
   reason: string;
   relatedClueId: string;
   relatedClueQuery: string;
-};
-type PlaceDraft = Omit<CreateCasePlacePayload, "longitude" | "latitude"> & {
-  longitude: string;
-  latitude: string;
 };
 type ClueQueueFilters = {
   status: ClueStatus | "";
@@ -150,15 +139,6 @@ const caseRoleLabels: Record<CaseRole, string> = {
   family: "家属",
   commander: "指挥人员",
   volunteer: "志愿者",
-};
-
-const placeTypeLabels: Record<string, string> = {
-  frequent: "常去地点",
-  key_location: "关键地点",
-  last_seen_context: "最后出现相关",
-  medical: "医疗",
-  shelter: "临时安置",
-  other: "其他",
 };
 
 export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
@@ -553,17 +533,6 @@ function CaseDetailView({
   const [isQueueLoading, setIsQueueLoading] = useState(false);
   const [queueError, setQueueError] = useState("");
   const queueRequestVersion = useRef(0);
-  const [place, setPlace] = useState<PlaceDraft>({
-    name: "",
-    place_type: "",
-    address: "",
-    longitude: "",
-    latitude: "",
-    visibility: "confirmed",
-  });
-  const [placeReviewReasons, setPlaceReviewReasons] = useState<
-    Record<string, string>
-  >({});
   const [attachment, setAttachment] = useState<File | null>(null);
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status);
   const [statusReason, setStatusReason] = useState("");
@@ -579,8 +548,6 @@ function CaseDetailView({
     ? memberRole
     : allowedMemberRoles[0];
   const canEditElderProfile = detail.access_role === "family" || isCommander;
-  const canSubmitPlace = detail.access_role === "family" || isCommander;
-  const placeTypes = resourceConfiguration.case_place_types;
   const statusOptions: CaseStatus[] =
     detail.status === "active"
       ? ["active", "ended"]
@@ -640,13 +607,6 @@ function CaseDetailView({
 
   useEffect(() => setNextStatus(detail.status), [detail.status]);
   useEffect(() => {
-    setPlace((current) =>
-      placeTypes.includes(current.place_type)
-        ? current
-        : { ...current, place_type: placeTypes[0] ?? "" },
-    );
-  }, [placeTypes]);
-  useEffect(() => {
     if (isCommander) {
       void loadClueQueue();
       return;
@@ -674,26 +634,6 @@ function CaseDetailView({
       return false;
     } finally {
       setBusy("");
-    }
-  }
-
-  async function submitPlaceReview(
-    placeId: string,
-    status: "confirmed" | "rejected",
-  ) {
-    const reason = placeReviewReasons[placeId]?.trim() ?? "";
-    if (!token || !reason) return;
-    const succeeded = await run(
-      `place-review-${placeId}`,
-      () => reviewCasePlace(token, detail.id, placeId, { status, reason }),
-      status === "confirmed" ? "地点已确认" : "地点已驳回",
-    );
-    if (succeeded) {
-      setPlaceReviewReasons((current) => {
-        const next = { ...current };
-        delete next[placeId];
-        return next;
-      });
     }
   }
 
@@ -1624,255 +1564,9 @@ function CaseDetailView({
       </section>
 
       <section
-        className={`grid gap-6 border-t border-slate-200 bg-slate-50 px-5 py-5 sm:px-6 ${canSubmitPlace ? "lg:grid-cols-2" : ""}`}
-        aria-label="补充地点和图片"
+        className="border-t border-slate-200 bg-slate-50 px-5 py-5 sm:px-6"
+        aria-label="补充图片"
       >
-        {canSubmitPlace && (
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="m-0 text-base font-bold text-slate-950">
-                补充地点
-              </h3>
-              <span className="text-xs text-slate-500">
-                {isCommander ? "地点审核" : "提交后待人工审核"}
-              </span>
-            </div>
-            <div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
-              {detail.places.length === 0 ? (
-                <p className="m-0 px-3 py-3 text-xs text-slate-500">
-                  暂无可查看的补充地点
-                </p>
-              ) : (
-                detail.places.map((item) => {
-                  const reviewBusy = busy === `place-review-${item.id}`;
-                  const reviewReason = placeReviewReasons[item.id] ?? "";
-                  return (
-                    <div key={item.id} className="px-3 py-3 text-sm">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <strong className="text-slate-900">{item.name}</strong>
-                        <Chip size="sm" variant="soft">
-                          <Chip.Label>
-                            {statusLabels[item.review_status] ??
-                              item.review_status}
-                          </Chip.Label>
-                        </Chip>
-                      </div>
-                      <p className="m-0 mt-1 text-xs text-slate-600">
-                        {item.address}
-                      </p>
-                      {isCommander &&
-                        item.review_status === "pending_review" &&
-                        detail.status !== "closed" && (
-                          <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3">
-                            <Input
-                              aria-label={`审核地点“${item.name}”的理由`}
-                              placeholder="审核理由"
-                              value={reviewReason}
-                              maxLength={1000}
-                              onChange={(event) =>
-                                setPlaceReviewReasons((current) => ({
-                                  ...current,
-                                  [item.id]: event.target.value,
-                                }))
-                              }
-                              fullWidth
-                            />
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                isDisabled={!reviewReason.trim() || reviewBusy}
-                                onPress={() =>
-                                  void submitPlaceReview(item.id, "confirmed")
-                                }
-                              >
-                                <CheckCircle2 size={15} aria-hidden="true" />
-                                {reviewBusy ? "正在审核" : "确认地点"}
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                isDisabled={!reviewReason.trim() || reviewBusy}
-                                onPress={() =>
-                                  void submitPlaceReview(item.id, "rejected")
-                                }
-                              >
-                                <CircleX size={15} aria-hidden="true" />
-                                驳回地点
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-            {detail.status !== "closed" && (
-              <form
-                className="mt-3 grid gap-3"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (
-                    !token ||
-                    !place.name.trim() ||
-                    !place.address.trim() ||
-                    !place.place_type
-                  ) {
-                    setError("请填写地点名称、类型和文字地址后再提交。");
-                    return;
-                  }
-                  const coordinates = parseOptionalCoordinatePair(
-                    place.longitude,
-                    place.latitude,
-                  );
-                  if (!coordinates.ok) {
-                    setError(coordinates.message);
-                    return;
-                  }
-                  void run(
-                    "place",
-                    () =>
-                      createCasePlace(token, detail.id, {
-                        ...place,
-                        name: place.name.trim(),
-                        address: place.address.trim(),
-                        longitude: coordinates.longitude,
-                        latitude: coordinates.latitude,
-                      }),
-                    "地点已提交，正在等待人工审核",
-                  ).then((ok) => {
-                    if (ok)
-                      setPlace({
-                        name: "",
-                        place_type: placeTypes[0] ?? "",
-                        address: "",
-                        longitude: "",
-                        latitude: "",
-                        visibility: "confirmed",
-                      });
-                  });
-                }}
-              >
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="地点名称" required>
-                    <Input
-                      value={place.name}
-                      maxLength={120}
-                      onChange={(event) =>
-                        setPlace({ ...place, name: event.target.value })
-                      }
-                      fullWidth
-                      required
-                    />
-                  </Field>
-                  <Field label="类型">
-                    <select
-                      className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-                      value={place.place_type}
-                      onChange={(event) =>
-                        setPlace({
-                          ...place,
-                          place_type: event.target.value as PlaceType,
-                        })
-                      }
-                    >
-                      {placeTypes.map((type) => (
-                        <option key={type} value={type}>
-                          {placeTypeLabels[type] ?? type}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-                <Field label="文字地址" required>
-                  <Input
-                    value={place.address}
-                    maxLength={500}
-                    onChange={(event) =>
-                      setPlace({ ...place, address: event.target.value })
-                    }
-                    fullWidth
-                    required
-                  />
-                </Field>
-                <LocationConfirmationPicker
-                  onConfirm={(location) =>
-                    setPlace({
-                      ...place,
-                      address: location.address,
-                      longitude: String(location.longitude),
-                      latitude: String(location.latitude),
-                    })
-                  }
-                  onClear={() =>
-                    setPlace({
-                      ...place,
-                      address: "",
-                      longitude: "",
-                      latitude: "",
-                    })
-                  }
-                />
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <Field label="经度（可选）">
-                    <Input
-                      type="text"
-                      inputMode="decimal"
-                      value={place.longitude}
-                      onChange={(event) =>
-                        setPlace({
-                          ...place,
-                          longitude: event.target.value,
-                        })
-                      }
-                      fullWidth
-                    />
-                  </Field>
-                  <Field label="纬度（可选）">
-                    <Input
-                      type="text"
-                      inputMode="decimal"
-                      value={place.latitude}
-                      onChange={(event) =>
-                        setPlace({
-                          ...place,
-                          latitude: event.target.value,
-                        })
-                      }
-                      fullWidth
-                    />
-                  </Field>
-                  <Field label="可见级别">
-                    <select
-                      className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-                      value={place.visibility}
-                      onChange={(event) =>
-                        setPlace({
-                          ...place,
-                          visibility: event.target.value as PlaceVisibility,
-                        })
-                      }
-                    >
-                      <option value="confirmed">已确认范围</option>
-                      <option value="internal">仅内部</option>
-                      <option value="public">公开范围</option>
-                    </select>
-                  </Field>
-                </div>
-                <Button
-                  type="submit"
-                  variant="secondary"
-                  isDisabled={busy === "place"}
-                >
-                  提交地点
-                </Button>
-              </form>
-            )}
-          </div>
-        )}
         <div>
           <div className="flex items-center justify-between gap-3">
             <h3 className="m-0 text-base font-bold text-slate-950">补充图片</h3>
@@ -2513,8 +2207,6 @@ function TaskBoard({
 
 const mapObjectLabels: Record<CaseMapItem["object_type"], string> = {
   last_seen: "最后出现信息",
-  place: "补充地点",
-  location_clue: "地点线索",
   clue: "已确认线索",
   task: "任务区域",
 };

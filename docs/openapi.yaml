@@ -1867,7 +1867,7 @@ paths:
       tags: [Cases]
       operationId: listCasePois
       summary: Find bounded nearby resources from an authorized or explicitly consented center
-      description: The caller can choose only an allow-listed category. With no browser coordinates, the server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task coordinate or, when none exists, a case-confirmed place. Volunteers may use only the case-confirmed public or confirmed-visibility places they are authorized to view; internal places remain commander-only. Callers outside the case cannot use a place as a search center. A caller may explicitly provide both browser coordinates in WGS-84 for this request only. The server converts them to AMap coordinates before the upstream request and must not persist them. Each coordinate-bearing returned POI includes a short-lived, case- and user-bound selection token for route planning. AMap transport, quota, conversion, or business failures return an explicit error or a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
+      description: The caller can choose only an allow-listed category. With no browser coordinates, the server performs one bounded nearby search (3 km, one page, at most 10 items) around an authorized task coordinate or, when none exists, a confirmed location clue. Volunteers may use only confirmed public or confirmed-visibility location clues; internal location clues remain commander-only. Callers outside the case cannot use a location clue as a search center. A caller may explicitly provide both browser coordinates in WGS-84 for this request only. The server converts them to AMap coordinates before the upstream request and must not persist them. Each coordinate-bearing returned POI includes a short-lived, case- and user-bound selection token for route planning. AMap transport, quota, conversion, or business failures return an explicit error or a fixed non-coordinate fallback and never disclose the provider key or source coordinate.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander, volunteer]
@@ -4535,7 +4535,6 @@ components:
         - access_role
         - elder_profile
         - clues
-        - places
         - attachments
         - created_at
         - updated_at
@@ -4557,11 +4556,6 @@ components:
           description: 根据当前案件角色裁剪后的线索列表，按创建时间倒序。
           items:
             $ref: "#/components/schemas/Clue"
-        places:
-          type: array
-          description: 按案件角色和可见级别裁剪后的地点；所有新提交记录均待人工审核。
-          items:
-            $ref: "#/components/schemas/CasePlace"
         attachments:
           type: array
           description: 指挥可查看案件附件；其他成员仅看到本人提交的附件元数据。
@@ -4986,7 +4980,7 @@ components:
       required: [id, object_type, display_name, longitude, latitude, location_text, location_precision, source, occurred_at, reported_at, review_status, related_task_id, updated_at]
       properties:
         id: { type: string }
-        object_type: { type: string, enum: [last_seen, place, clue, task] }
+        object_type: { type: string, enum: [last_seen, clue, task] }
         display_name:
           type: [string, "null"]
           description: 对象自身名称；last_seen 为 null，客户端必须依据 object_type 本地化展示标签。
@@ -5394,24 +5388,6 @@ components:
         status: { $ref: "#/components/schemas/TaskStatus" }
         safety_briefing: { type: string }
 
-    CasePlace:
-      type: object
-      additionalProperties: false
-      required: [id, case_id, name, place_type, address, longitude, latitude, source, visibility, review_status, created_at, updated_at, is_own_submission]
-      properties:
-        id: { type: string, format: uuid }
-        case_id: { type: string, format: uuid }
-        name: { type: string }
-        place_type: { type: string }
-        address: { type: string }
-        longitude: { type: [number, "null"] }
-        latitude: { type: [number, "null"] }
-        source: { type: string, enum: [family, commander, volunteer], description: Set by the server from the submitter's case role. }
-        visibility: { type: string, enum: [public, confirmed, internal] }
-        review_status: { type: string, enum: [pending_review, confirmed, rejected] }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-        is_own_submission: { type: boolean }
 
     CaseAttachment:
       type: object
@@ -5432,13 +5408,10 @@ components:
     CaseResourceConfiguration:
       type: object
       additionalProperties: false
-      required: [attachment_max_image_bytes, attachment_max_per_case, case_place_types]
+      required: [attachment_max_image_bytes, attachment_max_per_case]
       properties:
         attachment_max_image_bytes: { type: integer, minimum: 1024 }
         attachment_max_per_case: { type: integer, minimum: 1 }
-        case_place_types:
-          type: array
-          items: { type: string }
 
     CreateCollaborationSpaceRequest:
       type: object

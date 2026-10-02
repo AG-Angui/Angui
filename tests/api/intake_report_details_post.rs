@@ -357,4 +357,40 @@ async fn intake_report_details_require_explicit_fields_and_keep_photos_owner_sco
             .expect("case attachment query should succeed")
             .is_some()
     );
+    let case_detail = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{}", confirmed.case_id))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(case_detail.status(), StatusCode::OK);
+    let case_detail: serde_json::Value = test::read_body_json(case_detail).await;
+    let clues = case_detail["clues"]
+        .as_array()
+        .expect("initial location clues");
+    assert_eq!(clues.len(), 1);
+    assert_eq!(clues[0]["status"], "pending_review");
+    assert_eq!(clues[0]["location_kind"], "point");
+    assert_eq!(clues[0]["location_text"], "虚构社区南门");
+    assert_eq!(clues[0]["is_own_submission"], true);
+    assert_eq!(
+        clues[0]["raw_record_reference"],
+        format!("intake-session:{session_id}:last_seen_location")
+    );
+
+    let map = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/api/cases/{}/map-view", confirmed.case_id))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(map.status(), StatusCode::OK);
+    let map: serde_json::Value = test::read_body_json(map).await;
+    let items = map["items"].as_array().expect("map items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["object_type"], "clue");
 }

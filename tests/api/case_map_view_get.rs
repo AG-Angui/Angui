@@ -97,13 +97,15 @@ async fn get_case_map_view_returns_only_role_necessary_layers_with_text_fallback
     )
     .await;
     let commander_items = commander_view["items"].as_array().expect("map items");
+    assert!(commander_items.iter().any(|item| {
+        item["object_type"] == "clue"
+            && item["location_text"] == "测试公园北门"
+            && item["review_status"] == "pending_review"
+    }));
     assert!(
-        commander_items
+        !commander_items
             .iter()
-            .any(|item| item["object_type"] == "last_seen"
-                && item["longitude"].is_null()
-                && item["review_status"] == "pending_review"
-                && item["display_name"].is_null())
+            .any(|item| item["object_type"] == "last_seen")
     );
     assert!(
         commander_items
@@ -133,16 +135,11 @@ async fn get_case_map_view_returns_only_role_necessary_layers_with_text_fallback
     )
     .await;
     let family_items = family_view["items"].as_array().expect("map items");
-    assert!(
-        family_items
-            .iter()
-            .any(|item| item["object_type"] == "last_seen")
-    );
-    assert!(
-        !family_items
-            .iter()
-            .any(|item| item["object_type"] == "clue")
-    );
+    assert!(family_items.iter().any(|item| {
+        item["object_type"] == "clue"
+            && item["location_text"] == "测试公园北门"
+            && item["review_status"] == "pending_review"
+    }));
     assert!(
         !family_items
             .iter()

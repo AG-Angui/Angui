@@ -45,7 +45,6 @@ const mocked = vi.hoisted(() => ({
   listCaseMembers: vi.fn(),
   createCaseTask: vi.fn(),
   reviewClue: vi.fn(),
-  reviewCasePlace: vi.fn(),
 }));
 
 vi.mock("../auth/useAuth", () => ({
@@ -72,8 +71,6 @@ vi.mock("../api/cases", () => ({
   createCase: vi.fn(),
   createClue: vi.fn(),
   reviewClue: (...args: unknown[]) => mocked.reviewClue(...args),
-  reviewCasePlace: (...args: unknown[]) => mocked.reviewCasePlace(...args),
-  createCasePlace: vi.fn(),
   uploadCaseAttachment: vi.fn(),
   updateCaseStatus: vi.fn(),
   updateElderProfile: vi.fn(),
@@ -117,7 +114,6 @@ function detail(
       suspicious_motive: null,
     },
     clues: [],
-    places: [],
     attachments: [],
     created_at: "2026-07-24T00:00:00Z",
     updated_at: "2026-07-24T00:00:00Z",
@@ -125,113 +121,6 @@ function detail(
 }
 
 describe("CaseWorkspacePage", () => {
-  it("lets a commander review a pending family place with a reason", async () => {
-    vi.clearAllMocks();
-    const commandDetail = detail(
-      "case-command",
-      "指挥地点审核案件",
-      "commander",
-    );
-    commandDetail.places = [
-      {
-        id: "place-pending",
-        case_id: "case-command",
-        name: "模拟体检地点",
-        place_type: "medical",
-        address: "模拟医院门诊入口",
-        longitude: null,
-        latitude: null,
-        source: "family",
-        visibility: "confirmed",
-        review_status: "pending_review",
-        created_at: "2026-08-14T08:00:00Z",
-        updated_at: "2026-08-14T08:00:00Z",
-        is_own_submission: false,
-      },
-    ];
-    const reviewedDetail = {
-      ...commandDetail,
-      places: commandDetail.places.map((place) => ({
-        ...place,
-        review_status: "confirmed" as const,
-      })),
-    };
-    mocked.listCommandIntake.mockResolvedValue([]);
-    mocked.listCases.mockResolvedValue([
-      {
-        id: "case-command",
-        case_code: "AG-COMMAND",
-        status: "active",
-        access_role: "commander",
-        display_name: "指挥地点审核案件",
-        last_seen_at: null,
-        last_seen_location: null,
-        created_at: "2026-08-14T08:00:00Z",
-        updated_at: "2026-08-14T08:00:00Z",
-      },
-    ]);
-    mocked.getCase
-      .mockResolvedValueOnce(commandDetail)
-      .mockResolvedValue(reviewedDetail);
-    mocked.getCaseResourceConfiguration.mockResolvedValue({
-      attachment_max_image_bytes: 5 * 1024 * 1024,
-      attachment_max_per_case: 12,
-      case_place_types: ["medical"],
-    });
-    mocked.listCaseClues.mockResolvedValue({
-      items: [],
-      page: 1,
-      page_size: 25,
-      total: 0,
-    });
-    mocked.getCaseMapView.mockResolvedValue({ items: [] });
-    mocked.listCaseTasks.mockResolvedValue({
-      items: [],
-      page: 1,
-      page_size: 25,
-      total: 0,
-    });
-    mocked.listCaseMembers.mockResolvedValue([]);
-    mocked.reviewCasePlace.mockResolvedValue(reviewedDetail.places[0]);
-
-    render(<CaseWorkspacePage mode="commander" />);
-
-    await screen.findByRole("heading", { name: "指挥地点审核案件" });
-    const reason = await screen.findByRole("textbox", {
-      name: "审核地点“模拟体检地点”的理由",
-    });
-    const confirm = screen.getByRole("button", { name: "确认地点" });
-    expect(confirm).toBeDisabled();
-    fireEvent.change(reason, {
-      target: { value: "已与家属提供的模拟记录核对。" },
-    });
-    expect(confirm).toBeEnabled();
-    fireEvent.click(confirm);
-
-    await waitFor(() =>
-      expect(mocked.reviewCasePlace).toHaveBeenCalledWith(
-        "test-session",
-        "case-command",
-        "place-pending",
-        {
-          status: "confirmed",
-          reason: "已与家属提供的模拟记录核对。",
-        },
-      ),
-    );
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("textbox", {
-          name: "审核地点“模拟体检地点”的理由",
-        }),
-      ).not.toBeInTheDocument(),
-    );
-    expect(
-      screen
-        .getAllByText("已确认")
-        .some((element) => element.dataset.slot === "chip-label"),
-    ).toBe(true);
-  }, 10_000);
 
   it("gives a family member one next action and keeps long forms collapsed", async () => {
     vi.clearAllMocks();
@@ -254,7 +143,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCaseMapView.mockResolvedValue({ items: [] });
 
@@ -310,7 +198,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCaseMapView.mockResolvedValue({ items: [] });
     mocked.listCaseTasks.mockResolvedValue({
@@ -364,7 +251,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCaseMapView.mockResolvedValue({ items: [] });
 
@@ -408,7 +294,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCaseMapView.mockResolvedValue({ items: [] });
     mocked.listCaseTasks.mockResolvedValue({
@@ -502,13 +387,12 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCaseMapView.mockResolvedValue({
       items: [
         {
-          id: "place-text",
-          object_type: "place",
+          id: "location-clue-text",
+          object_type: "clue",
           display_name: "Fictional market",
           longitude: null,
           latitude: null,
@@ -597,7 +481,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
 
     render(<CaseWorkspacePage mode="family" />);
@@ -664,7 +547,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCasePublicProgress.mockImplementation(
       (_token: string, caseId: string) =>
@@ -741,7 +623,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCasePublicProgress.mockResolvedValue({
       case_id: "family-progress",
@@ -792,7 +673,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.addCaseMember.mockResolvedValue({});
 
@@ -834,7 +714,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.addCaseMember.mockResolvedValue({});
 
@@ -884,7 +763,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
 
     render(<CaseWorkspacePage mode="commander" />);
@@ -922,7 +800,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
 
     render(<CaseWorkspacePage mode="commander" />);
@@ -954,7 +831,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.listCaseClues.mockResolvedValue({
       items: [],
@@ -1035,7 +911,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.listCaseClues.mockResolvedValue({
       items: [pendingClue],
@@ -1175,7 +1050,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.listCaseTasks.mockResolvedValue({
       items: [],
@@ -1269,7 +1143,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.getCaseMapView.mockResolvedValue({ items: [] });
     mocked.listCaseClues.mockResolvedValue({
@@ -1375,7 +1248,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.listCaseClues
       .mockReturnValueOnce(firstQueue.promise)
@@ -1460,7 +1332,6 @@ describe("CaseWorkspacePage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 12,
-      case_place_types: ["frequent"],
     });
     mocked.listCaseClues.mockResolvedValue({
       items: [sensitiveClue],

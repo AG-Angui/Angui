@@ -794,35 +794,6 @@ export function VolunteerWorkspacePage() {
                     />
                   </div>
                 </section>
-                <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
-                  <h3 className="m-0 text-sm font-semibold text-slate-950">
-                    已审核关键地点（含家属提供）
-                  </h3>
-                  {workspace.detail.places.length === 0 ? (
-                    <p className="mb-0 mt-1">暂无已审核可查看的关键地点。</p>
-                  ) : (
-                    <ul className="mt-2 grid gap-2 p-0 sm:grid-cols-2">
-                      {workspace.detail.places.map((place) => (
-                        <li
-                          key={place.id}
-                          className="list-none border-l-2 border-emerald-500 pl-3"
-                        >
-                          <p className="m-0 font-medium text-slate-900">
-                            {place.name}
-                          </p>
-                          <p className="mb-0 mt-1 text-xs text-slate-600">
-                            <MapPin
-                              aria-hidden="true"
-                              className="mr-1 inline"
-                              size={14}
-                            />
-                            {place.address}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
                 <div className="mt-5 grid gap-5 lg:grid-cols-2">
                   <section>
                     <h3 className="m-0 text-sm font-semibold text-slate-950">

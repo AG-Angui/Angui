@@ -59,7 +59,14 @@ async fn get_case_applies_membership_and_role_based_field_and_clue_cuts() {
     .await;
     let family_body: Value = test::read_body_json(family).await;
     assert_eq!(family_body["access_role"], "family");
-    assert_eq!(family_body["clues"].as_array().map(Vec::len), Some(1));
+    assert_eq!(family_body["clues"].as_array().map(Vec::len), Some(2));
+    assert!(
+        family_body["clues"]
+            .as_array()
+            .expect("family clues")
+            .iter()
+            .any(|clue| clue["location_text"] == "测试公园北门")
+    );
 
     let volunteer = test::call_service(
         &app,

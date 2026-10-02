@@ -77,7 +77,7 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     )
     .await;
     let family_body: Value = test::read_body_json(family).await;
-    assert_eq!(family_body["total"], 2);
+    assert_eq!(family_body["total"], 3);
     assert!(
         family_body["items"]
             .as_array()
@@ -114,7 +114,7 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     )
     .await;
     let paged_body: Value = test::read_body_json(paged).await;
-    assert_eq!(paged_body["total"], 4);
+    assert_eq!(paged_body["total"], 5);
     assert_eq!(paged_body["items"].as_array().map(Vec::len), Some(2));
     assert_eq!(paged_body["page"], 1);
     assert_eq!(paged_body["page_size"], 2);
@@ -142,7 +142,7 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
     )
     .await;
     let typed_body: Value = test::read_body_json(typed).await;
-    assert_eq!(typed_body["total"], 3);
+    assert_eq!(typed_body["total"], 4);
     assert!(
         typed_body["items"]
             .as_array()

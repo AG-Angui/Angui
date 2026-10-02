@@ -214,7 +214,6 @@ async fn get_resource_configuration(
     Ok(HttpResponse::Ok().json(CaseResourceConfigurationResponse {
         attachment_max_image_bytes: state.attachment_max_image_bytes,
         attachment_max_per_case: state.attachment_max_per_case,
-        case_place_types: state.case_place_types.clone(),
     }))
 }
 
@@ -356,6 +355,13 @@ async fn get_map_view(
     let mut items = Vec::new();
     if detail.access_role != CaseRole::Volunteer
         && let Some(location_text) = detail.elder_profile.last_seen_location
+        && !detail.clues.iter().any(|clue| {
+            clue.location_text.as_deref() == Some(location_text.as_str())
+                && clue
+                    .raw_record_reference
+                    .as_deref()
+                    .is_some_and(|reference| reference.ends_with(":last_seen_location"))
+        })
     {
         items.push(CaseMapItem {
             id: format!("case:{}:last-seen", detail.id),
@@ -386,20 +392,13 @@ async fn get_map_view(
                     || (clue.longitude.is_some() && clue.latitude.is_some()))
                     && (clue.location_text.is_some()
                         || (clue.longitude.is_some() && clue.latitude.is_some()))
-                    && (detail.access_role == CaseRole::Commander || clue.status == "confirmed")
+                    && (detail.access_role == CaseRole::Commander
+                        || clue.status == "confirmed"
+                        || (detail.access_role == CaseRole::Family && clue.is_own_submission))
             })
             .map(|clue| CaseMapItem {
                 id: clue.id.clone(),
-                object_type: if clue
-                    .raw_record_reference
-                    .as_deref()
-                    .is_some_and(|reference| reference.starts_with("legacy-place-type:"))
-                {
-                    "place"
-                } else {
-                    "clue"
-                }
-                .to_owned(),
+                object_type: "clue".to_owned(),
                 display_name: Some(clue.content.clone()),
                 longitude: clue.longitude,
                 latitude: clue.latitude,

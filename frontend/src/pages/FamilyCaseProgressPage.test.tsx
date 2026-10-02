@@ -10,13 +10,38 @@ const mocked = vi.hoisted(() => ({
   getCasePublicProgress: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   createClue: vi.fn(),
-  createCasePlace: vi.fn(),
   downloadCaseAttachment: vi.fn(),
   updateElderProfile: vi.fn(),
   uploadCaseAttachment: vi.fn(),
 }));
 
 vi.mock("../auth/useAuth", () => ({ useAuth: () => mocked.auth }));
+vi.mock("../components/LocationConfirmationPicker", () => ({
+  LocationConfirmationPicker: ({
+    onConfirm,
+  }: {
+    onConfirm: (location: {
+      address: string;
+      longitude: number;
+      latitude: number;
+      precision: "exact";
+    }) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onConfirm({
+          address: "社区花园北门",
+          longitude: 121.41,
+          latitude: 31.21,
+          precision: "exact",
+        })
+      }
+    >
+      选取测试坐标
+    </button>
+  ),
+}));
 vi.mock("../api/cases", () => ({
   getCase: (...args: unknown[]) => mocked.getCase(...args),
   getCasePublicProgress: (...args: unknown[]) =>
@@ -24,7 +49,6 @@ vi.mock("../api/cases", () => ({
   getCaseResourceConfiguration: (...args: unknown[]) =>
     mocked.getCaseResourceConfiguration(...args),
   createClue: (...args: unknown[]) => mocked.createClue(...args),
-  createCasePlace: (...args: unknown[]) => mocked.createCasePlace(...args),
   downloadCaseAttachment: (...args: unknown[]) =>
     mocked.downloadCaseAttachment(...args),
   updateElderProfile: (...args: unknown[]) =>
@@ -55,23 +79,6 @@ const detail: CaseDetail = {
     suspicious_motive: null,
   },
   clues: [],
-  places: [
-    {
-      id: "place-1",
-      case_id: "case-1",
-      name: "社区公园",
-      place_type: "frequent",
-      address: "社区公园",
-      longitude: null,
-      latitude: null,
-      source: "family",
-      visibility: "confirmed",
-      review_status: "confirmed",
-      created_at: "2026-08-10T00:00:00Z",
-      updated_at: "2026-08-10T00:00:00Z",
-      is_own_submission: true,
-    },
-  ],
   attachments: [],
   created_at: "2026-08-10T00:00:00Z",
   updated_at: "2026-08-10T00:00:00Z",
@@ -131,7 +138,6 @@ describe("FamilyCaseProgressPage", () => {
     mocked.getCaseResourceConfiguration.mockResolvedValue({
       attachment_max_image_bytes: 5 * 1024 * 1024,
       attachment_max_per_case: 10,
-      case_place_types: ["frequent"],
     });
     mocked.createClue.mockResolvedValue({});
     mocked.updateElderProfile.mockResolvedValue(detail);
@@ -221,71 +227,70 @@ describe("FamilyCaseProgressPage", () => {
     );
   });
 
-  it("submits a place with selected coordinates", async () => {
-    mocked.createCasePlace.mockResolvedValue({});
+  it("submits a location clue through the unified form", async () => {
     renderPage();
-    await screen.findByRole("heading", { name: "常去地点" });
-    expect(screen.getByLabelText("经度")).toHaveAttribute("type", "text");
-    expect(screen.getByLabelText("纬度")).toHaveAttribute(
-      "inputmode",
-      "decimal",
-    );
-    fireEvent.change(screen.getByLabelText("地点名称"), {
+    await screen.findByRole("heading", { name: "公开进展" });
+    fireEvent.click(screen.getByRole("button", { name: /提交一条新线索/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "新线索内容" }), {
+      target: { value: "常在社区花园散步" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "地点" }), {
       target: { value: "社区花园" },
     });
-    fireEvent.change(screen.getByLabelText("文字地址"), {
-      target: { value: "虹桥路 100 号" },
-    });
-    fireEvent.change(screen.getByLabelText("经度"), {
-      target: { value: "121.41" },
-    });
-    fireEvent.change(screen.getByLabelText("纬度"), {
-      target: { value: "31.21" },
-    });
-    fireEvent.submit(
-      screen.getByRole("button", { name: "提交地点" }).closest("form")!,
-    );
+    fireEvent.click(screen.getByRole("button", { name: "提交线索" }));
 
     await waitFor(() =>
-      expect(mocked.createCasePlace).toHaveBeenCalledWith(
+      expect(mocked.createClue).toHaveBeenCalledWith(
         "family-token",
         "case-1",
         expect.objectContaining({
-          name: "社区花园",
-          address: "虹桥路 100 号",
-          longitude: 121.41,
-          latitude: 31.21,
+          content: "常在社区花园散步",
+          location_text: "社区花园",
         }),
       ),
     );
   });
 
-  it("keeps incomplete coordinate input visible and rejects it on submit", async () => {
+  it("submits selected coordinates and clears them when the address changes", async () => {
     renderPage();
-    await screen.findByRole("heading", { name: "常去地点" });
-    fireEvent.change(screen.getByLabelText("地点名称"), {
-      target: { value: "社区花园" },
+    await screen.findByRole("heading", { name: "公开进展" });
+    fireEvent.click(screen.getByRole("button", { name: /提交一条新线索/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "新线索内容" }), {
+      target: { value: "在社区花园北门目击" },
     });
-    fireEvent.change(screen.getByLabelText("文字地址"), {
-      target: { value: "虹桥路 100 号" },
-    });
-    fireEvent.change(screen.getByLabelText("经度"), { target: { value: "-" } });
-    expect(screen.getByLabelText("经度")).toHaveValue("-");
-    fireEvent.change(screen.getByLabelText("经度"), {
-      target: { value: "121." },
-    });
-    expect(screen.getByLabelText("经度")).toHaveValue("121.");
+    fireEvent.click(screen.getByRole("button", { name: "选取测试坐标" }));
+    fireEvent.click(screen.getByRole("button", { name: "提交线索" }));
+    await waitFor(() =>
+      expect(mocked.createClue).toHaveBeenCalledWith(
+        "family-token",
+        "case-1",
+        expect.objectContaining({
+          location_kind: "point",
+          longitude: 121.41,
+          latitude: 31.21,
+          location_text: "社区花园北门",
+        }),
+      ),
+    );
 
-    fireEvent.change(screen.getByLabelText("经度"), { target: { value: "-" } });
-    fireEvent.change(screen.getByLabelText("纬度"), {
-      target: { value: "31.21" },
+    fireEvent.click(screen.getByRole("button", { name: "选取测试坐标" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "地点" }), {
+      target: { value: "另一处位置" },
     });
-    fireEvent.submit(
-      screen.getByRole("button", { name: "提交地点" }).closest("form")!,
+    fireEvent.change(screen.getByRole("textbox", { name: "新线索内容" }), {
+      target: { value: "另一条线索" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交线索" }));
+    await waitFor(() => expect(mocked.createClue).toHaveBeenCalledTimes(2));
+    expect(mocked.createClue).toHaveBeenLastCalledWith(
+      "family-token",
+      "case-1",
+      expect.objectContaining({
+        location_text: "另一处位置",
+        location_kind: null,
+        longitude: null,
+        latitude: null,
+      }),
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "经度和纬度必须是有效数字。",
-    );
-    expect(mocked.createCasePlace).not.toHaveBeenCalled();
   });
 });

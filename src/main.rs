@@ -43,7 +43,6 @@ async fn main() -> io::Result<()> {
         audio_storage: audio_storage.clone(),
         attachment_max_image_bytes: settings.attachment_max_image_bytes,
         attachment_max_per_case: settings.attachment_max_per_case,
-        case_place_types: settings.case_place_types.clone(),
         poi_selection_token_secret: settings.poi_selection_token_secret.clone(),
         amap_service: AmapService::new(
             settings.amap_webservice_key,

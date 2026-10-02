@@ -1348,42 +1348,6 @@ pub struct ClueTimelineQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CreateCasePlaceRequest {
-    pub name: String,
-    pub place_type: String,
-    pub address: String,
-    pub longitude: Option<f64>,
-    pub latitude: Option<f64>,
-    pub visibility: PlaceVisibility,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewCasePlaceRequest {
-    pub status: String,
-    pub reason: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlaceVisibility {
-    Public,
-    Confirmed,
-    Internal,
-}
-
-impl PlaceVisibility {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::Confirmed => "confirmed",
-            Self::Internal => "internal",
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewClueRequest {
     pub status: String,
     pub reason: String,
@@ -1519,7 +1483,6 @@ pub struct CaseDetail {
     pub family_contact_emails: Vec<String>,
     pub elder_profile: ElderProfileResponse,
     pub clues: Vec<ClueResponse>,
-    pub places: Vec<CasePlaceResponse>,
     pub attachments: Vec<CaseAttachmentResponse>,
     pub created_at: String,
     pub updated_at: String,
@@ -2130,23 +2093,6 @@ pub struct TaskNavigationResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct CasePlaceResponse {
-    pub id: String,
-    pub case_id: String,
-    pub name: String,
-    pub place_type: String,
-    pub address: String,
-    pub longitude: Option<f64>,
-    pub latitude: Option<f64>,
-    pub source: String,
-    pub visibility: String,
-    pub review_status: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub is_own_submission: bool,
-}
-
-#[derive(Debug, Serialize)]
 pub struct CaseAttachmentResponse {
     pub id: String,
     pub case_id: String,
@@ -2164,7 +2110,6 @@ pub struct CaseAttachmentResponse {
 pub struct CaseResourceConfigurationResponse {
     pub attachment_max_image_bytes: usize,
     pub attachment_max_per_case: u64,
-    pub case_place_types: Vec<String>,
 }
 
 impl From<elder_profiles::Model> for ElderProfileResponse {
@@ -2205,6 +2150,11 @@ impl ClueResponse {
         viewer_user_id: &str,
         attachment_ids: Vec<String>,
     ) -> Self {
+        let is_own_submission = attribution
+            .as_ref()
+            .and_then(|value| value.submitted_by_user_id.as_deref())
+            .or(model.created_by_user_id.as_deref())
+            == Some(viewer_user_id);
         Self {
             id: model.id,
             case_id: model.case_id,
@@ -2236,9 +2186,7 @@ impl ClueResponse {
             reviewed_at: attribution
                 .as_ref()
                 .and_then(|attribution| attribution.reviewed_at.clone()),
-            is_own_submission: attribution
-                .and_then(|attribution| attribution.submitted_by_user_id)
-                .is_some_and(|user_id| user_id == viewer_user_id),
+            is_own_submission,
         }
     }
 }
@@ -2311,7 +2259,6 @@ impl CaseDetail {
         case_model: cases::Model,
         elder_profile: ElderProfileResponse,
         clues: Vec<ClueResponse>,
-        places: Vec<CasePlaceResponse>,
         attachments: Vec<CaseAttachmentResponse>,
         access_role: CaseRole,
         family_contact_emails: Vec<String>,
@@ -2324,7 +2271,6 @@ impl CaseDetail {
             family_contact_emails,
             elder_profile,
             clues,
-            places,
             attachments,
             created_at: case_model.created_at,
             updated_at: case_model.updated_at,

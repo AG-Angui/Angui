@@ -73,14 +73,6 @@ impl TestContext {
             )),
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
-            case_place_types: vec![
-                "frequent".to_owned(),
-                "key_location".to_owned(),
-                "last_seen_context".to_owned(),
-                "medical".to_owned(),
-                "shelter".to_owned(),
-                "other".to_owned(),
-            ],
             poi_selection_token_secret: "0123456789abcdef0123456789abcdef".to_owned(),
             amap_service: AmapService::disabled(),
             ai_gateway: AiGateway::from_configurations(Vec::new())

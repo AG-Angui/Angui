@@ -80,23 +80,6 @@ const detail: CaseDetail = {
       is_own_submission: false,
     },
   ],
-  places: [
-    {
-      id: "place-family",
-      case_id: "case-volunteer",
-      name: "Family-approved meeting point",
-      place_type: "key_location",
-      address: "Family-approved location text",
-      longitude: null,
-      latitude: null,
-      source: "family",
-      visibility: "confirmed",
-      review_status: "confirmed",
-      created_at: "2026-08-14T08:00:00Z",
-      updated_at: "2026-08-14T09:00:00Z",
-      is_own_submission: false,
-    },
-  ],
   attachments: [],
   created_at: "2026-08-14T08:00:00Z",
   updated_at: "2026-08-14T09:00:00Z",
@@ -117,7 +100,7 @@ const summary: CaseSummary = {
 };
 
 describe("VolunteerWorkspacePage", () => {
-  it("shows published summary history, clue locations, and approved family places", async () => {
+  it("shows published summary history and confirmed clue locations", async () => {
     vi.clearAllMocks();
     mocked.listCases.mockResolvedValue([
       {
@@ -162,8 +145,6 @@ describe("VolunteerWorkspacePage", () => {
     expect(screen.getByText("Published v1 summary")).toBeVisible();
     expect(screen.getByText("Confirmed clue content")).toBeVisible();
     expect(screen.getByText(/Confirmed clue location/)).toBeVisible();
-    expect(screen.getByText("Family-approved meeting point")).toBeVisible();
-    expect(screen.getByText("Family-approved location text")).toBeVisible();
   });
 
   it("keeps a loaded case and its collaboration space available when another case cannot load", async () => {

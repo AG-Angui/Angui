@@ -37,6 +37,15 @@ async fn update_elder_profile_supports_null_to_value_updates() {
     assert_eq!(create_response.status(), StatusCode::CREATED);
     let create_body: serde_json::Value = test::read_body_json(create_response).await;
     let case_id = create_body["id"].as_str().expect("case id");
+    assert!(
+        create_body["clues"]
+            .as_array()
+            .expect("initial clues")
+            .iter()
+            .any(|clue| {
+                clue["location_text"] == "测试公园北门" && clue["status"] == "pending_review"
+            })
+    );
 
     // Add commander as member so they can access the case
     context
@@ -211,4 +220,30 @@ async fn update_elder_profile_supports_extended_field_null_updates() {
     assert!(!transportation.is_null());
     assert_eq!(transportation["summary"], "不会使用公共交通");
     assert_eq!(transportation["confidence"], "medium");
+
+    let location_update = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/cases/{case_id}/elder-profile"))
+            .insert_header((
+                actix_web::http::header::AUTHORIZATION,
+                format!("Bearer {commander_token}"),
+            ))
+            .set_json(json!({"last_seen_location": "测试新位置"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(location_update.status(), StatusCode::OK);
+    let updated: serde_json::Value = test::read_body_json(location_update).await;
+    assert!(
+        updated["clues"]
+            .as_array()
+            .expect("location clues")
+            .iter()
+            .any(|clue| {
+                clue["location_text"] == "测试新位置"
+                    && clue["source"] == "commander"
+                    && clue["status"] == "pending_review"
+            })
+    );
 }

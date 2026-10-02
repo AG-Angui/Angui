@@ -102,7 +102,7 @@ async fn get_case_summary_classifies_review_states_and_crops_each_role() {
     );
     assert_eq!(
         commander["pending_verification"].as_array().map(Vec::len),
-        Some(2)
+        Some(3)
     );
     assert!(
         commander["pending_verification"]
@@ -132,10 +132,18 @@ async fn get_case_summary_classifies_review_states_and_crops_each_role() {
         family["last_confirmed_information"]["clue_id"],
         latest_confirmed_id
     );
-    assert_eq!(family["pending_verification"][0]["clue_id"], own_pending_id);
-    assert_ne!(
-        family["pending_verification"][0]["clue_id"],
-        internal_pending_id
+    let family_pending = family["pending_verification"]
+        .as_array()
+        .expect("family pending clues");
+    assert!(
+        family_pending
+            .iter()
+            .any(|item| item["clue_id"] == own_pending_id)
+    );
+    assert!(
+        family_pending
+            .iter()
+            .all(|item| item["clue_id"] != internal_pending_id)
     );
     assert_eq!(family["excluded_directions"], json!([]));
     assert_eq!(family["current_focus"], json!([]));
@@ -206,13 +214,17 @@ async fn get_case_summary_returns_empty_deterministic_sections_without_ai() {
     assert!(body["generated_at"].as_str().is_some());
     for section in [
         "confirmed_clues",
-        "pending_verification",
         "excluded_directions",
         "current_focus",
         "task_status",
     ] {
         assert_eq!(body[section], json!([]));
     }
+    assert_eq!(
+        body["pending_verification"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(body["pending_verification"][0]["status"], "pending_review");
     assert!(body["last_confirmed_information"].is_null());
     assert!(
         !body["safety_reminders"]
