@@ -68,6 +68,9 @@ impl TestContext {
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
             attachment_storage_directory: std::env::temp_dir().join("angui-api-test-attachments"),
+            audio_storage: std::sync::Arc::new(angui::audio_storage::LocalAudioStorage::new(
+                std::env::temp_dir().join("angui-api-test-audio"),
+            )),
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
             case_place_types: vec![
@@ -82,6 +85,16 @@ impl TestContext {
             amap_service: AmapService::disabled(),
             ai_gateway: AiGateway::from_configurations(Vec::new())
                 .expect("empty AI provider configuration should be valid"),
+            livekit_url: None,
+            livekit_api_key: None,
+            livekit_api_secret: None,
+            livekit_admin_url: None,
+            turn_url: None,
+            turn_secret: None,
+            voice_floors: Default::default(),
+            voice_floor_gate: Default::default(),
+            ws_tickets: Default::default(),
+            voice_sessions: Default::default(),
             login_limiter: LoginRateLimiter::default(),
             message_delivery: angui::message_delivery::MessageDelivery::disabled(),
         }

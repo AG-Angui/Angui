@@ -33,8 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          # Deployment tooling is always loaded from the trusted default branch.
-          ref: ${{ github.event.repository.default_branch }}
+          # Match Compose and deployment scripts to the CI artifacts being deployed.
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Download backend artifact
@@ -122,6 +122,8 @@ jobs:
           PREVIEW_HOST: ${{ steps.preview.outputs.host }}
           PREVIEW_ORIGIN: ${{ steps.preview.outputs.origin }}
           PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
+          PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'https' }}
+          PREVIEW_PUBLIC_IP: ${{ vars.PREVIEW_PUBLIC_IP }}
           PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
           PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
@@ -129,6 +131,7 @@ jobs:
           AMAP_WEBSERVICE_KEY: ${{ secrets.AMAP_WEBSERVICE_KEY }}
           AMAP_JSAPI_SECURITY_CODE: ${{ secrets.AMAP_JSAPI_SECURITY_CODE }}
           ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: ${{ vars.ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS || '24' }}
+          ANGUI_AUDIO_STORAGE_DIRECTORY: ${{ vars.ANGUI_AUDIO_STORAGE_DIRECTORY || '/app/data/audio' }}
           ANGUI_AI_PROVIDERS_JSON: ${{ vars.ANGUI_AI_PROVIDERS_JSON }}
           ANGUI_PREVIEW_AI_ENDPOINT: ${{ secrets.ANGUI_PREVIEW_AI_ENDPOINT }}
           ANGUI_PREVIEW_AI_KEY: ${{ secrets.ANGUI_PREVIEW_AI_KEY }}

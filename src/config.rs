@@ -28,6 +28,8 @@ pub struct Settings {
     pub session_ttl_hours: i64,
     pub intake_answer_hard_max: usize,
     pub attachment_storage_directory: PathBuf,
+    pub audio_storage_directory: PathBuf,
+    pub audio_retention_days: u64,
     pub attachment_max_image_bytes: usize,
     pub attachment_max_per_case: u64,
     pub case_place_types: Vec<String>,
@@ -36,6 +38,14 @@ pub struct Settings {
     pub amap_webservice_base_url: String,
     pub amap_timeout_ms: u64,
     pub ai_provider_configurations: Vec<ProviderConfig>,
+    pub asr_url: Option<String>,
+    pub asr_key: Option<String>,
+    pub livekit_url: Option<String>,
+    pub livekit_api_key: Option<String>,
+    pub livekit_api_secret: Option<String>,
+    pub livekit_admin_url: Option<String>,
+    pub turn_url: Option<String>,
+    pub turn_secret: Option<String>,
 }
 
 impl Settings {
@@ -92,6 +102,24 @@ impl Settings {
                     .to_owned(),
             );
         }
+        let audio_storage_directory = PathBuf::from(
+            value("ANGUI_AUDIO_STORAGE_DIRECTORY")?.unwrap_or_else(|| "data/audio".to_owned()),
+        );
+        if audio_storage_directory.as_os_str().is_empty()
+            || audio_storage_directory
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(
+                "ANGUI_AUDIO_STORAGE_DIRECTORY must be a non-empty path without '..'".to_owned(),
+            );
+        }
+        let audio_retention_days = parse_bounded_u64(
+            value("ANGUI_AUDIO_RETENTION_DAYS")?.unwrap_or_else(|| "30".to_owned()),
+            "ANGUI_AUDIO_RETENTION_DAYS",
+            1,
+            365,
+        )?;
         let attachment_max_image_bytes = parse_bounded_usize(
             value("ANGUI_ATTACHMENT_MAX_IMAGE_BYTES")?
                 .unwrap_or_else(|| (5 * 1024 * 1024).to_string()),
@@ -134,6 +162,51 @@ impl Settings {
         let ai_provider_configurations = parse_ai_provider_configurations(
             value("ANGUI_AI_PROVIDERS_JSON")?.unwrap_or_else(|| "[]".to_owned()),
         )?;
+        let asr_url = value("ANGUI_ASR_URL")?.filter(|v| !v.trim().is_empty());
+        if asr_url
+            .as_ref()
+            .is_some_and(|v| !v.starts_with("http://") && !v.starts_with("https://"))
+        {
+            return Err("ANGUI_ASR_URL must use http or https".to_owned());
+        }
+        let asr_key = value("ANGUI_ASR_KEY")?.filter(|v| !v.trim().is_empty());
+        let livekit_url = value("ANGUI_LIVEKIT_URL")?.filter(|v| !v.trim().is_empty());
+        if livekit_url
+            .as_ref()
+            .is_some_and(|v| !v.starts_with("ws://") && !v.starts_with("wss://"))
+        {
+            return Err("ANGUI_LIVEKIT_URL must use ws or wss".to_owned());
+        }
+        let livekit_api_key = value("ANGUI_LIVEKIT_API_KEY")?.filter(|v| !v.trim().is_empty());
+        let livekit_api_secret =
+            value("ANGUI_LIVEKIT_API_SECRET")?.filter(|v| !v.trim().is_empty());
+        let livekit_admin_url = value("ANGUI_LIVEKIT_ADMIN_URL")?.filter(|v| !v.trim().is_empty());
+        let turn_url = value("ANGUI_TURN_URL")?.filter(|v| !v.trim().is_empty());
+        let turn_secret = value("ANGUI_TURN_SECRET")?.filter(|v| !v.trim().is_empty());
+        if [
+            livekit_url.is_some(),
+            livekit_api_key.is_some(),
+            livekit_api_secret.is_some(),
+            livekit_admin_url.is_some(),
+        ]
+        .iter()
+        .any(|v| *v)
+            && !(livekit_url.is_some()
+                && livekit_api_key.is_some()
+                && livekit_admin_url.is_some()
+                && livekit_api_secret.as_ref().is_some_and(|v| v.len() >= 32))
+        {
+            return Err("LiveKit URL, admin URL, API key and secret (at least 32 characters) must all be set".to_owned());
+        }
+        if turn_url.is_some() != turn_secret.is_some() {
+            return Err("ANGUI_TURN_URL and ANGUI_TURN_SECRET must be set together".to_owned());
+        }
+        if turn_url.as_ref().is_some_and(|v| {
+            !v.split(',')
+                .all(|url| url.starts_with("turn:") || url.starts_with("turns:"))
+        }) {
+            return Err("ANGUI_TURN_URL must contain turn: or turns: URLs".to_owned());
+        }
 
         Ok(Self {
             host,
@@ -143,6 +216,8 @@ impl Settings {
             session_ttl_hours,
             intake_answer_hard_max,
             attachment_storage_directory,
+            audio_storage_directory,
+            audio_retention_days,
             attachment_max_image_bytes,
             attachment_max_per_case,
             case_place_types,
@@ -151,6 +226,14 @@ impl Settings {
             amap_webservice_base_url,
             amap_timeout_ms,
             ai_provider_configurations,
+            asr_url,
+            asr_key,
+            livekit_url,
+            livekit_api_key,
+            livekit_api_secret,
+            livekit_admin_url,
+            turn_url,
+            turn_secret,
         })
     }
 
@@ -486,6 +569,8 @@ mod tests {
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
             attachment_storage_directory: PathBuf::from("data/attachments"),
+            audio_storage_directory: PathBuf::from("data/audio"),
+            audio_retention_days: 30,
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
             case_place_types: vec!["frequent".to_owned()],
@@ -494,6 +579,14 @@ mod tests {
             amap_webservice_base_url: "https://restapi.amap.com".to_owned(),
             amap_timeout_ms: 2_500,
             ai_provider_configurations: Vec::new(),
+            asr_url: None,
+            asr_key: None,
+            livekit_url: None,
+            livekit_api_key: None,
+            livekit_api_secret: None,
+            livekit_admin_url: None,
+            turn_url: None,
+            turn_secret: None,
         };
 
         assert_eq!(settings.address(), ("127.0.0.1".to_owned(), 8080));

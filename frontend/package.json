@@ -16,12 +16,13 @@
   },
   "resolutions": {
     "postcss": "^8.5.23",
-    "undici": "^7.29.0"
+    "undici": "^7.29.1"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
     "@heroui/react": "^3.2.2",
     "@tailwindcss/vite": "^4.3.2",
+    "livekit-client": "^2.15.4",
     "lucide-react": "^1.24.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

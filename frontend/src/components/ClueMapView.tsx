@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '@heroui/react';
-import { RotateCcw } from 'lucide-react';
-import { useAMap } from '../hooks/useAMap';
-import { MapTimelineCard } from './MapTimelineCard';
-import type { AMap as AMapType } from '../types/amap';
-import { LoadingState, ErrorState, EmptyState } from './ContentState';
-import { getCaseMapView, type CaseMapItem } from '../api/cases';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@heroui/react";
+import { RotateCcw } from "lucide-react";
+import { useAMap } from "../hooks/useAMap";
+import { MapTimelineCard } from "./MapTimelineCard";
+import type { AMap as AMapType } from "../types/amap";
+import { LoadingState, ErrorState, EmptyState } from "./ContentState";
+import {
+  getCaseMapView,
+  type CaseMapArea,
+  type CaseMapItem,
+} from "../api/cases";
 
 export interface ClueMapViewProps {
   caseId: string;
@@ -15,19 +19,24 @@ export interface ClueMapViewProps {
 
 // 类型对应的标记颜色
 const markerColors: Record<string, string> = {
-  clue: '#d84343',
-  location_clue: '#d84343',
-  task: '#2e8b57',
-  place: '#6a43cf',
-  last_seen: '#ef8f26',
+  clue: "#d84343",
+  location_clue: "#d84343",
+  task: "#2e8b57",
+  place: "#6a43cf",
+  last_seen: "#ef8f26",
 };
 
 /**
  * 线索地图视图组件
  * 使用高德地图展示线索、任务和地点，支持卡片与地图标记的交互同步
  */
-export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps) {
+export function ClueMapView({
+  caseId,
+  token,
+  className = "",
+}: ClueMapViewProps) {
   const [items, setItems] = useState<CaseMapItem[]>([]);
+  const [areas, setAreas] = useState<CaseMapArea[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState<Error | null>(null);
 
@@ -45,6 +54,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
     getCaseMapView(token, caseId)
       .then((response) => {
         setItems(response.items as CaseMapItem[]);
+        setAreas(response.areas ?? []);
       })
       .catch((err) => {
         setDataError(err);
@@ -57,7 +67,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
   const { map, AMap, loading, error } = useAMap({
     container: mapContainer,
     zoom: 12,
-    viewMode: '3D',
+    viewMode: "3D",
   });
 
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
@@ -82,11 +92,11 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
     (type: string, index: number) => {
       if (!AMap) return undefined;
 
-      const color = markerColors[type] || '#66717f';
-      const canvas = document.createElement('canvas');
+      const color = markerColors[type] || "#66717f";
+      const canvas = document.createElement("canvas");
       canvas.width = 40;
       canvas.height = 50;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext("2d");
       if (!ctx) return undefined;
 
       // 绘制水滴形状标记
@@ -102,10 +112,10 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
       ctx.fill();
 
       // 绘制编号文字
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 14px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
       ctx.fillText(String(index + 1), 20, 16);
 
       return new AMap.Icon({
@@ -114,7 +124,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
         imageSize: new AMap.Size(40, 50),
       });
     },
-    [AMap]
+    [AMap],
   );
 
   // 初始化地图标记
@@ -151,21 +161,21 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
       });
 
       // 点击标记显示信息窗体
-      marker.on('click', () => {
+      marker.on("click", () => {
         const content = `
           <div style="padding: 12px; min-width: 200px;">
             <h3 style="margin: 0 0 8px; font-size: 15px; font-weight: bold;">
-              ${item.display_name || '未命名'}
+              ${item.display_name || "未命名"}
             </h3>
             <p style="margin: 4px 0; font-size: 13px; color: #666;">
-              ${item.location_text || ''}
+              ${item.location_text || ""}
             </p>
             ${
               item.occurred_at
                 ? `<p style="margin: 4px 0; font-size: 12px; color: #999;">
-                时间: ${new Date(item.occurred_at).toLocaleString('zh-CN')}
+                时间: ${new Date(item.occurred_at).toLocaleString("zh-CN")}
               </p>`
-                : ''
+                : ""
             }
           </div>
         `;
@@ -202,17 +212,17 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
           const content = `
             <div style="padding: 12px; min-width: 200px;">
               <h3 style="margin: 0 0 8px; font-size: 15px; font-weight: bold;">
-                ${item.display_name || '未命名'}
+                ${item.display_name || "未命名"}
               </h3>
               <p style="margin: 4px 0; font-size: 13px; color: #666;">
-                ${item.location_text || ''}
+                ${item.location_text || ""}
               </p>
               ${
                 item.occurred_at
                   ? `<p style="margin: 4px 0; font-size: 12px; color: #999;">
-                  时间: ${new Date(item.occurred_at).toLocaleString('zh-CN')}
+                  时间: ${new Date(item.occurred_at).toLocaleString("zh-CN")}
                 </p>`
-                  : ''
+                  : ""
               }
             </div>
           `;
@@ -222,7 +232,7 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
         }, 300);
       }
     },
-    [map]
+    [map],
   );
 
   // 重置视图：显示所有标记
@@ -233,21 +243,66 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
     infoWindowRef.current?.close();
   }, [map, itemsWithCoords.length]);
 
-
   return (
-    <div className={`grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-full ${className}`}>
+    <div
+      className={`grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-full ${className}`}
+    >
       {/* 侧边栏：时间线卡片列表 */}
       <aside className="flex flex-col gap-4 overflow-hidden">
         <div className="flex-1 overflow-y-auto space-y-2 pr-2">
-          {dataLoading ? <LoadingState label="正在加载地图数据" /> : dataError ? <ErrorState message="地图数据加载失败" onRetry={() => window.location.reload()} /> : timelineItems.length === 0 ? <EmptyState title="暂无地图数据" /> : timelineItems.map((item, index) => (
-            <MapTimelineCard
-              key={item.id}
-              item={item}
-              index={index}
-              isActive={activeItemId === item.id}
-              onClick={() => handleCardClick(item)}
+          {dataLoading ? (
+            <LoadingState label="正在加载地图数据" />
+          ) : dataError ? (
+            <ErrorState
+              message="地图数据加载失败"
+              onRetry={() => window.location.reload()}
             />
-          ))}
+          ) : timelineItems.length === 0 ? (
+            <EmptyState title="暂无地图数据" />
+          ) : (
+            timelineItems.map((item, index) => (
+              <MapTimelineCard
+                key={item.id}
+                item={item}
+                index={index}
+                isActive={activeItemId === item.id}
+                onClick={() => handleCardClick(item)}
+              />
+            ))
+          )}
+          {areas.length > 0 && (
+            <section
+              className="border-t border-slate-200 pt-3"
+              aria-label="案件区域图层"
+            >
+              <h3 className="mb-2 text-xs font-semibold text-slate-700">
+                区域图层
+              </h3>
+              {areas.map((area) => (
+                <div
+                  className="mb-2 border border-slate-200 bg-white p-2 text-xs"
+                  key={area.id}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <strong>{area.title}</strong>
+                    <span className="text-slate-500">
+                      {area.status === "approved" ? "已审核" : "待审核"}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-slate-500">
+                    {area.area_type === "search"
+                      ? "搜索区"
+                      : area.area_type === "searched"
+                        ? "已搜区"
+                        : area.area_type === "risk"
+                          ? "风险区"
+                          : "集合区"}{" "}
+                    · {area.vertices.length} 个顶点
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
         </div>
 
         <Button
@@ -268,13 +323,27 @@ export function ClueMapView({ caseId, token, className = '' }: ClueMapViewProps)
           data-testid="clue-map-container"
           className="h-full min-h-[500px] w-full"
         />
-        {!loading && !error && timelineItems.length > 0 && itemsWithCoords.length === 0 && (
-          <div className="pointer-events-none absolute inset-x-4 top-4 rounded-md bg-white/95 p-3 text-center text-sm text-slate-600 shadow-sm">
-            当前线索只有文字地点，暂无可安全标注的坐标。后续请通过地点选取器确认坐标。
+        {!loading &&
+          !error &&
+          timelineItems.length > 0 &&
+          itemsWithCoords.length === 0 && (
+            <div className="pointer-events-none absolute inset-x-4 top-4 rounded-md bg-white/95 p-3 text-center text-sm text-slate-600 shadow-sm">
+              当前线索只有文字地点，暂无可安全标注的坐标。后续请通过地点选取器确认坐标。
+            </div>
+          )}
+        {loading && !error && (
+          <div className="absolute inset-0 grid place-items-center bg-white/80">
+            <LoadingState label="正在加载地图" />
           </div>
         )}
-        {loading && !error && <div className="absolute inset-0 grid place-items-center bg-white/80"><LoadingState label="正在加载地图" /></div>}
-        {error && <div className="absolute inset-0 grid place-items-center bg-white/90 p-4"><ErrorState message="地图加载失败" onRetry={() => window.location.reload()} /></div>}
+        {error && (
+          <div className="absolute inset-0 grid place-items-center bg-white/90 p-4">
+            <ErrorState
+              message="地图加载失败"
+              onRetry={() => window.location.reload()}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

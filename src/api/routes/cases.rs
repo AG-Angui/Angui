@@ -38,6 +38,16 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/tasks", web::get().to(list_tasks))
             .route("/{case_id}/tasks", web::post().to(create_task))
             .route("/{case_id}/map-view", web::get().to(get_map_view))
+            .route("/{case_id}/map-areas", web::get().to(list_map_areas))
+            .route("/{case_id}/map-areas", web::post().to(create_map_area))
+            .route(
+                "/{case_id}/map-areas/{area_id}",
+                web::patch().to(update_map_area),
+            )
+            .route(
+                "/{case_id}/map-areas/{area_id}/review",
+                web::patch().to(review_map_area),
+            )
             .route("/{case_id}/summary", web::get().to(get_case_summary))
             .route(
                 "/{case_id}/public-progress",
@@ -99,6 +109,70 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/members", web::get().to(list_case_members))
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn list_map_areas(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(crate::services::case_map_area_service::list(&state.db, &auth, &case_id).await?))
+}
+
+async fn create_map_area(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+    request: web::Json<crate::models::CreateCaseMapAreaRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        crate::services::case_map_area_service::create(
+            &state.db,
+            &auth,
+            &case_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn update_map_area(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    path: web::Path<(String, String)>,
+    request: web::Json<crate::models::UpdateCaseMapAreaRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, area_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_map_area_service::update(
+            &state.db,
+            &auth,
+            &case_id,
+            &area_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn review_map_area(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    path: web::Path<(String, String)>,
+    request: web::Json<crate::models::ReviewCaseMapAreaRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, area_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_map_area_service::review(
+            &state.db,
+            &auth,
+            &case_id,
+            &area_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
 }
 
 async fn list_command_intake(
@@ -380,7 +454,8 @@ async fn get_map_view(
                     .or(Some(left.updated_at.as_str())),
             )
     });
-    Ok(HttpResponse::Ok().json(CaseMapViewResponse { items }))
+    let areas = crate::services::case_map_area_service::list(&state.db, &auth, &case_id).await?;
+    Ok(HttpResponse::Ok().json(CaseMapViewResponse { items, areas }))
 }
 
 async fn get_case_summary(

@@ -98,6 +98,12 @@ pub struct CreateSpaceMessageRequest {
     pub message_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgeSpaceMessageRequest {
+    pub status: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SpaceMessageResponse {
     pub id: String,
@@ -1656,6 +1662,75 @@ pub struct TaskListResponse {
 #[derive(Debug, Serialize)]
 pub struct CaseMapViewResponse {
     pub items: Vec<CaseMapItem>,
+    #[serde(default)]
+    pub areas: Vec<CaseMapAreaResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MapAreaVertexResponse {
+    pub vertex_order: i32,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseMapAreaResponse {
+    pub id: String,
+    pub case_id: String,
+    pub area_type: String,
+    pub status: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub version: i32,
+    pub vertices: Vec<MapAreaVertexResponse>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapAreaVertexInput {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCaseMapAreaRequest {
+    pub area_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub vertices: Vec<MapAreaVertexInput>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateCaseMapAreaRequest {
+    pub expected_version: i32,
+    pub area_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub vertices: Vec<MapAreaVertexInput>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewCaseMapAreaRequest {
+    pub expected_version: i32,
+    pub action: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]

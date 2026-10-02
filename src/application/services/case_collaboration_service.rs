@@ -16,6 +16,7 @@ use crate::{
         archive_drafts, archive_review_materials, audit_events, case_source_records, cases,
         clue_drafts, clues, collaboration_spaces, elder_profiles, knowledge_bases,
         knowledge_content_review_events, knowledge_items, space_messages, summary_drafts, tasks,
+        voice_clue_candidates,
     },
     error::ApiError,
     models::{
@@ -2312,6 +2313,30 @@ pub async fn review_clue_draft(
             "clue draft has already been reviewed".to_owned(),
         ));
     }
+    if action == "accept"
+        && voice_clue_candidates::Entity::find()
+            .filter(voice_clue_candidates::Column::ClueDraftId.eq(draft_id))
+            .one(&transaction)
+            .await?
+            .is_some_and(|source| source.returned_for_revision)
+    {
+        return Err(ApiError::Conflict(
+            "the submitter must resubmit the returned draft before approval".to_owned(),
+        ));
+    }
+    let voice_source = voice_clue_candidates::Entity::find()
+        .filter(voice_clue_candidates::Column::ClueDraftId.eq(draft_id))
+        .one(&transaction)
+        .await?;
+    if action == "accept"
+        && voice_source
+            .as_ref()
+            .is_some_and(|source| source.discoverer_user_id.is_none())
+    {
+        return Err(ApiError::Conflict(
+            "the submitter must confirm the discoverer before approval".to_owned(),
+        ));
+    }
     let candidate = apply_field_decisions(
         normalized_candidate(request.candidate, &existing.content),
         &request.field_decisions,
@@ -2447,6 +2472,17 @@ pub async fn review_clue_draft(
         .await?;
         updated.promoted_clue_id = Some(promoted.id);
     }
+    if let Some(source) = voice_source {
+        let mut active = source.into_active_model();
+        active.status = Set(if action == "accept" {
+            "confirmed".to_owned()
+        } else {
+            "rejected".to_owned()
+        });
+        active.promoted_clue_id = Set(updated.promoted_clue_id.clone());
+        active.updated_at = Set(now());
+        active.update(&transaction).await?;
+    }
     transaction.commit().await?;
     clue_draft_response(updated)
 }
@@ -2518,7 +2554,10 @@ fn fallback_candidate(text: &str) -> ClueDraftCandidate {
     }
 }
 
-fn normalized_candidate(mut candidate: ClueDraftCandidate, text: &str) -> ClueDraftCandidate {
+pub(crate) fn normalized_candidate(
+    mut candidate: ClueDraftCandidate,
+    text: &str,
+) -> ClueDraftCandidate {
     candidate.content_summary = candidate
         .content_summary
         .and_then(|value| optional_excerpt(value, 1_000));

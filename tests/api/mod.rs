@@ -32,3 +32,4 @@ mod learning_api;
 mod openapi_intake_contract;
 mod tasks_api;
 mod user_profile;
+mod voice_pipeline;

@@ -34,21 +34,34 @@ test("the intake confirmation workflow creates one browser-visible case only aft
     last_seen_at: "2026-07-25T09:00:00Z",
     last_seen_location: "Synthetic community gate",
   };
-  const session = (await apiPost(request, token, "/api/intake-sessions", {})) as {
+  const session = (await apiPost(
+    request,
+    token,
+    "/api/intake-sessions",
+    {},
+  )) as {
     id: string;
   };
   for (const [field, answer] of [
-    ["basic_information", "姓名：端到端测试老人；身高：168厘米；特征描述：戴蓝色帽子"],
+    [
+      "basic_information",
+      "姓名：端到端测试老人；身高：168厘米；特征描述：戴蓝色帽子",
+    ],
     ["last_seen", "Synthetic last seen location."],
     ["suspicious_motive", "No known suspicious motive."],
     ["police_report_status", "已报警"],
     ["family_phone", "13800138000"],
     ["health_status", "Synthetic health status supplied by the family."],
   ]) {
-    await apiPost(request, token, `/api/intake-sessions/${session.id}/answers`, {
-      field,
-      answer,
-    });
+    await apiPost(
+      request,
+      token,
+      `/api/intake-sessions/${session.id}/answers`,
+      {
+        field,
+        answer,
+      },
+    );
   }
   const photoResponse = await request.post(
     `/api/intake-sessions/${session.id}/photos`,

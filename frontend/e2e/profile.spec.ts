@@ -15,7 +15,9 @@ test("a profile change made in the browser persists on the server", async ({
   await page.goto("/profile");
   await page.getByLabel("显示名称").fill(displayName);
   await page.getByRole("button", { name: "保存资料" }).click();
-  await expect(page.getByText("个人资料已保存。", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("个人资料已保存。", { exact: true }),
+  ).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("显示名称")).toHaveValue(displayName);
 

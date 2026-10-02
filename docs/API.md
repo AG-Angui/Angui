@@ -2,11 +2,17 @@
 
 ### Collaboration-space voice reports
 
-`POST /api/collaboration-spaces/{space_id}/voice-reports` accepts exactly one private `file` part with one of `audio/mpeg`, `audio/ogg`, `audio/wav`, or `audio/webm`, bounded at 10 MiB. Only an active space member may upload. The object key is generated server-side under private storage; raw audio has no public URL or download route.
+`POST /api/collaboration-spaces/{space_id}/voice-reports` accepts exactly one private `file` part with one of `audio/mpeg`, `audio/ogg`, `audio/wav`, or `audio/webm`, bounded at 10 MiB. Only an active space member may upload. The object key is generated server-side under private storage. Authorized owners and commanders can download audio through `GET /voice-reports/{id}/audio`; there is no public URL.
 
-`GET /api/collaboration-spaces/{space_id}/voice-reports` returns at most 100 reports. A volunteer receives only their own lifecycle metadata. A commander receives reports for the space and may receive a persisted transcript when a future approved ASR worker has produced one. Family users and users outside the space get no collaboration-space data.
+`GET /api/collaboration-spaces/{space_id}/voice-reports` returns at most 100 reports. A volunteer receives only their own lifecycle metadata. A commander receives reports for the space and any persisted transcript. Family users and users outside the space get no collaboration-space data.
 
-This deployment deliberately has no configured ASR adapter. A successfully stored report is therefore marked `failed` with `ASR provider is not configured`, rather than manufacturing a transcript, a clue, a task action, or public progress. Audio bodies, transcript text, and original filenames are excluded from audit metadata and space-event payloads.
+The worker calls the configured private ASR service and AI Gateway asynchronously. If either is unavailable it marks the candidate `failed` with a retryable reason; it never invents a transcript or confirms a clue. Audio bodies, transcript text, and original filenames are excluded from audit metadata and space-event payloads.
+
+`POST /voice-room/ticket` returns a five-minute LiveKit room token and ten-minute signed TURN credentials for an active member. `POST /voice-room/floor` with `{"active":true|false}` grants or releases server-controlled microphone publish permission. `POST /events/ticket` issues a one-time, 30-second WebSocket ticket; `GET /events/ws?ticket=...` uses it instead of the API session token.
+
+`POST /recordings?started_at=...&ended_at=...` accepts a PCM WAV segment and queues ASR/AI extraction; `GET /recordings/{id}/audio` is restricted to the owner and commanders. `GET /voice-candidates` lists permitted processing metadata, `POST /voice-candidates/{id}/retry` retries a failed candidate up to five times, and `POST /voice-candidates/{id}/discoverer` with `{"discoverer_user_id":"..."}` lets the submitter confirm an active space member as discoverer. Voice drafts cannot be accepted until that confirmation.
+
+For a pending voice draft, the commander can `POST /voice-candidates/{id}/return` with `{"reason":"..."}`. The submitter then receives `returned_for_revision`, `review_note`, and `editable_candidate` in their candidate list and can `POST /voice-candidates/{id}/resubmit` with the edited `ClueDraftCandidate` JSON. A returned draft cannot be accepted or merged until resubmitted. The commander can `POST /voice-candidates/{id}/merge` with `{"target_clue_id":"...","reason":"..."}` after discoverer confirmation; this links the draft to an existing clue without changing that clue's facts. Ordinary modification, approval, and rejection use the existing case clue-draft review endpoint. All actions require active space access, and the original audio and transcript remain linked.
 
 `POST /api/collaboration-spaces/{space_id}/archive` archives an active collaboration space without deleting its operational history. The case commander or a global administrator may perform this action. Archived spaces reject new members and operational writes while authorized commanders retain read access for review.
 
@@ -26,7 +32,9 @@ This deployment deliberately has no configured ASR adapter. A successfully store
 
 `POST /api/collaboration-spaces/{space_id}/locations` 只允许已经加入且持有未撤回位置同意的志愿者调用。请求必须携带可重试的 `operation_id`；同一操作不会产生重复样本或事件。位置历史只对指挥员、或位置所属的志愿者本人开放，且在运营/合规明确配置 `ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS` 前服务端会拒绝任何位置落库。HTTP 快照与 `GET /events?after_version=` 是实时网关不可用时的恢复协议，Redis 不能作为业务事实源。
 
-`GET/POST /api/collaboration-spaces/{space_id}/messages` 提供最多 100 条受控文字消息；`message_type: broadcast` 仅允许指挥员。消息内容不会写进审计元数据，发送仍会生成空间事件和 outbox 记录。语音报告通过独立的受控上传接口保存到私有存储，当前没有获批准的 ASR 供应商时会显式标记失败；绝不会伪造转写、自动确认线索、自动派发任务或公开进展。
+`GET/POST /api/collaboration-spaces/{space_id}/messages` 提供最多 100 条受控文字消息；`message_type: broadcast` 仅允许指挥员。消息内容不会写进审计元数据，发送仍会生成空间事件和 outbox 记录。语音报告通过独立的受控上传接口保存到私有存储；ASR 或 AI 供应商不可用时会显式标记失败，绝不会伪造转写、自动确认线索、自动派发任务或公开进展。
+
+成员收到消息后调用 `POST /api/collaboration-spaces/{space_id}/messages/{message_id}/ack`，提交 `{"status":"delivered"}` 或 `{"status":"acknowledged"}`。确认写入空间事件流；指挥员可通过事件补偿接口追踪广播的成员送达状态。
 
 | 方法 | 路径 | 成功状态 | 用途 |
 | --- | --- | --- | --- |

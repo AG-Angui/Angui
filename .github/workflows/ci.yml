@@ -91,6 +91,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: . -> target
+          # Preserve Cargo and rustup binaries on persistent self-hosted runners.
+          cache-bin: "false"
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -168,6 +170,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: . -> target
+          cache-bin: "false"
       - name: Exercise PostgreSQL migrations
         env:
           DATABASE_URL: postgres://angui:angui@127.0.0.1:5432/angui
@@ -259,6 +262,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: . -> target
+          cache-bin: "false"
           # The E2E server builds executable build scripts immediately before
           # Playwright starts. A partial or runner-incompatible `target`
           # restore makes Cargo reuse a missing build-script binary (for

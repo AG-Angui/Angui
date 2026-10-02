@@ -1,0 +1,80 @@
+services:
+  api:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      ANGUI_HOST: 0.0.0.0
+      ANGUI_PORT: 8080
+      ANGUI_FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:?FRONTEND_ORIGIN is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ANGUI_AUDIO_STORAGE_DIRECTORY: /var/lib/angui/audio
+      ANGUI_AUDIO_RETENTION_DAYS: ${ANGUI_AUDIO_RETENTION_DAYS:-30}
+      ANGUI_ASR_URL: http://asr:8000/transcribe
+      ANGUI_ASR_KEY: ${ANGUI_ASR_KEY:?ANGUI_ASR_KEY is required}
+      ANGUI_LIVEKIT_URL: ${LIVEKIT_PUBLIC_URL:?LIVEKIT_PUBLIC_URL is required}
+      ANGUI_LIVEKIT_ADMIN_URL: http://livekit:7880
+      ANGUI_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}
+      ANGUI_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
+      ANGUI_TURN_URL: "${TURN_PUBLIC_URL:?TURN_PUBLIC_URL is required},${TURN_TLS_PUBLIC_URL:?TURN_TLS_PUBLIC_URL is required}"
+      ANGUI_TURN_SECRET: ${TURN_SECRET:?TURN_SECRET is required}
+      ANGUI_AI_PROVIDERS_JSON: ${ANGUI_AI_PROVIDERS_JSON:?ANGUI_AI_PROVIDERS_JSON is required}
+      ANGUI_VOICE_AI_ENDPOINT: ${ANGUI_VOICE_AI_ENDPOINT:?ANGUI_VOICE_AI_ENDPOINT is required}
+      ANGUI_VOICE_AI_KEY: ${ANGUI_VOICE_AI_KEY:?ANGUI_VOICE_AI_KEY is required}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - audio-data:/var/lib/angui/audio
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  web:
+    image: ${WEB_IMAGE:?WEB_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
+
+  livekit:
+    image: livekit/livekit-server:v1.9.7
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "127.0.0.1:${LIVEKIT_HTTP_PORT:-7880}:7880/tcp"
+      - "${LIVEKIT_UDP_PORT:-7882}:7882/udp"
+      - "${LIVEKIT_TCP_PORT:-7881}:7881/tcp"
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    command: ["-n", "--fingerprint", "--use-auth-secret", "--static-auth-secret=${TURN_SECRET:?TURN_SECRET is required}", "--realm=${TURN_REALM:?TURN_REALM is required}", "--external-ip=${PUBLIC_IP:?PUBLIC_IP is required}", "--min-port=${TURN_RELAY_MIN:-49160}", "--max-port=${TURN_RELAY_MAX:-49200}", "--tls-listening-port=5349", "--cert=/etc/coturn/tls/fullchain.pem", "--pkey=/etc/coturn/tls/privkey.pem", "--no-cli", "--no-dtls"]
+    volumes:
+      - "${TURN_CERT_FILE:?TURN_CERT_FILE is required}:/etc/coturn/tls/fullchain.pem:ro"
+      - "${TURN_KEY_FILE:?TURN_KEY_FILE is required}:/etc/coturn/tls/privkey.pem:ro"
+    ports:
+      - "${TURN_PORT:-3478}:3478/udp"
+      - "${TURN_TLS_PORT:-5349}:5349/tcp"
+      - "${TURN_RELAY_MIN:-49160}-${TURN_RELAY_MAX:-49200}:${TURN_RELAY_MIN:-49160}-${TURN_RELAY_MAX:-49200}/udp"
+
+  asr:
+    build: ../asr
+    restart: unless-stopped
+    environment:
+      ASR_API_KEY: ${ANGUI_ASR_KEY:?ANGUI_ASR_KEY is required}
+      ASR_MODEL: ${ASR_MODEL:-medium}
+      ASR_DEVICE: ${ASR_DEVICE:-cpu}
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
+    volumes:
+      - asr-models:/models
+
+volumes:
+  audio-data:
+    name: ${AUDIO_VOLUME_NAME:-angui-audio}
+  asr-models:

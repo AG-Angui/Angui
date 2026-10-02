@@ -36,19 +36,25 @@ vi.mock("../api/learning", () => ({
     mocked.listLearningQuestions(...args),
   listLearningResources: (...args: unknown[]) =>
     mocked.listLearningResources(...args),
-  listLearningAnswers: (...args: unknown[]) => mocked.listLearningAnswers(...args),
-  listWrongLearningAnswers: (...args: unknown[]) => mocked.listWrongLearningAnswers(...args),
-  getLearningProgress: (...args: unknown[]) => mocked.getLearningProgress(...args),
+  listLearningAnswers: (...args: unknown[]) =>
+    mocked.listLearningAnswers(...args),
+  listWrongLearningAnswers: (...args: unknown[]) =>
+    mocked.listWrongLearningAnswers(...args),
+  getLearningProgress: (...args: unknown[]) =>
+    mocked.getLearningProgress(...args),
   listLearningCategories: (...args: unknown[]) =>
     mocked.listLearningCategories(...args),
   submitLearningCategoryProposal: (...args: unknown[]) =>
     mocked.submitLearningCategoryProposal(...args),
   submitLearningResourceDraft: (...args: unknown[]) =>
     mocked.submitLearningResourceDraft(...args),
-  submitLearningAnswer: (...args: unknown[]) => mocked.submitLearningAnswer(...args),
-  searchLearningKnowledge: (...args: unknown[]) => mocked.searchLearningKnowledge(...args),
+  submitLearningAnswer: (...args: unknown[]) =>
+    mocked.submitLearningAnswer(...args),
+  searchLearningKnowledge: (...args: unknown[]) =>
+    mocked.searchLearningKnowledge(...args),
   askKnowledge: (...args: unknown[]) => mocked.askKnowledge(...args),
-  downloadKnowledgeImage: (...args: unknown[]) => mocked.downloadKnowledgeImage(...args),
+  downloadKnowledgeImage: (...args: unknown[]) =>
+    mocked.downloadKnowledgeImage(...args),
 }));
 
 describe("LearningCenterPage", () => {
@@ -58,7 +64,13 @@ describe("LearningCenterPage", () => {
     mocked.listLearningResources.mockResolvedValue([]);
     mocked.listLearningAnswers.mockResolvedValue([]);
     mocked.listWrongLearningAnswers.mockResolvedValue([]);
-    mocked.getLearningProgress.mockResolvedValue({ answered_questions: 0, total_answers: 0, correct_answers: 0, accuracy: 0, latest_answered_at: null });
+    mocked.getLearningProgress.mockResolvedValue({
+      answered_questions: 0,
+      total_answers: 0,
+      correct_answers: 0,
+      accuracy: 0,
+      latest_answered_at: null,
+    });
     mocked.listLearningQuestions.mockResolvedValue([]);
     mocked.listLearningCategories.mockResolvedValue([]);
     mocked.submitLearningCategoryProposal.mockResolvedValue({
@@ -76,8 +88,15 @@ describe("LearningCenterPage", () => {
       source: { resource_id: "resource-1", title: "来源资料", version: 1 },
     });
     mocked.searchLearningKnowledge.mockResolvedValue({ results: [] });
-    mocked.askKnowledge.mockResolvedValue({ answer: "资料不足", certainty: "insufficient_sources", sources: [], human_review_notice: "请咨询负责人。" });
-    mocked.downloadKnowledgeImage.mockResolvedValue(new Blob(["image"], { type: "image/png" }));
+    mocked.askKnowledge.mockResolvedValue({
+      answer: "资料不足",
+      certainty: "insufficient_sources",
+      sources: [],
+      human_review_notice: "请咨询负责人。",
+    });
+    mocked.downloadKnowledgeImage.mockResolvedValue(
+      new Blob(["image"], { type: "image/png" }),
+    );
   });
 
   it("renders only the approved public prevention card supplied by the API", async () => {
@@ -159,8 +178,14 @@ describe("LearningCenterPage", () => {
       screen.getByText("生效时间：", { exact: false }),
     ).toBeInTheDocument();
 
-    expect(screen.getByRole("heading", { name: "知识检索与问答" })).toBeInTheDocument();
-    expect(screen.getByText("提交前不会显示答案或解析。完成作答后可查看解析与关联的已发布资料。")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "知识检索与问答" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "提交前不会显示答案或解析。完成作答后可查看解析与关联的已发布资料。",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("keeps published resources visible without a knowledge chat dependency", async () => {
@@ -191,22 +216,33 @@ describe("LearningCenterPage", () => {
       new ApiClientError(404, "not_found", "没有卡片"),
     );
     mocked.searchLearningKnowledge.mockResolvedValue({
-      results: [{
-        knowledge_item_id: "knowledge-1",
-        title: "带附图的知识卡",
-        summary: "图片应供有权限的学习者查看。",
-        content: "正文",
-        category: "基础",
-        keywords: ["附图"],
-        score: 1,
-        knowledge_base_id: "learning-materials",
-        version: 1,
-        source_name: "管理员",
-        source_url: null,
-        status: "published",
-        attachments: [],
-        images: [{ id: "image-1", storage_path: "private/image-1.png", mime_type: "image/png", width: 20, height: 10, metadata: {} }],
-      }],
+      results: [
+        {
+          knowledge_item_id: "knowledge-1",
+          title: "带附图的知识卡",
+          summary: "图片应供有权限的学习者查看。",
+          content: "正文",
+          category: "基础",
+          keywords: ["附图"],
+          score: 1,
+          knowledge_base_id: "learning-materials",
+          version: 1,
+          source_name: "管理员",
+          source_url: null,
+          status: "published",
+          attachments: [],
+          images: [
+            {
+              id: "image-1",
+              storage_path: "private/image-1.png",
+              mime_type: "image/png",
+              width: 20,
+              height: 10,
+              metadata: {},
+            },
+          ],
+        },
+      ],
     });
     const createObjectUrl = vi.fn(() => "blob:knowledge-image");
     Object.defineProperty(URL, "createObjectURL", {
@@ -220,13 +256,14 @@ describe("LearningCenterPage", () => {
 
     render(<LearningCenterPage />);
     await screen.findByRole("heading", { name: "知识检索与问答" });
-    fireEvent.change(screen.getByLabelText("搜索知识"), { target: { value: "附图" } });
+    fireEvent.change(screen.getByLabelText("搜索知识"), {
+      target: { value: "附图" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
 
-    expect(await screen.findByRole("img", { name: "带附图的知识卡 附图 1" })).toHaveAttribute(
-      "src",
-      "blob:knowledge-image",
-    );
+    expect(
+      await screen.findByRole("img", { name: "带附图的知识卡 附图 1" }),
+    ).toHaveAttribute("src", "blob:knowledge-image");
     expect(mocked.downloadKnowledgeImage).toHaveBeenCalledWith(
       "learner-session",
       "knowledge-1",
@@ -236,28 +273,60 @@ describe("LearningCenterPage", () => {
   });
 
   it("offers knowledge filters before the first query and supports filter-only search", async () => {
-    mocked.getPublicPreventionCard.mockRejectedValue(new ApiClientError(404, "not_found", "没有卡片"));
+    mocked.getPublicPreventionCard.mockRejectedValue(
+      new ApiClientError(404, "not_found", "没有卡片"),
+    );
     mocked.searchLearningKnowledge.mockResolvedValue({
-      results: [{
-        knowledge_item_id: "knowledge-filter", knowledge_base_id: "learning-materials",
-        title: "安全手册", summary: "摘要", content: "正文", category: "安全",
-        keywords: ["核实"], matched_fields: [], score: 0, version: 1,
-        source_name: "管理员", source_url: null, status: "published", attachments: [], images: [],
-      }],
+      results: [
+        {
+          knowledge_item_id: "knowledge-filter",
+          knowledge_base_id: "learning-materials",
+          title: "安全手册",
+          summary: "摘要",
+          content: "正文",
+          category: "安全",
+          keywords: ["核实"],
+          matched_fields: [],
+          score: 0,
+          version: 1,
+          source_name: "管理员",
+          source_url: null,
+          status: "published",
+          attachments: [],
+          images: [],
+        },
+      ],
     });
     render(<LearningCenterPage />);
     await screen.findByRole("heading", { name: "知识检索与问答" });
-    expect(await screen.findByRole("option", { name: "安全" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("option", { name: "安全" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "核实" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("知识库分类"), { target: { value: "安全" } });
+    fireEvent.change(screen.getByLabelText("知识库分类"), {
+      target: { value: "安全" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-    await waitFor(() => expect(mocked.searchLearningKnowledge).toHaveBeenLastCalledWith(
-      "learner-session", { query: "", category_id: "安全", tag: "" },
-    ));
-    fireEvent.change(screen.getByLabelText("搜索知识"), { target: { value: "核实" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "基于资料问答" })).not.toBeDisabled());
+    await waitFor(() =>
+      expect(mocked.searchLearningKnowledge).toHaveBeenLastCalledWith(
+        "learner-session",
+        { query: "", category_id: "安全", tag: "" },
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("搜索知识"), {
+      target: { value: "核实" },
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "基于资料问答" }),
+      ).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "基于资料问答" }));
-    expect(mocked.askKnowledge).toHaveBeenCalledWith("learner-session", "核实", { category: "安全" });
+    expect(mocked.askKnowledge).toHaveBeenCalledWith(
+      "learner-session",
+      "核实",
+      { category: "安全" },
+    );
   });
 
   it("labels a gateway degradation as source text instead of model output", async () => {
@@ -273,11 +342,21 @@ describe("LearningCenterPage", () => {
 
     render(<LearningCenterPage />);
     await screen.findByRole("heading", { name: "知识检索与问答" });
-    fireEvent.change(screen.getByLabelText("搜索知识"), { target: { value: "如何处理" } });
+    fireEvent.change(screen.getByLabelText("搜索知识"), {
+      target: { value: "如何处理" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "基于资料问答" }));
 
-    expect(await screen.findByText("当前未配置或无法连接可用的 AI Gateway；以下是命中资料原文拼接，不是模型生成回答。")).toBeInTheDocument();
-    expect(mocked.askKnowledge).toHaveBeenCalledWith("learner-session", "如何处理", {});
+    expect(
+      await screen.findByText(
+        "当前未配置或无法连接可用的 AI Gateway；以下是命中资料原文拼接，不是模型生成回答。",
+      ),
+    ).toBeInTheDocument();
+    expect(mocked.askKnowledge).toHaveBeenCalledWith(
+      "learner-session",
+      "如何处理",
+      {},
+    );
     expect(screen.getByText("请由负责人复核。")).toBeInTheDocument();
   });
 
@@ -294,10 +373,14 @@ describe("LearningCenterPage", () => {
 
     render(<LearningCenterPage />);
     await screen.findByRole("heading", { name: "知识检索与问答" });
-    fireEvent.change(screen.getByLabelText("搜索知识"), { target: { value: "如何处理" } });
+    fireEvent.change(screen.getByLabelText("搜索知识"), {
+      target: { value: "如何处理" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "基于资料问答" }));
 
-    expect(await screen.findByText("AI Gateway 已基于下列已发布资料生成回答。")).toBeInTheDocument();
+    expect(
+      await screen.findByText("AI Gateway 已基于下列已发布资料生成回答。"),
+    ).toBeInTheDocument();
   });
 
   it("keeps the answer and explanation hidden until a single-choice submission completes", async () => {
@@ -311,8 +394,16 @@ describe("LearningCenterPage", () => {
         question_type: "single_choice",
         difficulty: "basic",
         tags: ["基础"],
-        options: [{ id: "a", text: "选项甲" }, { id: "b", text: "选项乙" }],
-        definition: { options: [{ id: "a", text: "选项甲" }, { id: "b", text: "选项乙" }] },
+        options: [
+          { id: "a", text: "选项甲" },
+          { id: "b", text: "选项乙" },
+        ],
+        definition: {
+          options: [
+            { id: "a", text: "选项甲" },
+            { id: "b", text: "选项乙" },
+          ],
+        },
         source_resource_id: "resource-1",
         version: 1,
       },
@@ -320,7 +411,9 @@ describe("LearningCenterPage", () => {
 
     render(<LearningCenterPage />);
     expect(await screen.findByText("哪项符合已发布资料？")).toBeInTheDocument();
-    expect(screen.queryByText("解析只会在提交后出现。")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("解析只会在提交后出现。"),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "选项甲" }));
     await waitFor(() =>
@@ -330,7 +423,9 @@ describe("LearningCenterPage", () => {
         "a",
       ),
     );
-    expect(await screen.findByText("回答正确。", { exact: false })).toBeInTheDocument();
+    expect(
+      await screen.findByText("回答正确。", { exact: false }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/解析只会在提交后出现/)).toBeInTheDocument();
   });
 
@@ -422,7 +517,9 @@ describe("LearningCenterPage", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "提交草稿" }));
 
-    await waitFor(() => expect(mocked.submitLearningResourceDraft).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(mocked.submitLearningResourceDraft).toHaveBeenCalled(),
+    );
     const [, input] = mocked.submitLearningResourceDraft.mock.calls.at(-1)!;
     expect(input).toMatchObject({
       title: "新人安全提示",
@@ -461,7 +558,9 @@ describe("LearningCenterPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "提交草稿" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("草稿服务暂时不可用"),
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "草稿服务暂时不可用",
+      ),
     );
     expect(screen.getByRole("button", { name: "提交草稿" })).toBeEnabled();
   });
