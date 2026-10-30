@@ -8,6 +8,9 @@ on:
       - 'Cargo.lock'
       - 'migration/**'
       - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/actionlint.yaml'
+      - 'deploy/**'
   workflow_dispatch:
 
 permissions:
@@ -61,3 +64,6 @@ jobs:
         # this gate focuses on workflow syntax, expressions, and job wiring.
         run: |
           "$(go env GOPATH)/bin/actionlint" -color -shellcheck=
+
+      - name: Check preview deployment shell syntax
+        run: bash -n deploy/preview/deploy-local.sh
