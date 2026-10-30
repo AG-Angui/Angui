@@ -32,7 +32,7 @@ jobs:
           POSTGRES_USER: angui
           POSTGRES_PASSWORD: angui
         ports:
-          - 15432:5432
+          - 127.0.0.1::5432
         options: >-
           --health-cmd "pg_isready -U angui -d angui"
           --health-interval 5s
@@ -46,7 +46,7 @@ jobs:
           MYSQL_PASSWORD: angui
           MYSQL_ROOT_PASSWORD: root
         ports:
-          - 13306:3306
+          - 127.0.0.1::3306
         options: >-
           --health-cmd "mysqladmin ping --silent"
           --health-interval 5s
@@ -78,7 +78,7 @@ jobs:
 
       - name: Exercise release migrations against PostgreSQL
         env:
-          DATABASE_URL: postgres://angui:angui@127.0.0.1:15432/angui
+          DATABASE_URL: postgres://angui:angui@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/angui
         run: |
           target/release/migration up
           target/release/migration status
@@ -87,7 +87,7 @@ jobs:
 
       - name: Exercise release migrations against MySQL
         env:
-          DATABASE_URL: mysql://angui:angui@127.0.0.1:13306/angui
+          DATABASE_URL: mysql://angui:angui@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/angui
         run: |
           target/release/migration up
           target/release/migration status
@@ -222,6 +222,7 @@ jobs:
           RUST_LOG: ${{ vars.RUST_LOG || 'info' }}
           AMAP_WEBSERVICE_KEY: ${{ secrets.AMAP_WEBSERVICE_KEY }}
           AMAP_JSAPI_SECURITY_CODE: ${{ secrets.AMAP_JSAPI_SECURITY_CODE }}
+          ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: ${{ vars.ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS || '24' }}
           ANGUI_AI_PROVIDERS_JSON: ${{ vars.ANGUI_AI_PROVIDERS_JSON }}
           ANGUI_PREVIEW_AI_ENDPOINT: ${{ secrets.ANGUI_PREVIEW_AI_ENDPOINT }}
           ANGUI_PREVIEW_AI_KEY: ${{ secrets.ANGUI_PREVIEW_AI_KEY }}
