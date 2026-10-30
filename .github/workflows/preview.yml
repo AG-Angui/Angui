@@ -20,6 +20,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.pull_requests[0].number == null &&
       github.event.workflow_run.conclusion == 'success' &&
       vars.PREVIEW_DEPLOY_ENABLED == 'true'
@@ -79,38 +80,6 @@ jobs:
         run: |
           set -euo pipefail
           printf 'password=%s\n' "$(openssl rand -hex 24)" >> "${GITHUB_OUTPUT}"
-
-      - name: Refresh preview runtime image
-        shell: bash
-        env:
-          PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
-        run: |
-          set -euo pipefail
-          docker build --pull --file - --tag "${PREVIEW_RUNTIME_IMAGE}" "${GITHUB_WORKSPACE}/deploy/preview" <<'EOF'
-
-          FROM ubuntu:24.04
-
-          RUN apt-get update \
-              && apt-get install -y --no-install-recommends ca-certificates curl libde265-0 \
-              && rm -rf /var/lib/apt/lists/* \
-              && useradd --create-home --uid 10001 angui \
-              && install -d -o angui -g angui /app/data
-
-          WORKDIR /app
-
-          ENV ANGUI_HOST=0.0.0.0 \
-              ANGUI_PORT=8080 \
-              ANGUI_FRONTEND_ORIGIN=http://localhost:8080 \
-              DATABASE_URL=sqlite://data/angui.db?mode=rwc \
-              RUST_LOG=info
-
-          USER angui
-          EXPOSE 8080
-          HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=5 \
-            CMD curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null || exit 1
-
-          CMD ["angui"]
-          EOF
 
       - name: Deploy branch preview locally
         shell: bash

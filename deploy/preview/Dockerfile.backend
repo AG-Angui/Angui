@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-FROM debian:bookworm-slim
+# Release binaries are compiled on Ubuntu 24.04 CI runners.
+FROM ubuntu:24.04
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl libde265-0 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 angui \
     && install -d -o angui -g angui /app/data
