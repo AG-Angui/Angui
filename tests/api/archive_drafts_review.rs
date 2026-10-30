@@ -109,6 +109,60 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
         "the de-identification reason must not be returned in the archive response"
     );
 
+    let reviewing = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/cases/{case_id}/status"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+            .set_json(json!({ "status": "reviewing" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(reviewing.status(), StatusCode::OK);
+
+    let missing_retention_confirmation = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/admin/archive-drafts/{draft_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "action": "approve", "reason": "尚未确认保留范围" }))
+            .to_request(),
+    )
+    .await;
+    assert_error(
+        missing_retention_confirmation,
+        StatusCode::BAD_REQUEST,
+        "validation_error",
+    )
+    .await;
+
+    let approved = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/admin/archive-drafts/{draft_id}/review"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {admin_token}")))
+            .set_json(json!({ "action": "approve", "reason": "归档材料已人工审核", "confirm_retention": true }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(approved.status(), StatusCode::OK);
+    let approved: Value = test::read_body_json(approved).await;
+    assert_eq!(approved["status"], "pending_review");
+    assert!(approved["reviewed_at"].is_string());
+
+    for status in ["archived"] {
+        let changed = test::call_service(
+            &app,
+            test::TestRequest::patch()
+                .uri(&format!("/api/cases/{case_id}/status"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
+                .set_json(json!({ "status": status }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(changed.status(), StatusCode::OK);
+    }
+
     let published = test::call_service(
         &app,
         test::TestRequest::patch()
@@ -125,7 +179,7 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
     assert_eq!(published["status"], "published");
     assert_eq!(published["usage_scope"], "learning_resource");
     assert_eq!(published["retention_status"], "retained");
-    assert_eq!(published["version"], 3);
+    assert_eq!(published["version"], 4);
     assert!(published["reviewed_at"].is_string());
     assert!(
         !published
@@ -163,7 +217,7 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
     assert_eq!(withdrawn["status"], "withdrawn");
     assert_eq!(withdrawn["usage_scope"], "internal_archive");
     assert_eq!(withdrawn["retention_status"], "withdrawn");
-    assert_eq!(withdrawn["version"], 4);
+    assert_eq!(withdrawn["version"], 5);
 
     let restore_withdrawn = test::call_service(
         &app,
@@ -185,7 +239,7 @@ async fn archive_deidentification_and_review_require_admin_and_preserve_auditabl
         .expect("archive draft should remain persisted for traceability");
     assert_eq!(stored.case_id, case_id);
     assert_eq!(stored.status, "withdrawn");
-    assert_eq!(stored.version, 4);
+    assert_eq!(stored.version, 5);
     assert!(stored.content.contains("Timeline") || stored.content.contains("de-identified"));
     assert!(
         cases::Entity::find_by_id(&case_id)

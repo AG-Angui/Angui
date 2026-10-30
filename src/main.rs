@@ -1,10 +1,11 @@
-use std::{env, io};
+use std::{env, io, sync::Arc};
 
 use actix_cors::Cors;
 use actix_web::{App, HttpServer, http, middleware::Logger, web};
 use angui::{
     api::{rate_limit::LoginRateLimiter, routes},
     application::{app_state::AppState, services::task_service},
+    audio_storage::LocalAudioStorage,
     config::{Settings, load_local_env_file, validate_ai_provider_configurations_from_env},
     integrations::message_delivery::MessageDelivery,
     integrations::{ai_gateway::AiGateway, amap_service::AmapService},
@@ -30,12 +31,16 @@ async fn main() -> io::Result<()> {
         .map_err(|error| io::Error::other(format!("database connection failed: {error}")))?;
     let ai_gateway = AiGateway::from_configurations(settings.ai_provider_configurations.clone())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+    let audio_storage = Arc::new(LocalAudioStorage::new(
+        settings.audio_storage_directory.clone(),
+    ));
     let state = web::Data::new(AppState {
         db: database,
         frontend_origin: settings.frontend_origin.clone(),
         session_ttl_hours: settings.session_ttl_hours,
         intake_answer_hard_max: settings.intake_answer_hard_max,
         attachment_storage_directory: settings.attachment_storage_directory.clone(),
+        audio_storage: audio_storage.clone(),
         attachment_max_image_bytes: settings.attachment_max_image_bytes,
         attachment_max_per_case: settings.attachment_max_per_case,
         case_place_types: settings.case_place_types.clone(),
@@ -47,11 +52,34 @@ async fn main() -> io::Result<()> {
         )
         .map_err(|error| io::Error::other(format!("AMap client initialization failed: {error}")))?,
         ai_gateway,
+        livekit_url: settings.livekit_url.clone(),
+        livekit_api_key: settings.livekit_api_key.clone(),
+        livekit_api_secret: settings.livekit_api_secret.clone(),
+        livekit_admin_url: settings.livekit_admin_url.clone(),
+        turn_url: settings.turn_url.clone(),
+        turn_secret: settings.turn_secret.clone(),
+        voice_floors: Default::default(),
+        voice_floor_gate: Default::default(),
+        ws_tickets: Default::default(),
+        voice_sessions: Default::default(),
         login_limiter: LoginRateLimiter::default(),
         message_delivery: MessageDelivery::from_env()
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?,
     });
     task_service::start_location_report_retention_purger(state.db.clone());
+    angui::services::voice_clue_service::start_worker(
+        state.db.clone(),
+        audio_storage.clone(),
+        settings.asr_url.clone(),
+        settings.asr_key.clone(),
+        state.ai_gateway.clone(),
+    );
+    angui::services::voice_room_service::start_membership_reaper(state.get_ref().clone());
+    angui::services::voice_clue_service::start_audio_retention(
+        state.db.clone(),
+        audio_storage.clone(),
+        settings.audio_retention_days,
+    );
 
     HttpServer::new(move || {
         let cors = Cors::default()

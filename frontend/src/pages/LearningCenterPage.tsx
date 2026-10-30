@@ -1,23 +1,32 @@
 import { Button, Chip, Input, Spinner } from "@heroui/react";
-import { BookOpen, Send, WifiOff } from "lucide-react";
+import { Bookmark, BookOpen, Clock3, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
-  askKnowledge,
-  downloadKnowledgeImage,
   getPublicPreventionCard,
   listLearningCategories,
   listLearningQuestions,
   listLearningResources,
+  listLearningAnswers,
+  listWrongLearningAnswers,
+  getLearningProgress,
+  searchLearningKnowledge,
+  askKnowledge,
+  downloadKnowledgeImage,
+  downloadKnowledgeAttachment,
   submitLearningCategoryProposal,
   submitLearningAnswer,
   submitLearningResourceDraft,
 } from "../api/learning";
 import type {
-  KnowledgeAnswer,
   CreateLearningResourceInput,
   LearningCategory,
   LearningQuestion,
   LearningResource,
+  LearningAnswerHistory,
+  LearningProgress,
+  KnowledgeAnswer,
+  KnowledgeImage,
+  KnowledgeSearchResult,
 } from "../api/learning";
 import { ApiClientError } from "../api/client";
 import { useAuth } from "../auth/useAuth";
@@ -57,9 +66,18 @@ export function LearningCenterPage() {
   const [draftError, setDraftError] = useState("");
   const [isSubmittingDraft, setIsSubmittingDraft] = useState(false);
   const [draft, setDraft] = useState<CreateLearningResourceInput>({
-    title: "", summary: "", content: "", resource_type: "manual", tags: [], category_id: null,
-    source_name: "", source_url: null, visibility: "learner", effective_at: new Date().toISOString(),
-    permitted_use: "training", submission_reason: "",
+    title: "",
+    summary: "",
+    content: "",
+    resource_type: "manual",
+    tags: [],
+    category_id: null,
+    source_name: "",
+    source_url: null,
+    visibility: "learner",
+    effective_at: new Date().toISOString(),
+    permitted_use: "training",
+    submission_reason: "",
   });
   const [categoryProposal, setCategoryProposal] = useState("");
   const [categoryProposalReason, setCategoryProposalReason] = useState("");
@@ -68,28 +86,194 @@ export function LearningCenterPage() {
   );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [answer, setAnswer] = useState<KnowledgeAnswer | null>(null);
-  const [knowledgeError, setKnowledgeError] = useState("");
-  const [isAsking, setIsAsking] = useState(false);
   const [results, setResults] = useState<
-    Record<string, { isCorrect: boolean; explanation: string }>
+    Record<
+      string,
+      {
+        isCorrect: boolean;
+        explanation: string;
+        score: number;
+        maxScore: number;
+      }
+    >
   >({});
+  const [answerHistory, setAnswerHistory] = useState<LearningAnswerHistory[]>(
+    [],
+  );
+  const [wrongAnswers, setWrongAnswers] = useState<LearningAnswerHistory[]>([]);
+  const [progress, setProgress] = useState<LearningProgress | null>(null);
   const [answeringQuestion, setAnsweringQuestion] = useState("");
-  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const [knowledgeCategory, setKnowledgeCategory] = useState("");
+  const [knowledgeTag, setKnowledgeTag] = useState("");
+  const [knowledgeResults, setKnowledgeResults] = useState<
+    KnowledgeSearchResult[]
+  >([]);
+  const [knowledgeCatalogue, setKnowledgeCatalogue] = useState<
+    KnowledgeSearchResult[]
+  >([]);
+  const [recentKnowledgeIds, setRecentKnowledgeIds] = useState<string[]>([]);
+  const [favoriteKnowledgeIds, setFavoriteKnowledgeIds] = useState<string[]>(
+    [],
+  );
+  const [knowledgeAnswer, setKnowledgeAnswer] =
+    useState<KnowledgeAnswer | null>(null);
+  const [knowledgeBusy, setKnowledgeBusy] = useState(false);
+  const [knowledgeMessage, setKnowledgeMessage] = useState("");
+  const [knowledgeImageUrls, setKnowledgeImageUrls] = useState<
+    Record<string, string>
+  >({});
+  const [knowledgeImageFailures, setKnowledgeImageFailures] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
-    if (!token || !answer) return;
-    let cancelled = false;
-    const loadImages = async () => {
-      const entries = await Promise.all(answer.sources.flatMap((source) => (source.images ?? []).map(async (image) => {
-        try { const blob = await downloadKnowledgeImage(token, source.knowledge_item_id, image.id); return [image.id, URL.createObjectURL(blob)] as const; } catch { return null; }
-      })));
-      if (!cancelled) setImageUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))));
+    if (!user?.id) return;
+    const readIds = (kind: string): string[] => {
+      try {
+        const value: unknown = JSON.parse(
+          localStorage.getItem(`angui:knowledge:${user.id}:${kind}`) ?? "[]",
+        );
+        return Array.isArray(value)
+          ? value
+              .filter((id): id is string => typeof id === "string")
+              .slice(0, 30)
+          : [];
+      } catch {
+        return [];
+      }
     };
-    void loadImages();
-    return () => { cancelled = true; };
-  }, [answer, token]);
+    setRecentKnowledgeIds(readIds("recent"));
+    setFavoriteKnowledgeIds(readIds("favorite"));
+  }, [user?.id]);
+
+  const rememberKnowledge = (id: string) => {
+    if (!user?.id) return;
+    setRecentKnowledgeIds((current) => {
+      const next = [id, ...current.filter((value) => value !== id)].slice(
+        0,
+        30,
+      );
+      localStorage.setItem(
+        `angui:knowledge:${user.id}:recent`,
+        JSON.stringify(next),
+      );
+      return next;
+    });
+  };
+  const toggleKnowledgeFavorite = (id: string) => {
+    if (!user?.id) return;
+    setFavoriteKnowledgeIds((current) => {
+      const next = current.includes(id)
+        ? current.filter((value) => value !== id)
+        : [id, ...current].slice(0, 30);
+      localStorage.setItem(
+        `angui:knowledge:${user.id}:favorite`,
+        JSON.stringify(next),
+      );
+      return next;
+    });
+  };
+  const showSavedKnowledge = (ids: string[]) => {
+    const visible = new Map(
+      knowledgeCatalogue.map((item) => [item.knowledge_item_id, item]),
+    );
+    setKnowledgeResults(
+      ids.flatMap((id) => (visible.has(id) ? [visible.get(id)!] : [])),
+    );
+    setKnowledgeAnswer(null);
+    setKnowledgeMessage("");
+  };
+
+  useEffect(() => {
+    const images = new Map<string, { itemId: string; imageId: string }>();
+    const sources = [...knowledgeResults, ...(knowledgeAnswer?.sources ?? [])];
+    for (const source of sources) {
+      for (const image of source.images) {
+        images.set(image.id, {
+          itemId: source.knowledge_item_id,
+          imageId: image.id,
+        });
+      }
+    }
+    const controller = new AbortController();
+    let active = true;
+    const createdUrls: string[] = [];
+    setKnowledgeImageFailures({});
+    setKnowledgeImageUrls((current) => {
+      Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+      return {};
+    });
+
+    if (!token || images.size === 0) {
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+
+    void Promise.all(
+      [...images.values()].map(async ({ itemId, imageId }) => {
+        try {
+          const blob = await downloadKnowledgeImage(token, itemId, imageId, {
+            signal: controller.signal,
+          });
+          const url = URL.createObjectURL(blob);
+          if (!active) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          createdUrls.push(url);
+          setKnowledgeImageUrls((current) => ({ ...current, [imageId]: url }));
+        } catch {
+          if (active && !controller.signal.aborted) {
+            setKnowledgeImageFailures((current) => ({
+              ...current,
+              [imageId]: true,
+            }));
+          }
+        }
+      }),
+    );
+
+    return () => {
+      active = false;
+      controller.abort();
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [knowledgeAnswer, knowledgeResults, token]);
+
+  const searchKnowledge = () => {
+    if (!token) return;
+    setKnowledgeBusy(true);
+    setKnowledgeAnswer(null);
+    setKnowledgeMessage("");
+    void searchLearningKnowledge(token, {
+      query: knowledgeQuery,
+      category_id: knowledgeCategory,
+      tag: knowledgeTag,
+    })
+      .then((response) => {
+        setKnowledgeResults(response.results);
+        if (response.results.length === 0)
+          setKnowledgeMessage("没有匹配资料。可尝试更具体的关键词或切换分类。");
+      })
+      .catch((cause) => setKnowledgeMessage(messageFrom(cause)))
+      .finally(() => setKnowledgeBusy(false));
+  };
+  const askFromKnowledge = () => {
+    if (!token || !knowledgeQuery.trim()) return;
+    setKnowledgeBusy(true);
+    setKnowledgeMessage("");
+    const filters = {
+      ...(knowledgeCategory && { category: knowledgeCategory }),
+      ...(knowledgeTag && { tag: knowledgeTag }),
+    };
+    void askKnowledge(token, knowledgeQuery, filters)
+      .then(setKnowledgeAnswer)
+      .catch((cause) => setKnowledgeMessage(messageFrom(cause)))
+      .finally(() => setKnowledgeBusy(false));
+  };
 
   const load = useCallback(async () => {
     if (!token) {
@@ -101,11 +285,50 @@ export function LearningCenterPage() {
     setError("");
     try {
       const [nextResources, nextQuestions] = await Promise.all([
-        listLearningResources(token, { category_id: selectedCategory, tag: selectedTag }),
+        listLearningResources(token, {
+          category_id: selectedCategory,
+          tag: selectedTag,
+        }),
         listLearningQuestions(token),
       ]);
       setResources(nextResources);
       setQuestions(nextQuestions);
+      const catalogue = await Promise.resolve(
+        searchLearningKnowledge(token),
+      ).catch(() => null);
+      setKnowledgeCatalogue(catalogue?.results ?? []);
+      if (
+        typeof listLearningAnswers === "function" &&
+        typeof listWrongLearningAnswers === "function" &&
+        typeof getLearningProgress === "function"
+      ) {
+        const [history, wrong, nextProgress] = await Promise.all([
+          listLearningAnswers(token),
+          listWrongLearningAnswers(token),
+          getLearningProgress(token),
+        ]);
+        setAnswerHistory(history);
+        setWrongAnswers(wrong);
+        setProgress(nextProgress);
+        const latest = new Map<string, LearningAnswerHistory>();
+        for (const answer of history)
+          if (!latest.has(answer.question_id))
+            latest.set(answer.question_id, answer);
+        setResults(
+          Object.fromEntries(
+            [...latest.values()].map((answer) => [
+              answer.question_id,
+              {
+                isCorrect: answer.is_correct,
+                explanation:
+                  answer.question_snapshot?.explanation ?? "历史解析不可用",
+                score: answer.score,
+                maxScore: answer.max_score,
+              },
+            ]),
+          ),
+        );
+      }
       // Categories are progressive enhancement for legacy deployments. A
       // missing category endpoint must not hide already published resources.
       const nextCategories =
@@ -140,15 +363,28 @@ export function LearningCenterPage() {
     if (!token) return;
     setAnsweringQuestion(questionId);
     void submitLearningAnswer(token, questionId, optionId)
-      .then((result) =>
+      .then((result) => {
         setResults((current) => ({
           ...current,
           [questionId]: {
             isCorrect: result.is_correct,
             explanation: result.explanation,
+            score: result.score,
+            maxScore: result.max_score,
           },
-        })),
-      )
+        }));
+        void Promise.all([
+          listLearningAnswers(token),
+          listWrongLearningAnswers(token),
+          getLearningProgress(token),
+        ])
+          .then(([history, wrong, nextProgress]) => {
+            setAnswerHistory(history);
+            setWrongAnswers(wrong);
+            setProgress(nextProgress);
+          })
+          .catch((cause) => setError(messageFrom(cause)));
+      })
       .catch((cause) => setError(messageFrom(cause)))
       .finally(() => setAnsweringQuestion(""));
   };
@@ -160,13 +396,24 @@ export function LearningCenterPage() {
     setIsSubmittingDraft(true);
     void submitLearningResourceDraft(token, {
       ...draft,
-      tags: draftTags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
+      tags: draftTags
+        .split(/[,，]/)
+        .map((tag) => tag.trim())
+        .filter(Boolean),
       source_url: draft.source_url?.trim() || null,
     })
       .then(() => {
         setDraft({
-          ...draft, title: "", summary: "", content: "", tags: [], category_id: null,
-          source_name: "", source_url: null, submission_reason: "", effective_at: new Date().toISOString(),
+          ...draft,
+          title: "",
+          summary: "",
+          content: "",
+          tags: [],
+          category_id: null,
+          source_name: "",
+          source_url: null,
+          submission_reason: "",
+          effective_at: new Date().toISOString(),
         });
         setDraftTags("");
         setDraftError("草稿已提交，等待独立去标识、审核与发布流程。");
@@ -177,9 +424,14 @@ export function LearningCenterPage() {
 
   const proposeCategory = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!token || !categoryProposal.trim() || !categoryProposalReason.trim()) return;
+    if (!token || !categoryProposal.trim() || !categoryProposalReason.trim())
+      return;
     setDraftError("");
-    void submitLearningCategoryProposal(token, categoryProposal, categoryProposalReason)
+    void submitLearningCategoryProposal(
+      token,
+      categoryProposal,
+      categoryProposalReason,
+    )
       .then(() => {
         setCategoryProposal("");
         setCategoryProposalReason("");
@@ -189,7 +441,94 @@ export function LearningCenterPage() {
       .catch((cause) => setDraftError(messageFrom(cause)));
   };
 
-  const availableTags = Array.from(new Set(resources.flatMap((resource) => resource.tags))).sort();
+  const availableTags = Array.from(
+    new Set(resources.flatMap((resource) => resource.tags)),
+  ).sort();
+  const openKnowledgeAttachment = (
+    itemId: string,
+    attachmentId: string,
+    fileName: string,
+  ) => {
+    if (!token) return;
+    void downloadKnowledgeAttachment(token, itemId, attachmentId)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      })
+      .catch((cause) => setKnowledgeMessage(messageFrom(cause)));
+  };
+  const knowledgeCategories = Array.from(
+    new Set(
+      knowledgeCatalogue.map((result) => result.category).filter(Boolean),
+    ),
+  ).sort();
+  const knowledgeTags = Array.from(
+    new Set(knowledgeCatalogue.flatMap((result) => result.keywords)),
+  ).sort();
+  const activeQuestionIds = new Set(questions.map((question) => question.id));
+  const recommendedQuestion =
+    wrongAnswers.find((answer) => activeQuestionIds.has(answer.question_id))
+      ?.question_id ??
+    questions.find(
+      (question) =>
+        !answerHistory.some((answer) => answer.question_id === question.id),
+    )?.id;
+  const recommendedKnowledge = knowledgeCatalogue.find(
+    (item) => !recentKnowledgeIds.includes(item.knowledge_item_id),
+  );
+  const jumpToQuestion = () => {
+    if (recommendedQuestion)
+      document
+        .getElementById(`learning-question-${recommendedQuestion}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  const renderKnowledgeImages = (title: string, images: KnowledgeImage[]) => {
+    if (images.length === 0) return null;
+    return (
+      <div className="mt-3 flex flex-wrap gap-3" aria-label={`${title} 的附图`}>
+        {images.map((image, index) => {
+          const url = knowledgeImageUrls[image.id];
+          if (url) {
+            return (
+              <a
+                key={image.id}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="block"
+              >
+                <img
+                  src={url}
+                  alt={`${title} 附图 ${index + 1}`}
+                  className="h-24 w-36 rounded-md border border-slate-200 object-cover"
+                />
+              </a>
+            );
+          }
+          return (
+            <p key={image.id} className="m-0 text-xs text-slate-500">
+              {knowledgeImageFailures[image.id]
+                ? "附图暂时无法加载。"
+                : "正在加载附图…"}
+            </p>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const knowledgeAnswerStatus =
+    knowledgeAnswer &&
+    {
+      source_backed: "AI Gateway 已基于下列已发布资料生成回答。",
+      rule_based:
+        "当前未配置或无法连接可用的 AI Gateway；以下是命中资料原文拼接，不是模型生成回答。",
+      insufficient_sources: "没有足够的已发布资料，系统不会生成回答。",
+    }[knowledgeAnswer.certainty];
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
@@ -204,6 +543,201 @@ export function LearningCenterPage() {
           </p>
         </div>
       </header>
+      <section
+        className="mb-7 border-y border-slate-200 bg-white"
+        aria-labelledby="knowledge-search-title"
+      >
+        <header className="border-b border-slate-200 px-5 py-4">
+          <h2
+            id="knowledge-search-title"
+            className="m-0 text-base font-bold text-slate-950"
+          >
+            知识检索与问答
+          </h2>
+          <p className="mb-0 mt-1 text-sm text-slate-600">
+            先按关键词匹配已发布、已脱敏的资料；问答只使用本次命中的资料作为上下文。
+          </p>
+        </header>
+        <div className="grid gap-2 p-5 sm:grid-cols-[1fr_10rem_10rem_auto_auto]">
+          <Input
+            aria-label="搜索知识"
+            value={knowledgeQuery}
+            onChange={(event) => setKnowledgeQuery(event.target.value)}
+            placeholder="输入关键词或问题"
+            maxLength={1000}
+          />
+          <select
+            aria-label="知识库分类"
+            className="h-10 rounded-md border border-slate-300 bg-white px-3"
+            value={knowledgeCategory}
+            onChange={(event) => setKnowledgeCategory(event.target.value)}
+          >
+            <option value="">全部分类</option>
+            {knowledgeCategories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="知识库标签"
+            className="h-10 rounded-md border border-slate-300 bg-white px-3"
+            value={knowledgeTag}
+            onChange={(event) => setKnowledgeTag(event.target.value)}
+          >
+            <option value="">全部标签</option>
+            {knowledgeTags.map((tag) => (
+              <option key={tag} value={tag}>
+                {tag}
+              </option>
+            ))}
+          </select>
+          <Button onPress={searchKnowledge} isDisabled={knowledgeBusy}>
+            {knowledgeBusy ? <Spinner size="sm" /> : "搜索"}
+          </Button>
+          <Button
+            variant="secondary"
+            onPress={askFromKnowledge}
+            isDisabled={knowledgeBusy || !knowledgeQuery.trim()}
+          >
+            基于资料问答
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-2 px-5 pb-4">
+          <Button
+            size="sm"
+            variant="secondary"
+            onPress={() => showSavedKnowledge(recentKnowledgeIds)}
+            isDisabled={!recentKnowledgeIds.length}
+          >
+            <Clock3 size={15} />
+            最近查看
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onPress={() => showSavedKnowledge(favoriteKnowledgeIds)}
+            isDisabled={!favoriteKnowledgeIds.length}
+          >
+            <Bookmark size={15} />
+            我的收藏
+          </Button>
+        </div>
+        {knowledgeMessage && (
+          <p className="m-0 px-5 pb-4 text-sm text-amber-800" role="status">
+            {knowledgeMessage}
+          </p>
+        )}
+        {knowledgeResults.length > 0 && (
+          <div className="divide-y divide-slate-100">
+            {knowledgeResults.map((result) => (
+              <article key={result.knowledge_item_id} className="px-5 py-4">
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="m-0 text-sm font-semibold">{result.title}</h3>
+                  <button
+                    type="button"
+                    title={
+                      favoriteKnowledgeIds.includes(result.knowledge_item_id)
+                        ? "取消收藏"
+                        : "收藏资料"
+                    }
+                    aria-label={
+                      favoriteKnowledgeIds.includes(result.knowledge_item_id)
+                        ? "取消收藏"
+                        : "收藏资料"
+                    }
+                    aria-pressed={favoriteKnowledgeIds.includes(
+                      result.knowledge_item_id,
+                    )}
+                    className="shrink-0 text-slate-600 hover:text-brand-700"
+                    onClick={() =>
+                      toggleKnowledgeFavorite(result.knowledge_item_id)
+                    }
+                  >
+                    <Bookmark
+                      size={17}
+                      fill={
+                        favoriteKnowledgeIds.includes(result.knowledge_item_id)
+                          ? "currentColor"
+                          : "none"
+                      }
+                    />
+                  </button>
+                </div>
+                <p className="mb-0 mt-1 text-sm text-slate-600">
+                  {result.summary}
+                </p>
+                <p className="mb-0 mt-2 text-xs text-slate-500">
+                  {Boolean(result.matched_fields?.length) &&
+                    `匹配字段：${result.matched_fields.join("、")} · `}
+                  #{result.category} ·{" "}
+                  {result.keywords.map((tag) => `#${tag}`).join(" ")}
+                </p>
+                <details
+                  className="mt-3 text-sm"
+                  onToggle={(event) => {
+                    if (event.currentTarget.open)
+                      rememberKnowledge(result.knowledge_item_id);
+                  }}
+                >
+                  <summary className="cursor-pointer text-brand-700">
+                    查看正文与附件
+                  </summary>
+                  <p className="mt-2 whitespace-pre-wrap leading-6 text-slate-700">
+                    {result.content}
+                  </p>
+                  {result.attachments.length > 0 && (
+                    <ul className="mt-2 list-disc pl-5 text-xs text-slate-600">
+                      {result.attachments.map((attachment) => (
+                        <li key={attachment.id}>
+                          <button
+                            type="button"
+                            className="text-brand-700 underline"
+                            onClick={() =>
+                              openKnowledgeAttachment(
+                                result.knowledge_item_id,
+                                attachment.id,
+                                attachment.file_name,
+                              )
+                            }
+                          >
+                            下载 {attachment.file_name}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </details>
+                {renderKnowledgeImages(result.title, result.images)}
+              </article>
+            ))}
+          </div>
+        )}
+        {knowledgeAnswer && (
+          <div className="m-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+            <p className="m-0 text-xs text-slate-600" role="status">
+              {knowledgeAnswerStatus}
+            </p>
+            <p className="mb-0 mt-3 whitespace-pre-wrap text-sm leading-6">
+              {knowledgeAnswer.answer}
+            </p>
+            <p className="mb-0 mt-3 text-xs text-slate-600">
+              来源：
+              {knowledgeAnswer.sources
+                .map((source) => `${source.title} v${source.version}`)
+                .join("、") || "资料不足"}
+            </p>
+            {knowledgeAnswer.sources.map((source) => (
+              <div key={source.knowledge_item_id}>
+                {renderKnowledgeImages(source.title, source.images)}
+              </div>
+            ))}
+            <p className="mb-0 mt-3 text-xs text-slate-600">
+              {knowledgeAnswer.human_review_notice}
+            </p>
+          </div>
+        )}
+      </section>
       <section
         className="mb-7 border-y border-emerald-200 bg-emerald-50"
         aria-labelledby="offline-prevention-title"
@@ -271,16 +805,32 @@ export function LearningCenterPage() {
         <div className="grid gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-2">
           <label className="grid gap-1 text-sm text-slate-700">
             分类筛选
-            <select className="h-10 rounded-md border border-slate-300 bg-white px-3" value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}>
+            <select
+              className="h-10 rounded-md border border-slate-300 bg-white px-3"
+              value={selectedCategory}
+              onChange={(event) => setSelectedCategory(event.target.value)}
+            >
               <option value="">全部分类（含历史未分类）</option>
-              {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
             </select>
           </label>
           <label className="grid gap-1 text-sm text-slate-700">
             标签筛选
-            <select className="h-10 rounded-md border border-slate-300 bg-white px-3" value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)}>
+            <select
+              className="h-10 rounded-md border border-slate-300 bg-white px-3"
+              value={selectedTag}
+              onChange={(event) => setSelectedTag(event.target.value)}
+            >
               <option value="">全部标签</option>
-              {availableTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
+              {availableTags.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
             </select>
           </label>
         </div>
@@ -346,32 +896,148 @@ export function LearningCenterPage() {
         )}
       </section>
       {user?.account_type === "learner" && (
-        <section className="mb-7 border-y border-slate-200 bg-white" aria-labelledby="contribute-learning-title">
+        <section
+          className="mb-7 border-y border-slate-200 bg-white"
+          aria-labelledby="contribute-learning-title"
+        >
           <header className="border-b border-slate-200 px-5 py-4">
-            <h2 id="contribute-learning-title" className="m-0 text-base font-bold text-slate-950">提交学习资源草稿</h2>
-            <p className="mb-0 mt-1 text-sm text-slate-600">草稿不会直接展示；它必须经过独立去标识、审核和发布。</p>
+            <h2
+              id="contribute-learning-title"
+              className="m-0 text-base font-bold text-slate-950"
+            >
+              提交学习资源草稿
+            </h2>
+            <p className="mb-0 mt-1 text-sm text-slate-600">
+              草稿不会直接展示；它必须经过独立去标识、审核和发布。
+            </p>
           </header>
-          <form className="grid gap-3 p-5 lg:grid-cols-2" onSubmit={submitDraft}>
-            <label className="grid gap-1 text-sm text-slate-700">标题<Input aria-label="草稿标题" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required /></label>
-            <label className="grid gap-1 text-sm text-slate-700">来源名称<Input aria-label="草稿来源名称" value={draft.source_name} onChange={(event) => setDraft({ ...draft, source_name: event.target.value })} required /></label>
-            <label className="grid gap-1 text-sm text-slate-700">分类
-              <select className="h-10 rounded-md border border-slate-300 bg-white px-3" value={draft.category_id ?? ""} onChange={(event) => setDraft({ ...draft, category_id: event.target.value || null })}>
-                <option value="">未分类</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          <form
+            className="grid gap-3 p-5 lg:grid-cols-2"
+            onSubmit={submitDraft}
+          >
+            <label className="grid gap-1 text-sm text-slate-700">
+              标题
+              <Input
+                aria-label="草稿标题"
+                value={draft.title}
+                onChange={(event) =>
+                  setDraft({ ...draft, title: event.target.value })
+                }
+                required
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700">
+              来源名称
+              <Input
+                aria-label="草稿来源名称"
+                value={draft.source_name}
+                onChange={(event) =>
+                  setDraft({ ...draft, source_name: event.target.value })
+                }
+                required
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700">
+              分类
+              <select
+                className="h-10 rounded-md border border-slate-300 bg-white px-3"
+                value={draft.category_id ?? ""}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    category_id: event.target.value || null,
+                  })
+                }
+              >
+                <option value="">未分类</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
               </select>
             </label>
-            <label className="grid gap-1 text-sm text-slate-700">标签（逗号分隔）<Input aria-label="草稿标签" value={draftTags} onChange={(event) => setDraftTags(event.target.value)} /></label>
-            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">摘要<textarea className="min-h-20 rounded-md border border-slate-300 px-3 py-2" value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} required /></label>
-            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">正文<textarea className="min-h-32 rounded-md border border-slate-300 px-3 py-2" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} required /></label>
-            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">提交理由<textarea className="min-h-20 rounded-md border border-slate-300 px-3 py-2" value={draft.submission_reason} onChange={(event) => setDraft({ ...draft, submission_reason: event.target.value })} required /></label>
-            <div className="lg:col-span-2"><Button type="submit" isDisabled={isSubmittingDraft}>{isSubmittingDraft ? <Spinner size="sm" /> : "提交草稿"}</Button></div>
+            <label className="grid gap-1 text-sm text-slate-700">
+              标签（逗号分隔）
+              <Input
+                aria-label="草稿标签"
+                value={draftTags}
+                onChange={(event) => setDraftTags(event.target.value)}
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">
+              摘要
+              <textarea
+                className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
+                value={draft.summary}
+                onChange={(event) =>
+                  setDraft({ ...draft, summary: event.target.value })
+                }
+                required
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">
+              正文
+              <textarea
+                className="min-h-32 rounded-md border border-slate-300 px-3 py-2"
+                value={draft.content}
+                onChange={(event) =>
+                  setDraft({ ...draft, content: event.target.value })
+                }
+                required
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700 lg:col-span-2">
+              提交理由
+              <textarea
+                className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
+                value={draft.submission_reason}
+                onChange={(event) =>
+                  setDraft({ ...draft, submission_reason: event.target.value })
+                }
+                required
+              />
+            </label>
+            <div className="lg:col-span-2">
+              <Button type="submit" isDisabled={isSubmittingDraft}>
+                {isSubmittingDraft ? <Spinner size="sm" /> : "提交草稿"}
+              </Button>
+            </div>
           </form>
-          <form className="grid gap-3 border-t border-slate-100 p-5 lg:grid-cols-2" onSubmit={proposeCategory}>
-            <p className="m-0 text-sm font-semibold text-slate-950 lg:col-span-2">没有合适的分类？提交分类申请</p>
-            <Input aria-label="申请分类名称" value={categoryProposal} onChange={(event) => setCategoryProposal(event.target.value)} placeholder="分类名称" required />
-            <Input aria-label="申请分类理由" value={categoryProposalReason} onChange={(event) => setCategoryProposalReason(event.target.value)} placeholder="申请理由" required />
-            <div className="lg:col-span-2"><Button type="submit" variant="secondary">申请分类</Button></div>
+          <form
+            className="grid gap-3 border-t border-slate-100 p-5 lg:grid-cols-2"
+            onSubmit={proposeCategory}
+          >
+            <p className="m-0 text-sm font-semibold text-slate-950 lg:col-span-2">
+              没有合适的分类？提交分类申请
+            </p>
+            <Input
+              aria-label="申请分类名称"
+              value={categoryProposal}
+              onChange={(event) => setCategoryProposal(event.target.value)}
+              placeholder="分类名称"
+              required
+            />
+            <Input
+              aria-label="申请分类理由"
+              value={categoryProposalReason}
+              onChange={(event) =>
+                setCategoryProposalReason(event.target.value)
+              }
+              placeholder="申请理由"
+              required
+            />
+            <div className="lg:col-span-2">
+              <Button type="submit" variant="secondary">
+                申请分类
+              </Button>
+            </div>
           </form>
-          {draftError && <p className="m-0 px-5 pb-5 text-sm text-slate-700" role="status">{draftError}</p>}
+          {draftError && (
+            <p className="m-0 px-5 pb-5 text-sm text-slate-700" role="status">
+              {draftError}
+            </p>
+          )}
         </section>
       )}
       <div className="grid gap-7 lg:grid-cols-2">
@@ -397,7 +1063,11 @@ export function LearningCenterPage() {
           ) : (
             <div className="divide-y divide-slate-100">
               {questions.map((question) => (
-                <article key={question.id} className="px-5 py-4">
+                <article
+                  key={question.id}
+                  id={`learning-question-${question.id}`}
+                  className="px-5 py-4"
+                >
                   <p className="m-0 text-sm font-semibold leading-6 text-slate-950">
                     {question.prompt}
                   </p>
@@ -407,10 +1077,7 @@ export function LearningCenterPage() {
                         key={option.id}
                         className="justify-start! text-left"
                         variant="secondary"
-                        isDisabled={
-                          answeringQuestion === question.id ||
-                          Boolean(results[question.id])
-                        }
+                        isDisabled={answeringQuestion === question.id}
                         onPress={() => answerQuestion(question.id, option.id)}
                       >
                         {option.text}
@@ -424,6 +1091,8 @@ export function LearningCenterPage() {
                       {results[question.id].isCorrect
                         ? "回答正确。"
                         : "回答不正确。"}{" "}
+                      得分 {results[question.id].score}/
+                      {results[question.id].maxScore}。{" "}
                       {results[question.id].explanation}
                     </p>
                   )}
@@ -434,98 +1103,102 @@ export function LearningCenterPage() {
         </section>
         <section
           className="border-y border-slate-200 bg-white"
-          aria-labelledby="knowledge-ask-title"
+          aria-labelledby="learning-progress-title"
         >
           <header className="border-b border-slate-200 px-5 py-4">
             <h2
-              id="knowledge-ask-title"
-              className="m-0 text-base font-bold text-slate-950"
+              id="learning-progress-title"
+              className="m-0 text-base font-bold"
             >
-              新人问答
+              学习记录
             </h2>
           </header>
-          <form
-            className="flex gap-2 p-5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!token || !prompt.trim()) return;
-              setIsAsking(true);
-              setAnswer(null);
-              setKnowledgeError("");
-              void askKnowledge(token, prompt)
-                .then(setAnswer)
-                .catch((cause) => setKnowledgeError(messageFrom(cause)))
-                .finally(() => setIsAsking(false));
-            }}
-          >
-            <Input
-              aria-label="输入学习问题"
-              value={prompt}
-              maxLength={1000}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="输入一个和已审核教材有关的问题"
-            />
-            <Button
-              type="submit"
-              isIconOnly
-              aria-label="提交问题"
-              isDisabled={isAsking || !prompt.trim()}
+          <div className="px-5 py-4 text-sm text-slate-700">
+            <p className="m-0">
+              已答 {progress?.answered_questions ?? 0} 题 · 正确{" "}
+              {progress?.correct_answers ?? 0} 题 · 正确率{" "}
+              {Math.round((progress?.accuracy ?? 0) * 100)}%
+            </p>
+            <p className="mb-0 mt-2">
+              错题 {wrongAnswers.length} 道 · 历史作答 {answerHistory.length} 次
+            </p>
+            {(recommendedQuestion || recommendedKnowledge) && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                <span className="text-xs font-semibold text-slate-600">
+                  下一步
+                </span>
+                {recommendedKnowledge && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onPress={() => {
+                      setKnowledgeResults([recommendedKnowledge]);
+                      document
+                        .getElementById("knowledge-search-title")
+                        ?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  >
+                    阅读 {recommendedKnowledge.title}
+                  </Button>
+                )}
+                {recommendedQuestion && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    aria-label={`练习 ${questions.find((question) => question.id === recommendedQuestion)?.prompt ?? "待练习题目"}`}
+                    onPress={jumpToQuestion}
+                  >
+                    练习推荐题目
+                  </Button>
+                )}
+              </div>
+            )}
+            {wrongAnswers.length > 0 && (
+              <ul className="mt-3 list-disc pl-5">
+                {wrongAnswers.map((answer) => (
+                  <li key={answer.id}>
+                    {answer.question_snapshot?.prompt ?? answer.question_id}（v
+                    {answer.question_version}）
+                  </li>
+                ))}
+              </ul>
+            )}
+            {answerHistory.length > 0 && (
+              <details className="mt-3">
+                <summary className="cursor-pointer">查看历史作答</summary>
+                <ul className="mt-2 space-y-2">
+                  {answerHistory.map((answer) => (
+                    <li key={answer.id}>
+                      {answer.question_snapshot?.prompt ?? answer.question_id} ·{" "}
+                      {answer.is_correct ? "正确" : "错误"} ·{" "}
+                      {formatDate(answer.created_at)}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        </section>
+        <section
+          className="border-y border-slate-200 bg-white"
+          aria-labelledby="practice-help-title"
+        >
+          <header className="border-b border-slate-200 px-5 py-4">
+            <h2
+              id="practice-help-title"
+              className="m-0 text-base font-bold text-slate-950"
             >
-              {isAsking ? (
-                <Spinner size="sm" />
-              ) : (
-                <Send size={16} aria-hidden="true" />
-              )}
-            </Button>
-          </form>
-          {knowledgeError && (
-            <p className="m-0 px-5 pb-4 text-sm text-amber-800" role="status">
-              问答暂时不可用，已发布资料仍可查看。请稍后重试。
+              练习说明
+            </h2>
+          </header>
+          <div className="px-5 py-6 text-sm leading-6 text-slate-600">
+            <p className="m-0">
+              提交前不会显示答案或解析。完成作答后可查看解析与关联的已发布资料。
             </p>
-          )}
-          {answer ? (
-            <div className="mx-5 mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
-              <p className="m-0 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {answer.answer}
-              </p>
-              <p className="mb-0 mt-3 text-xs text-slate-500">
-                资料状态：
-                {answer.certainty === "source_backed"
-                  ? "已审核资料支持"
-                  : "资料不足，无法形成行动建议"}
-              </p>
-              <p className="mb-0 mt-2 text-xs text-slate-500">
-                {answer.human_review_notice}
-              </p>
-              {answer.sources.length > 0 && (
-                <div className="mt-3 grid gap-3">
-                  <p className="m-0 text-xs text-slate-500">
-                    引用来源（均为已审核发布）：
-                    {answer.sources
-                      .map((source) => `${source.title} v${source.version}`)
-                      .join("、")}
-                  </p>
-                  {answer.sources.flatMap((source) => source.images ?? []).length > 0 && (
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {answer.sources.flatMap((source) => source.images ?? []).map((image) => (
-                        <img
-                          key={image.id}
-                          src={imageUrls[image.id] ?? ""}
-                          alt="Knowledge source image"
-                          className="aspect-video w-full rounded-md border border-slate-200 object-cover"
-                          loading="lazy"
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="m-0 px-5 pb-8 text-sm text-slate-500">
-              答案只来自当前账号可见的已发布资源。
+            <p className="mb-0 mt-3">
+              练习可以重复进行；学习进度以当前题目版本的最新一次结果为准。
             </p>
-          )}
+          </div>
         </section>
       </div>
     </main>

@@ -29,7 +29,7 @@ async fn patch_case_status_requires_commander_and_enforces_the_state_machine() {
         test::TestRequest::patch()
             .uri(&format!("/api/cases/{case_id}/status"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {family_token}")))
-            .set_json(serde_json::json!({ "status": "resolved" }))
+            .set_json(serde_json::json!({ "status": "ended", "reason": "结束搜寻" }))
             .to_request(),
     )
     .await;
@@ -39,19 +39,22 @@ async fn patch_case_status_requires_commander_and_enforces_the_state_machine() {
         test::TestRequest::patch()
             .uri(&format!("/api/cases/{case_id}/status"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {volunteer_token}")))
-            .set_json(serde_json::json!({ "status": "resolved" }))
+            .set_json(serde_json::json!({ "status": "ended", "reason": "结束搜寻" }))
             .to_request(),
     )
     .await;
     assert_error(volunteer_forbidden, StatusCode::FORBIDDEN, "forbidden").await;
 
-    for expected_status in ["resolved", "active", "closed", "closed"] {
+    for expected_status in ["ended", "reviewing", "active", "ended"] {
         let response = test::call_service(
             &app,
             test::TestRequest::patch()
                 .uri(&format!("/api/cases/{case_id}/status"))
                 .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
-                .set_json(serde_json::json!({ "status": expected_status }))
+                .set_json(serde_json::json!({
+                    "status": expected_status,
+                    "reason": "fixture controlled re-open",
+                }))
                 .to_request(),
         )
         .await;
@@ -64,7 +67,7 @@ async fn patch_case_status_requires_commander_and_enforces_the_state_machine() {
         test::TestRequest::patch()
             .uri(&format!("/api/cases/{case_id}/status"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
-            .set_json(serde_json::json!({ "status": "active" }))
+            .set_json(serde_json::json!({ "status": "archived" }))
             .to_request(),
     )
     .await;
@@ -100,10 +103,9 @@ async fn patch_case_status_requires_commander_and_enforces_the_state_machine() {
         })
         .collect();
     for (from, to) in [
-        ("active", "resolved"),
-        ("resolved", "active"),
-        ("active", "closed"),
-        ("closed", "closed"),
+        ("active", "ended"),
+        ("ended", "reviewing"),
+        ("reviewing", "active"),
     ] {
         assert!(
             transitions

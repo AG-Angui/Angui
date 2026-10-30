@@ -104,7 +104,11 @@ describe("apiBlobRequest", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      apiBlobRequest("/intake-sessions/intake-1/photos/photo-1", {}, "test-session"),
+      apiBlobRequest(
+        "/intake-sessions/intake-1/photos/photo-1",
+        {},
+        "test-session",
+      ),
     ).resolves.toMatchObject({ type: "image/png" });
 
     expect(fetchMock).toHaveBeenCalledWith(

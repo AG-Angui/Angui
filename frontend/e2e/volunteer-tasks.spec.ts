@@ -34,7 +34,9 @@ test("a volunteer can apply for an open task and the application is persisted", 
     taskCard.getByRole("heading", { name: task.title }),
   ).toBeVisible();
   await taskCard.getByRole("button", { name: "申请协作" }).click();
-  await expect(page.getByText("任务申请已提交，等待指挥人员审核。")).toBeVisible();
+  await expect(
+    page.getByText("任务申请已提交，等待指挥人员审核。"),
+  ).toBeVisible();
 
   const commanderToken = await tokenFor(request, accounts.commander);
   const applications = (await apiGet(
@@ -43,8 +45,6 @@ test("a volunteer can apply for an open task and the application is persisted", 
     `/api/tasks/${task.taskId}/applications`,
   )) as Array<{ volunteer_user_id: string; status: string }>;
   expect(applications).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ status: "pending" }),
-    ]),
+    expect.arrayContaining([expect.objectContaining({ status: "pending" })]),
   );
 });

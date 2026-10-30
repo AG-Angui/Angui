@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Download backend artifact
@@ -98,6 +98,8 @@ jobs:
           PREVIEW_HOST: ${{ steps.preview.outputs.host }}
           PREVIEW_ORIGIN: ${{ steps.preview.outputs.origin }}
           PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
+          PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'https' }}
+          PREVIEW_PUBLIC_IP: ${{ vars.PREVIEW_PUBLIC_IP }}
           PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
           PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
@@ -140,9 +142,13 @@ jobs:
           | --- | --- |
           | Family | \`family@demo.invalid\` |
           | Commander | \`commander@demo.invalid\` |
+          | Commander 2 | \`commander2@demo.invalid\` |
           | Volunteer | \`volunteer@demo.invalid\` |
+          | Volunteer 2 | \`volunteer2@demo.invalid\` |
+          | Volunteer 3 | \`volunteer3@demo.invalid\` |
           | Learner | \`learner@demo.invalid\` |
           | Administrator | \`admin@demo.invalid\` |
+          | Administrator 2 | \`admin2@demo.invalid\` |
 
           > These accounts and all preview data belong only to this deployment. The next preview deployment resets the SQLite database and invalidates these credentials.
           EOF

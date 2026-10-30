@@ -1,0 +1,1 @@
+ALTER TABLE voice_clue_candidates DROP COLUMN returned_for_revision;

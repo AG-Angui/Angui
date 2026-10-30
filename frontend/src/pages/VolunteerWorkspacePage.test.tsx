@@ -199,11 +199,23 @@ describe("VolunteerWorkspacePage", () => {
         : Promise.resolve(detail),
     );
     mocked.getCaseSummary.mockResolvedValue(summary);
-    mocked.listVolunteerPublishedSummaryVersions.mockResolvedValue({ items: [] });
-    mocked.listCaseTasks.mockResolvedValue({ items: [], page: 1, page_size: 25, total: 0 });
+    mocked.listVolunteerPublishedSummaryVersions.mockResolvedValue({
+      items: [],
+    });
+    mocked.listCaseTasks.mockResolvedValue({
+      items: [],
+      page: 1,
+      page_size: 25,
+      total: 0,
+    });
 
     render(<VolunteerWorkspacePage />);
 
-    expect(await screen.findByText("collaboration-space-case-volunteer")).toBeVisible();
-    expect(screen.getByText("部分案件暂时无法加载，其他案件仍可正常协作。")).toBeVisible();
-  });});
+    expect(
+      await screen.findByText("collaboration-space-case-volunteer"),
+    ).toBeVisible();
+    expect(
+      screen.getByText("部分案件暂时无法加载，其他案件仍可正常协作。"),
+    ).toBeVisible();
+  });
+});

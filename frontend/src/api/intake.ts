@@ -193,7 +193,10 @@ export function getIntakeSession(
   return apiRequest<IntakeSession>(`/intake-sessions/${sessionId}`, {}, token);
 }
 
-export function listIntakePhotos(token: string, sessionId: string): Promise<IntakePhoto[]> {
+export function listIntakePhotos(
+  token: string,
+  sessionId: string,
+): Promise<IntakePhoto[]> {
   return apiRequest(`/intake-sessions/${sessionId}/photos`, {}, token);
 }
 
@@ -204,7 +207,11 @@ export function uploadIntakePhoto(
 ): Promise<IntakePhoto> {
   const body = new FormData();
   body.append("file", file);
-  return apiRequest(`/intake-sessions/${sessionId}/photos`, { method: "POST", body }, token);
+  return apiRequest(
+    `/intake-sessions/${sessionId}/photos`,
+    { method: "POST", body },
+    token,
+  );
 }
 
 export function downloadIntakePhoto(
@@ -212,7 +219,11 @@ export function downloadIntakePhoto(
   sessionId: string,
   photoId: string,
 ): Promise<Blob> {
-  return apiBlobRequest(`/intake-sessions/${sessionId}/photos/${photoId}`, {}, token);
+  return apiBlobRequest(
+    `/intake-sessions/${sessionId}/photos/${photoId}`,
+    {},
+    token,
+  );
 }
 
 export function deleteIntakePhoto(
@@ -234,7 +245,11 @@ export function replaceIntakePhoto(
 ): Promise<IntakePhoto> {
   const body = new FormData();
   body.append("file", file);
-  return apiRequest(`/intake-sessions/${sessionId}/photos/${photoId}`, { method: "PUT", body }, token);
+  return apiRequest(
+    `/intake-sessions/${sessionId}/photos/${photoId}`,
+    { method: "PUT", body },
+    token,
+  );
 }
 
 export function setPrimaryIntakePhoto(

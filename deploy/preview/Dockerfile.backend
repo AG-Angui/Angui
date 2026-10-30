@@ -6,7 +6,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl libde265-0 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 angui \
-    && install -d -o angui -g angui /app/data
+    && install -d -o angui -g angui /app/data /app/data/audio
 
 WORKDIR /app
 COPY --chmod=0755 .preview/backend/angui /usr/local/bin/angui
@@ -17,6 +17,7 @@ ENV ANGUI_HOST=0.0.0.0 \
     ANGUI_PORT=8080 \
     ANGUI_FRONTEND_ORIGIN=http://localhost:8080 \
     DATABASE_URL=sqlite://data/angui.db?mode=rwc \
+    ANGUI_AUDIO_STORAGE_DIRECTORY=/app/data/audio \
     RUST_LOG=info
 
 USER angui

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX idx_knowledge_items_previous_version_unique ON knowledge_items(previous_version_id);

@@ -29,7 +29,7 @@ export namespace AMap {
 
   // 地图类
   interface MapOptions {
-    viewMode?: '2D' | '3D';
+    viewMode?: "2D" | "3D";
     zoom?: number;
     center?: [number, number] | LngLat;
     pitch?: number;

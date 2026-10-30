@@ -39,7 +39,8 @@ vi.mock("../api/learning", () => ({
   transitionManagedLearningQuestion: vi.fn(),
   createManagedLearningResource: vi.fn(),
   createManagedLearningQuestion: vi.fn(),
-  listKnowledgeBases: (...args: unknown[]) => mocked.listKnowledgeBases(...args),
+  listKnowledgeBases: (...args: unknown[]) =>
+    mocked.listKnowledgeBases(...args),
   createKnowledgeBase: vi.fn(),
   previewKnowledgeImport: vi.fn(),
   confirmKnowledgeImport: vi.fn(),
@@ -120,13 +121,19 @@ describe("LearningGovernancePage", () => {
       ...submittedResource("admin-2"),
       id: "resource-original",
       title: "原始来源",
-      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+      lifecycle: {
+        ...submittedResource("admin-2").lifecycle,
+        state: "published",
+      },
     };
     const otherSource = {
       ...submittedResource("admin-2"),
       id: "resource-other",
       title: "其他来源",
-      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+      lifecycle: {
+        ...submittedResource("admin-2").lifecycle,
+        state: "published",
+      },
     };
     mocked.listResources.mockResolvedValue([originalSource, otherSource]);
     mocked.listQuestions.mockResolvedValue([
@@ -152,7 +159,9 @@ describe("LearningGovernancePage", () => {
       target: { value: "question-original" },
     });
 
-    expect(screen.getByRole("option", { name: "原始来源" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "原始来源" }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("option", { name: "其他来源" }),
     ).not.toBeInTheDocument();
@@ -163,13 +172,19 @@ describe("LearningGovernancePage", () => {
       ...submittedResource("admin-2"),
       id: "resource-original",
       title: "Original source",
-      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+      lifecycle: {
+        ...submittedResource("admin-2").lifecycle,
+        state: "published",
+      },
     };
     const otherSource = {
       ...submittedResource("admin-2"),
       id: "resource-other",
       title: "Other source",
-      lifecycle: { ...submittedResource("admin-2").lifecycle, state: "published" },
+      lifecycle: {
+        ...submittedResource("admin-2").lifecycle,
+        state: "published",
+      },
     };
     mocked.listResources.mockResolvedValue([originalSource, otherSource]);
     mocked.listQuestions.mockResolvedValue([

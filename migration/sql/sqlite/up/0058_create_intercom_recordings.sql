@@ -1,0 +1,3 @@
+CREATE TABLE intercom_recordings (id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES collaboration_spaces(id) ON DELETE CASCADE, case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id), object_key TEXT NOT NULL UNIQUE, source_content_type TEXT NOT NULL, final_content_type TEXT NOT NULL, byte_size INTEGER NOT NULL CHECK (byte_size > 0), started_at TEXT NOT NULL, ended_at TEXT NOT NULL, transcription_status TEXT NOT NULL CHECK (transcription_status IN ('queued','processing','completed','failed')), created_at TEXT NOT NULL, failed_reason TEXT NULL);
+-- statement-break
+CREATE INDEX idx_intercom_recordings_space_created ON intercom_recordings(space_id, created_at);

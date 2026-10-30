@@ -98,6 +98,12 @@ pub struct CreateSpaceMessageRequest {
     pub message_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgeSpaceMessageRequest {
+    pub status: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SpaceMessageResponse {
     pub id: String,
@@ -146,6 +152,8 @@ pub struct LearningResourceQuery {
     pub resource_type: Option<String>,
     pub tag: Option<String>,
     pub category_id: Option<String>,
+    /// Keyword query against the governed knowledge title, body, category and tags.
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +204,8 @@ pub struct LearningQuestionResponse {
     pub difficulty: String,
     pub tags: Vec<String>,
     pub options: Value,
+    /// Public, renderer-facing question data. It never contains the answer key.
+    pub definition: Value,
     pub source_resource_id: String,
     pub previous_version_id: Option<String>,
     pub version: i32,
@@ -204,15 +214,42 @@ pub struct LearningQuestionResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmitLearningAnswerRequest {
-    pub selected_option_id: String,
+    /// Compatibility input for the original single-choice endpoint.
+    pub selected_option_id: Option<String>,
+    /// Type-specific answer data. New clients must use this field.
+    pub answer_payload: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SubmitLearningAnswerResponse {
     pub question_id: String,
     pub is_correct: bool,
+    pub score: i32,
+    pub max_score: i32,
     pub explanation: String,
     pub source: LearningAnswerSource,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningAnswerHistoryResponse {
+    pub id: String,
+    pub question_id: String,
+    pub selected_option_id: String,
+    pub is_correct: bool,
+    pub score: i32,
+    pub max_score: i32,
+    pub question_version: i32,
+    pub question_snapshot: Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningProgressResponse {
+    pub answered_questions: u64,
+    pub total_answers: u64,
+    pub correct_answers: u64,
+    pub accuracy: f64,
+    pub latest_answered_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,6 +263,8 @@ pub struct LearningAnswerSource {
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeAskRequest {
     pub question: String,
+    pub category: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,6 +303,32 @@ pub struct KnowledgeBaseResponse {
     pub updated_at: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateKnowledgeTermRequest {
+    /// Controlled vocabulary kind. Only `category` and `tag` are accepted.
+    pub kind: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeTermResponse {
+    pub id: String,
+    pub knowledge_base_id: String,
+    pub kind: String,
+    pub name: String,
+    pub status: String,
+    pub created_by_user_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeTermTransitionRequest {
+    pub reason: String,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeImageInput {
@@ -285,6 +350,16 @@ pub struct KnowledgeImageResponse {
     pub metadata: Value,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeAttachmentResponse {
+    pub id: String,
+    pub file_name: String,
+    pub storage_path: String,
+    pub mime_type: String,
+    pub byte_size: i64,
+    pub created_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateKnowledgeItemRequest {
@@ -300,6 +375,8 @@ pub struct CreateKnowledgeItemRequest {
     pub source_name: Option<String>,
     pub source_url: Option<String>,
     pub visibility: String,
+    /// Existing governed item when this draft is a correction version.
+    pub previous_version_id: Option<String>,
     #[serde(default)]
     pub images: Vec<KnowledgeImageInput>,
 }
@@ -317,6 +394,12 @@ pub struct UpdateKnowledgeItemRequest {
     pub source_url: Option<String>,
     pub visibility: Option<String>,
     pub images: Option<Vec<KnowledgeImageInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeTransitionRequest {
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -390,7 +473,11 @@ pub struct KnowledgeSearchResultResponse {
     pub source_name: String,
     pub source_url: Option<String>,
     pub images: Vec<KnowledgeImageResponse>,
+    pub attachments: Vec<KnowledgeAttachmentResponse>,
     pub status: String,
+    /// Fields that contributed to the keyword match. This is intentionally
+    /// returned by the server so the UI does not have to guess.
+    pub matched_fields: Vec<String>,
 }
 #[derive(Debug, Serialize)]
 pub struct KnowledgeSearchResponse {
@@ -402,6 +489,8 @@ pub struct KnowledgeSearchResponse {
 pub struct KnowledgeChatRequest {
     pub query: String,
     pub limit: Option<u32>,
+    pub category: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -465,6 +554,8 @@ pub struct CreateLearningQuestionRequest {
     pub tags: Vec<String>,
     pub options: Value,
     pub correct_option_id: String,
+    #[serde(default)]
+    pub supplemental_resource_ids: Vec<String>,
     pub explanation: String,
     pub previous_version_id: Option<String>,
     pub visibility: String,
@@ -510,6 +601,8 @@ pub struct ManagedLearningResourceResponse {
 pub struct ManagedLearningQuestionResponse {
     #[serde(flatten)]
     pub question: LearningQuestionResponse,
+    /// Only governance endpoints expose the answer key.
+    pub answer_key: Value,
     pub lifecycle: LearningContentLifecycleResponse,
 }
 
@@ -664,6 +757,7 @@ pub struct DeidentifyArchiveDraftRequest {
 pub struct ReviewArchiveDraftRequest {
     pub action: String,
     pub reason: String,
+    pub confirm_retention: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1179,6 +1273,9 @@ impl IntakePhaseProgress {
 #[serde(deny_unknown_fields)]
 pub struct UpdateCaseStatusRequest {
     pub status: String,
+    /// Required when a commander re-opens a case after it has ended.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1217,6 +1314,18 @@ pub struct CreateClueRequest {
     pub location_text: Option<String>,
     #[serde(default)]
     pub location_precision: Option<String>,
+    #[serde(default)]
+    pub location_kind: Option<String>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub location_radius_meters: Option<f64>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<String>,
     #[serde(default)]
     pub next_action: Option<String>,
     #[serde(default)]
@@ -1460,6 +1569,13 @@ pub struct ClueResponse {
     pub confirmed_at: Option<String>,
     pub location_text: Option<String>,
     pub location_precision: Option<String>,
+    pub location_kind: Option<String>,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub location_radius_meters: Option<f64>,
+    pub visibility: Option<String>,
+    pub confidence: Option<String>,
+    pub legacy_case_place_id: Option<String>,
     pub next_action: Option<String>,
     pub linked_task_reference: Option<String>,
     pub related_clue_id: Option<String>,
@@ -1546,6 +1662,75 @@ pub struct TaskListResponse {
 #[derive(Debug, Serialize)]
 pub struct CaseMapViewResponse {
     pub items: Vec<CaseMapItem>,
+    #[serde(default)]
+    pub areas: Vec<CaseMapAreaResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MapAreaVertexResponse {
+    pub vertex_order: i32,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseMapAreaResponse {
+    pub id: String,
+    pub case_id: String,
+    pub area_type: String,
+    pub status: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub version: i32,
+    pub vertices: Vec<MapAreaVertexResponse>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapAreaVertexInput {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCaseMapAreaRequest {
+    pub area_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub vertices: Vec<MapAreaVertexInput>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateCaseMapAreaRequest {
+    pub expected_version: i32,
+    pub area_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub vertices: Vec<MapAreaVertexInput>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewCaseMapAreaRequest {
+    pub expected_version: i32,
+    pub action: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1845,6 +2030,7 @@ pub struct ArchiveDraftResponse {
     pub version: i32,
     pub usage_scope: String,
     pub retention_status: String,
+    pub knowledge_item_id: Option<String>,
     pub deidentified_at: Option<String>,
     pub reviewed_at: Option<String>,
     pub created_at: String,
@@ -2032,6 +2218,13 @@ impl ClueResponse {
             confirmed_at: model.confirmed_at,
             location_text: model.location_text,
             location_precision: model.location_precision,
+            location_kind: model.location_kind,
+            longitude: model.longitude,
+            latitude: model.latitude,
+            location_radius_meters: model.location_radius_meters,
+            visibility: model.visibility,
+            confidence: model.confidence,
+            legacy_case_place_id: model.legacy_case_place_id,
             next_action: model.next_action,
             linked_task_reference: model.linked_task_reference,
             related_clue_id: model.related_clue_id,

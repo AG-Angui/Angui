@@ -4,6 +4,7 @@ import {
   render as renderUi,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
@@ -546,9 +547,17 @@ describe("CaseWorkspacePage", () => {
       "href",
       "#case-clues",
     );
-    expect(await screen.findByText("Fictional market")).toBeInTheDocument();
-    expect(screen.getByText("North gate, fictional park")).toBeInTheDocument();
-    expect(screen.getByText("仅文字地点")).toBeInTheDocument();
+    const mapSituation = screen.getByLabelText("地图态势与文字降级");
+    expect(
+      await within(mapSituation).findByRole("heading", {
+        level: 4,
+        name: "Fictional market",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(mapSituation).getByText("North gate, fictional park"),
+    ).toBeInTheDocument();
+    expect(within(mapSituation).getByText("仅文字地点")).toBeInTheDocument();
     expect(mocked.getCaseMapView).toHaveBeenCalledWith(
       "test-session",
       "case-command",

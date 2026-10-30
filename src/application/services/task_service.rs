@@ -84,7 +84,10 @@ pub async fn create_task(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
-    if case.status == "closed" {
+    if matches!(
+        case.status.as_str(),
+        "ended" | "reviewing" | "archived" | "resolved" | "closed"
+    ) {
         return Err(ApiError::Conflict(
             "tasks cannot be created for a closed case".to_owned(),
         ));
@@ -341,6 +344,15 @@ pub async fn get_task_navigation(
     task_id: &str,
 ) -> Result<TaskNavigationResponse, ApiError> {
     let task = load_task_for_assignee_or_commander(db, auth, task_id).await?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" || is_terminal_status(&task.status) {
+        return Err(ApiError::Conflict(
+            "navigation is unavailable for a finished case or task".to_owned(),
+        ));
+    }
     let coordinate_note = if task.latitude.is_some() && task.longitude.is_some() {
         "任务点坐标仅在受限任务卡内可见；因当前任务坐标未声明坐标系，服务不会生成可能偏移的第三方导航链接。"
     } else {
@@ -411,6 +423,15 @@ pub async fn update_task_status(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" {
+        return Err(ApiError::Conflict(
+            "task actions are unavailable for a non-active case".to_owned(),
+        ));
+    }
     let case_role = require_case_role(
         &transaction,
         &auth.id,
@@ -499,6 +520,15 @@ pub async fn submit_location_report(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" {
+        return Err(ApiError::Conflict(
+            "location reports are unavailable for a non-active case".to_owned(),
+        ));
+    }
     let case_role = require_case_role(
         &transaction,
         &auth.id,
@@ -752,6 +782,15 @@ pub async fn review_task_application(
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
+    let case = cases::Entity::find_by_id(&task.case_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("case was not found".to_owned()))?;
+    if case.status != "active" || is_terminal_status(&task.status) {
+        return Err(ApiError::Conflict(
+            "task applications cannot be reviewed after the case or task ends".to_owned(),
+        ));
+    }
     require_task_reviewer(&transaction, auth, &task.case_id).await?;
     let application = task_applications::Entity::find_by_id(application_id)
         .one(&transaction)
@@ -961,6 +1000,14 @@ pub async fn submit_task_feedback(
         confirmed_at: Set(None),
         location_text: Set(request.location_text),
         location_precision: Set(request.location_precision),
+        location_kind: Set(None),
+        longitude: Set(None),
+        latitude: Set(None),
+        location_radius_meters: Set(None),
+        visibility: Set(None),
+        confidence: Set(None),
+        created_by_user_id: Set(Some(auth.id.clone())),
+        legacy_case_place_id: Set(None),
         next_action: Set(None),
         linked_task_reference: Set(Some(task.id.clone())),
         related_clue_id: Set(None),

@@ -12,6 +12,8 @@ pub struct Model {
     pub tags_json: String,
     pub options_json: String,
     pub correct_option_id: String,
+    pub definition_json: Option<String>,
+    pub answer_key_json: Option<String>,
     pub explanation: String,
     pub previous_version_id: Option<String>,
     pub version: i32,

@@ -20,6 +20,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
                     web::get().to(public_prevention_card),
                 )
                 .route("/resources", web::get().to(list_resources))
+                .route("/resources/search", web::get().to(search_resources))
+                .route("/resources/{resource_id}", web::get().to(get_resource))
                 .route("/resources/drafts", web::post().to(submit_resource_draft))
                 .route("/categories", web::get().to(list_enabled_categories))
                 .route("/categories/proposals", web::post().to(propose_category))
@@ -27,7 +29,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route(
                     "/questions/{question_id}/answers",
                     web::post().to(submit_answer),
-                ),
+                )
+                .route("/answers", web::get().to(list_answers))
+                .route("/wrong-answers", web::get().to(list_wrong_answers))
+                .route("/progress", web::get().to(get_progress)),
         )
         .service(
             web::scope("/admin/learning")
@@ -104,6 +109,33 @@ async fn list_resources(
     Ok(HttpResponse::Ok()
         .json(learning_service::list_resources(&state.db, &auth, query.into_inner()).await?))
 }
+async fn search_resources(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    query: web::Query<crate::models::LearningResourceQuery>,
+) -> Result<HttpResponse, ApiError> {
+    let query = query.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::knowledge_service::search_learning_materials(
+            &state.db,
+            &auth,
+            query.query.as_deref(),
+            query.category_id.as_deref(),
+            query.tag.as_deref(),
+        )
+        .await?,
+    ))
+}
+async fn get_resource(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    resource_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(
+        crate::services::knowledge_service::get_learning_material(&state.db, &auth, &resource_id)
+            .await?,
+    ))
+}
 
 async fn list_enabled_categories(
     auth: AuthenticatedUser,
@@ -157,8 +189,31 @@ async fn ask_knowledge(
     state: web::Data<AppState>,
     request: web::Json<KnowledgeAskRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok()
-        .json(learning_service::ask_knowledge(&state.db, &auth, request.into_inner()).await?))
+    Ok(HttpResponse::Ok().json(
+        learning_service::ask_knowledge(&state.db, &auth, request.into_inner(), &state.ai_gateway)
+            .await?,
+    ))
+}
+
+async fn list_answers(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::list_answer_history(&state.db, &auth).await?))
+}
+
+async fn list_wrong_answers(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::list_wrong_answers(&state.db, &auth).await?))
+}
+
+async fn get_progress(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok().json(learning_service::get_progress(&state.db, &auth).await?))
 }
 
 async fn list_managed_resources(
