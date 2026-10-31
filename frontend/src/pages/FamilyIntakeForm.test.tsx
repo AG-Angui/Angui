@@ -51,13 +51,13 @@ vi.mock("../api/intake", () => ({
   listIntakeDraftVersions: (...args: unknown[]) =>
     mocked.listIntakeDraftVersions(...args),
   listIntakePhotos: (...args: unknown[]) => mocked.listIntakePhotos(...args),
-  downloadIntakePhoto: (...args: unknown[]) => mocked.downloadIntakePhoto(...args),
+  downloadIntakePhoto: (...args: unknown[]) =>
+    mocked.downloadIntakePhoto(...args),
   acknowledgeIntakeAiInitialReview: (...args: unknown[]) =>
     mocked.acknowledgeIntakeAiInitialReview(...args),
   startIntakeAiInitialReview: (...args: unknown[]) =>
     mocked.startIntakeAiInitialReview(...args),
-  reviewIntakeDraft: (...args: unknown[]) =>
-    mocked.reviewIntakeDraft(...args),
+  reviewIntakeDraft: (...args: unknown[]) => mocked.reviewIntakeDraft(...args),
   restoreIntakeDraft: (...args: unknown[]) =>
     mocked.restoreIntakeDraft(...args),
   submitIntakeAnswer: (...args: unknown[]) =>
@@ -240,7 +240,9 @@ describe("FamilyIntakeForm", () => {
     mocked.listIntakeAnswerRevisions.mockResolvedValue([]);
     mocked.listIntakeDraftVersions.mockResolvedValue({ items: [] });
     mocked.listIntakePhotos.mockResolvedValue([]);
-    mocked.downloadIntakePhoto.mockResolvedValue(new Blob(["preview"], { type: "image/png" }));
+    mocked.downloadIntakePhoto.mockResolvedValue(
+      new Blob(["preview"], { type: "image/png" }),
+    );
     window.sessionStorage.clear();
   });
 
@@ -475,7 +477,10 @@ describe("FamilyIntakeForm", () => {
     );
 
     const input = await screen.findByLabelText("上传走失者照片");
-    expect(input).toHaveAttribute("accept", "image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif");
+    expect(input).toHaveAttribute(
+      "accept",
+      "image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif",
+    );
     const createObjectUrl = vi.fn(() => "blob:controlled-preview");
     const revokeObjectUrl = vi.fn();
     Object.defineProperty(URL, "createObjectURL", {
@@ -486,7 +491,9 @@ describe("FamilyIntakeForm", () => {
       configurable: true,
       value: revokeObjectUrl,
     });
-    const file = new File(["portrait"], "portrait.png", { type: "image/x-png" });
+    const file = new File(["portrait"], "portrait.png", {
+      type: "image/x-png",
+    });
     fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() =>
@@ -496,9 +503,17 @@ describe("FamilyIntakeForm", () => {
         file,
       ),
     );
-    expect(await screen.findByText(/已上传：portrait\.png/)).toBeInTheDocument();
-    expect(await screen.findByRole("img", { name: "已上传照片：portrait.png" })).toHaveAttribute("src", "blob:controlled-preview");
-    expect(mocked.downloadIntakePhoto).toHaveBeenCalledWith("family-session", "intake-1", "photo-1");
+    expect(
+      await screen.findByText(/已上传：portrait\.png/),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("img", { name: "已上传照片：portrait.png" }),
+    ).toHaveAttribute("src", "blob:controlled-preview");
+    expect(mocked.downloadIntakePhoto).toHaveBeenCalledWith(
+      "family-session",
+      "intake-1",
+      "photo-1",
+    );
   });
 
   it.each([
@@ -540,7 +555,11 @@ describe("FamilyIntakeForm", () => {
     const nextSession: IntakeSession = {
       ...reportDetailsSession,
       completed_phase_one_fields: ["basic_information", "last_seen"],
-      missing_phase_one_fields: ["suspicious_motive", "police_report_status", "family_phone"],
+      missing_phase_one_fields: [
+        "suspicious_motive",
+        "police_report_status",
+        "family_phone",
+      ],
       next_question: {
         field: "suspicious_motive",
         prompt: "请描述走失原因或可疑情况。",
@@ -579,7 +598,9 @@ describe("FamilyIntakeForm", () => {
       ),
     );
     await waitFor(() => {
-      const stored = window.sessionStorage.getItem("angui:intake-tab-draft:family-1");
+      const stored = window.sessionStorage.getItem(
+        "angui:intake-tab-draft:family-1",
+      );
       expect(stored).not.toBeNull();
       expect(JSON.parse(stored ?? "{}").session.question_set_version).toBe(3);
     });
@@ -625,47 +646,52 @@ describe("FamilyIntakeForm", () => {
       },
       "13800138000",
     ],
-  ])("does not request AI follow-up for required %s", async (label, session, answer) => {
-    window.sessionStorage.setItem(
-      "angui:intake-tab-draft:family-1",
-      JSON.stringify({ session, answer: "" }),
-    );
-    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(session));
+  ])(
+    "does not request AI follow-up for required %s",
+    async (label, session, answer) => {
+      window.sessionStorage.setItem(
+        "angui:intake-tab-draft:family-1",
+        JSON.stringify({ session, answer: "" }),
+      );
+      mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(session));
 
-    render(
-      <FamilyIntakeForm
-        onCancel={vi.fn()}
-        onConfirmed={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
+      render(
+        <FamilyIntakeForm
+          onCancel={vi.fn()}
+          onConfirmed={vi.fn().mockResolvedValue(undefined)}
+        />,
+      );
 
-    if (label === "police-report status") {
-      fireEvent.change(await screen.findByRole("combobox"), {
-        target: { value: answer },
-      });
-    } else {
-      fireEvent.change(await screen.findByRole("textbox"), {
-        target: { value: answer },
-      });
-    }
-    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+      if (label === "police-report status") {
+        fireEvent.change(await screen.findByRole("combobox"), {
+          target: { value: answer },
+        });
+      } else {
+        fireEvent.change(await screen.findByRole("textbox"), {
+          target: { value: answer },
+        });
+      }
+      fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
 
-    await waitFor(() =>
-      expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
-        "family-session",
-        "intake-1",
-        expect.objectContaining({ field: session.next_question?.field }),
-      ),
-    );
-    expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
-  });
+      await waitFor(() =>
+        expect(mocked.submitIntakeAnswer).toHaveBeenCalledWith(
+          "family-session",
+          "intake-1",
+          expect.objectContaining({ field: session.next_question?.field }),
+        ),
+      );
+      expect(mocked.getIntakeAiFollowUp).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps AI follow-up for an optional phase-two clue", async () => {
     window.sessionStorage.setItem(
       "angui:intake-tab-draft:family-1",
       JSON.stringify({ session: phaseTwoSession, answer: "" }),
     );
-    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(phaseTwoSession));
+    mocked.submitIntakeAnswer.mockResolvedValue(
+      answerResponse(phaseTwoSession),
+    );
 
     render(
       <FamilyIntakeForm
@@ -699,8 +725,12 @@ describe("FamilyIntakeForm", () => {
       "angui:intake-tab-draft:family-1",
       JSON.stringify({ session: phaseTwoSession, answer: "" }),
     );
-    mocked.submitIntakeAnswer.mockResolvedValue(answerResponse(phaseTwoSession));
-    mocked.getIntakeAiFollowUp.mockRejectedValue(new Error("AI guidance unavailable"));
+    mocked.submitIntakeAnswer.mockResolvedValue(
+      answerResponse(phaseTwoSession),
+    );
+    mocked.getIntakeAiFollowUp.mockRejectedValue(
+      new Error("AI guidance unavailable"),
+    );
 
     render(
       <FamilyIntakeForm
@@ -741,7 +771,9 @@ describe("FamilyIntakeForm", () => {
 
     await screen.findByRole("heading", { name: "最后出现情况" });
     expect(screen.queryByLabelText("上传走失者照片")).not.toBeInTheDocument();
-    expect(screen.queryByText("创建案件前必须至少上传一张照片。")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("创建案件前必须至少上传一张照片。"),
+    ).not.toBeInTheDocument();
   });
 
   it("rejects a non-image portrait before calling the upload API", async () => {
@@ -759,11 +791,19 @@ describe("FamilyIntakeForm", () => {
 
     const input = await screen.findByLabelText("上传走失者照片");
     fireEvent.change(input, {
-      target: { files: [new File(["not an image"], "report.txt", { type: "text/plain" })] },
+      target: {
+        files: [
+          new File(["not an image"], "report.txt", { type: "text/plain" }),
+        ],
+      },
     });
 
     expect(mocked.uploadIntakePhoto).not.toHaveBeenCalled();
-    expect(await screen.findByText("请上传 JPG、PNG 或 HEIC 格式的走失者照片。手机相册导出的照片可直接选择。")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "请上传 JPG、PNG 或 HEIC 格式的走失者照片。手机相册导出的照片可直接选择。",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("omits a blank age from the structured basic-information answer", async () => {
@@ -995,6 +1035,16 @@ describe("FamilyIntakeForm", () => {
         },
       ],
       blocking_assessments: [],
+      reviewed_profile: {
+        display_name: "妯℃嫙鑰佷汉",
+        age: null,
+        gender: null,
+        physical_description: "浣╂埓鐪奸暅锛岀┛钃濊壊澶栧銆?",
+        clothing_description: null,
+        health_notes: "瀹跺睘琛ュ厖锛氳鍔ㄤ笉鍙楅檺",
+        last_seen_at: null,
+        last_seen_location: "妯℃嫙绀惧尯鍖楅棬",
+      },
       generated_at: "2026-07-25T08:10:00Z",
       requires_family_acknowledgement: false,
       ready_for_second_confirmation: true,

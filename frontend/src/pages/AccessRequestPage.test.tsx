@@ -8,8 +8,10 @@ const mocked = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/accessRequests", () => ({
-  createAccessRequest: (...args: unknown[]) => mocked.createAccessRequest(...args),
-  verifyAccessRequest: (...args: unknown[]) => mocked.verifyAccessRequest(...args),
+  createAccessRequest: (...args: unknown[]) =>
+    mocked.createAccessRequest(...args),
+  verifyAccessRequest: (...args: unknown[]) =>
+    mocked.verifyAccessRequest(...args),
 }));
 
 describe("AccessRequestPage", () => {
@@ -31,17 +33,27 @@ describe("AccessRequestPage", () => {
     });
     render(<AccessRequestPage />);
 
-    fireEvent.change(screen.getByLabelText("姓名"), { target: { value: "测试申请人" } });
-    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "applicant@example.invalid" } });
-    fireEvent.change(screen.getByLabelText("期望身份"), { target: { value: "volunteer" } });
+    fireEvent.change(screen.getByLabelText("姓名"), {
+      target: { value: "测试申请人" },
+    });
+    fireEvent.change(screen.getByLabelText("邮箱"), {
+      target: { value: "applicant@example.invalid" },
+    });
+    fireEvent.change(screen.getByLabelText("期望身份"), {
+      target: { value: "volunteer" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "发送验证邮件" }));
 
-    await waitFor(() => expect(mocked.createAccessRequest).toHaveBeenCalledWith({
-      display_name: "测试申请人",
-      email: "applicant@example.invalid",
-      requested_role: "volunteer",
-    }));
-    expect(await screen.findByRole("status")).toHaveTextContent("如果邮箱可以申请访问");
+    await waitFor(() =>
+      expect(mocked.createAccessRequest).toHaveBeenCalledWith({
+        display_name: "测试申请人",
+        email: "applicant@example.invalid",
+        requested_role: "volunteer",
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "如果邮箱可以申请访问",
+    );
     expect(screen.queryByLabelText("验证令牌")).not.toBeInTheDocument();
   });
 
@@ -55,14 +67,24 @@ describe("AccessRequestPage", () => {
 
     render(<AccessRequestPage />);
 
-    await waitFor(() => expect(mocked.verifyAccessRequest).toHaveBeenCalledWith("one-time-token"));
-    expect(await screen.findByRole("status")).toHaveTextContent("邮箱已验证，申请进入人工审核。");
+    await waitFor(() =>
+      expect(mocked.verifyAccessRequest).toHaveBeenCalledWith("one-time-token"),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "邮箱已验证，申请进入人工审核。",
+    );
     expect(window.location.hash).toBe("");
   });
 
   it("does not expose a raw verification token when the link is invalid", async () => {
-    mocked.verifyAccessRequest.mockRejectedValue(new Error("verification link is invalid or expired"));
-    window.history.replaceState({}, "", "/#access-verify=secret-token-must-not-render");
+    mocked.verifyAccessRequest.mockRejectedValue(
+      new Error("verification link is invalid or expired"),
+    );
+    window.history.replaceState(
+      {},
+      "",
+      "/#access-verify=secret-token-must-not-render",
+    );
 
     render(<AccessRequestPage />);
 
@@ -71,6 +93,8 @@ describe("AccessRequestPage", () => {
         "验证链接无效、已过期或已被使用",
       ),
     );
-    expect(screen.queryByText("secret-token-must-not-render")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("secret-token-must-not-render"),
+    ).not.toBeInTheDocument();
   });
 });

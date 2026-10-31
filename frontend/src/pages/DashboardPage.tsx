@@ -35,6 +35,9 @@ import { ServiceStatus } from "../components/ServiceStatus";
 
 const caseStatusLabels: Record<string, string> = {
   active: "进行中",
+  ended: "已结束",
+  reviewing: "复盘中",
+  archived: "已归档",
   resolved: "已找到",
   closed: "已关闭",
 };
@@ -363,6 +366,7 @@ function ArchiveReviewCard({
   onChanged: (draft: ArchiveDraft) => void;
 }) {
   const [reason, setReason] = useState("");
+  const [retentionConfirmed, setRetentionConfirmed] = useState(false);
   const [deidentifiedMaterial, setDeidentifiedMaterial] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -403,6 +407,7 @@ function ArchiveReviewCard({
       setDiff(null);
       loadMaterials();
       setReason("");
+      setRetentionConfirmed(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "案例草稿审核失败。");
     } finally {
@@ -624,21 +629,54 @@ function ArchiveReviewCard({
                 >
                   驳回
                 </Button>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  isDisabled={busy || !reason.trim()}
-                  onPress={() =>
-                    void action(() =>
-                      reviewArchiveDraft(token!, draft.id, {
-                        action: "publish",
-                        reason,
-                      }),
-                    )
-                  }
-                >
-                  审核发布
-                </Button>
+                {!draft.reviewed_at && (
+                  <label className="flex items-start gap-2 text-xs leading-5 text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={retentionConfirmed}
+                      onChange={(event) =>
+                        setRetentionConfirmed(event.target.checked)
+                      }
+                      className="mt-1"
+                    />
+                    已核对原始材料的保留范围和访问限制
+                  </label>
+                )}
+                {!draft.reviewed_at && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    isDisabled={busy || !reason.trim() || !retentionConfirmed}
+                    onPress={() =>
+                      void action(() =>
+                        reviewArchiveDraft(token!, draft.id, {
+                          action: "approve",
+                          reason,
+                          confirm_retention: true,
+                        }),
+                      )
+                    }
+                  >
+                    审核归档材料
+                  </Button>
+                )}
+                {draft.reviewed_at && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    isDisabled={busy || !reason.trim()}
+                    onPress={() =>
+                      void action(() =>
+                        reviewArchiveDraft(token!, draft.id, {
+                          action: "publish",
+                          reason,
+                        }),
+                      )
+                    }
+                  >
+                    案件归档后发布新人材料
+                  </Button>
+                )}
               </>
             )}
             {draft.status === "published" && (

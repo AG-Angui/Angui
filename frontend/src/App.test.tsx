@@ -11,12 +11,25 @@ const mocked = vi.hoisted(() => ({
   getCase: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listLearningResources: vi.fn().mockResolvedValue([]),
+  listLearningAnswers: vi.fn().mockResolvedValue([]),
+  listWrongLearningAnswers: vi.fn().mockResolvedValue([]),
+  getLearningProgress: vi
+    .fn()
+    .mockResolvedValue({
+      answered_questions: 0,
+      total_answers: 0,
+      correct_answers: 0,
+      accuracy: 0,
+      latest_answered_at: null,
+    }),
+  searchLearningKnowledge: vi.fn().mockResolvedValue({ results: [] }),
   getPublicPreventionCard: vi.fn().mockResolvedValue(null),
   listLearningQuestions: vi.fn().mockResolvedValue([]),
   listLearningCategories: vi.fn().mockResolvedValue([]),
   listManagedLearningResources: vi.fn().mockResolvedValue([]),
   listManagedLearningQuestions: vi.fn().mockResolvedValue([]),
   listManagedLearningCategories: vi.fn().mockResolvedValue([]),
+  listKnowledgeBases: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./auth/useAuth", () => ({ useAuth: () => mocked.auth }));
@@ -38,6 +51,14 @@ vi.mock("./components/ServiceStatus", () => ({
 vi.mock("./api/learning", () => ({
   listLearningResources: (...args: unknown[]) =>
     mocked.listLearningResources(...args),
+  listLearningAnswers: (...args: unknown[]) =>
+    mocked.listLearningAnswers(...args),
+  listWrongLearningAnswers: (...args: unknown[]) =>
+    mocked.listWrongLearningAnswers(...args),
+  getLearningProgress: (...args: unknown[]) =>
+    mocked.getLearningProgress(...args),
+  searchLearningKnowledge: (...args: unknown[]) =>
+    mocked.searchLearningKnowledge(...args),
   getPublicPreventionCard: (...args: unknown[]) =>
     mocked.getPublicPreventionCard(...args),
   listLearningQuestions: (...args: unknown[]) =>
@@ -51,6 +72,15 @@ vi.mock("./api/learning", () => ({
   listManagedLearningCategories: (...args: unknown[]) =>
     mocked.listManagedLearningCategories(...args),
   askKnowledge: vi.fn(),
+  listKnowledgeBases: (...args: unknown[]) =>
+    mocked.listKnowledgeBases(...args),
+  createKnowledgeBase: vi.fn(),
+  previewKnowledgeImport: vi.fn(),
+  confirmKnowledgeImport: vi.fn(),
+  cancelKnowledgeImport: vi.fn(),
+  createKnowledgeItem: vi.fn(),
+  listKnowledgeItems: vi.fn(),
+  transitionKnowledgeItem: vi.fn(),
   submitLearningAnswer: vi.fn(),
 }));
 
@@ -95,14 +125,20 @@ describe("application role routing", () => {
   it("shows the login page without a session", () => {
     setAuth(null);
     renderApp();
-    expect(screen.getByRole("heading", { name: "安归｜身份登录" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "安归｜身份登录" }),
+    ).toBeInTheDocument();
   });
 
   it("exposes the public access request page without a session", () => {
     setAuth(null);
     renderApp("/access-request");
-    expect(screen.getByRole("heading", { name: "申请访问安归" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /发送验证邮件/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "申请访问安归" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /发送验证邮件/ }),
+    ).toBeInTheDocument();
   });
 
   it("shows only operational workspaces that match the account capabilities", async () => {

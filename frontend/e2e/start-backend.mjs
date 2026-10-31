@@ -5,7 +5,11 @@ import { resolve } from "node:path";
 const workspaceRoot = resolve(import.meta.dirname, "../..");
 const e2eDirectory = resolve(workspaceRoot, ".e2e");
 const databaseFile = process.env.ANGUI_E2E_DATABASE_FILE ?? ".e2e/angui-e2e.db";
-const databaseFiles = [databaseFile, `${databaseFile}-shm`, `${databaseFile}-wal`];
+const databaseFiles = [
+  databaseFile,
+  `${databaseFile}-shm`,
+  `${databaseFile}-wal`,
+];
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const debugExecutable = (name) =>
   resolve(workspaceRoot, "target", "debug", `${name}${executableSuffix}`);
@@ -35,7 +39,9 @@ function run(program, args) {
 async function prepareDatabase() {
   await mkdir(e2eDirectory, { recursive: true });
   await Promise.all(
-    databaseFiles.map((file) => rm(resolve(workspaceRoot, file), { force: true })),
+    databaseFiles.map((file) =>
+      rm(resolve(workspaceRoot, file), { force: true }),
+    ),
   );
   await run("cargo", ["build", "--workspace", "--locked", "--bins"]);
   await run(debugExecutable("migration"), ["up"]);

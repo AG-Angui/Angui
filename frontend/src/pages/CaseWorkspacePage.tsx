@@ -90,6 +90,7 @@ import {
 } from "../components/ContentState";
 import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
 import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
+import { ClueMapView } from "../components/ClueMapView";
 import { StatusTag, statusTone } from "../components/StatusTag";
 import { parseOptionalCoordinatePair } from "../coordinateInput";
 import { FamilyIntakeForm } from "./FamilyIntakeForm";
@@ -130,6 +131,9 @@ const workspaceCopy: Record<WorkspaceMode, { context: string; title: string }> =
 
 const statusLabels: Record<string, string> = {
   active: "进行中",
+  ended: "已结束",
+  reviewing: "复盘中",
+  archived: "已归档",
   resolved: "已找到",
   closed: "已关闭",
   pending_review: "待审核",
@@ -293,6 +297,12 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                   href="#case-tasks"
                 >
                   任务与审核
+                </a>
+                <a
+                  className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700"
+                  href="#case-map"
+                >
+                  地图视图
                 </a>
                 <a
                   className="rounded-md px-3 py-2 text-slate-700 hover:bg-brand-50 hover:text-brand-700"
@@ -510,6 +520,10 @@ function CaseDetailView({
   const { token } = useAuth();
   const [clueContent, setClueContent] = useState("");
   const [clueLocation, setClueLocation] = useState("");
+  const [clueCoordinates, setClueCoordinates] = useState<{
+    longitude: number;
+    latitude: number;
+  } | null>(null);
   const [clueOccurredAt, setClueOccurredAt] = useState("");
   const [clueSourceType, setClueSourceType] =
     useState<PublicClueSourceType>("manual_report");
@@ -552,6 +566,7 @@ function CaseDetailView({
   >({});
   const [attachment, setAttachment] = useState<File | null>(null);
   const [nextStatus, setNextStatus] = useState<CaseStatus>(detail.status);
+  const [statusReason, setStatusReason] = useState("");
   const [memberEmail, setMemberEmail] = useState("");
   const [memberRole, setMemberRole] = useState<CaseRole>("volunteer");
   const [busy, setBusy] = useState("");
@@ -568,10 +583,14 @@ function CaseDetailView({
   const placeTypes = resourceConfiguration.case_place_types;
   const statusOptions: CaseStatus[] =
     detail.status === "active"
-      ? ["active", "resolved", "closed"]
-      : detail.status === "resolved"
-        ? ["resolved", "active", "closed"]
-        : ["closed"];
+      ? ["active", "ended"]
+      : detail.status === "ended"
+        ? ["ended", "reviewing", "active"]
+        : detail.status === "reviewing"
+          ? ["reviewing", "archived", "active"]
+          : detail.status === "archived"
+            ? ["archived", "active"]
+            : [detail.status];
 
   const loadClueQueue = useCallback(async () => {
     const requestVersion = queueRequestVersion.current + 1;
@@ -687,7 +706,10 @@ function CaseDetailView({
               <h2 className="m-0 text-xl font-bold text-slate-950">
                 {detail.elder_profile.display_name}
               </h2>
-              <StatusTag tone={statusTone(detail.status)} label={statusLabels[detail.status]} />
+              <StatusTag
+                tone={statusTone(detail.status)}
+                label={statusLabels[detail.status]}
+              />
               {pendingCount > 0 && (
                 <Chip size="sm" variant="soft">
                   <Chip.Label>{pendingCount} 条待审核</Chip.Label>
@@ -704,7 +726,8 @@ function CaseDetailView({
         </div>
       </header>
 
-      {(detail.access_role === "commander" || detail.access_role === "volunteer") && (
+      {(detail.access_role === "commander" ||
+        detail.access_role === "volunteer") && (
         <div className="border-b border-slate-200 px-5 py-4 sm:px-6">
           <CollaborationSpacePanel
             token={token}
@@ -783,6 +806,36 @@ function CaseDetailView({
         {detail.elder_profile.health_notes && (
           <Info label="健康注意" value={detail.elder_profile.health_notes} />
         )}
+        {detail.elder_profile.mobility_notes && (
+          <Info
+            label="行动能力"
+            value={detail.elder_profile.mobility_notes.summary}
+          />
+        )}
+        {detail.elder_profile.transportation_ability && (
+          <Info
+            label="交通工具使用"
+            value={detail.elder_profile.transportation_ability.summary}
+          />
+        )}
+        {detail.elder_profile.frequent_locations && (
+          <Info
+            label="常去地点"
+            value={detail.elder_profile.frequent_locations.summary}
+          />
+        )}
+        {detail.elder_profile.behavior_habits && (
+          <Info
+            label="行为习惯"
+            value={detail.elder_profile.behavior_habits.summary}
+          />
+        )}
+        {detail.elder_profile.suspicious_motive && (
+          <Info
+            label="疑似动机"
+            value={detail.elder_profile.suspicious_motive.summary}
+          />
+        )}
       </section>
 
       {canEditElderProfile && (
@@ -824,7 +877,13 @@ function CaseDetailView({
                   if (!token) return;
                   void run(
                     "status",
-                    () => updateCaseStatus(token, detail.id, nextStatus),
+                    () =>
+                      updateCaseStatus(
+                        token,
+                        detail.id,
+                        nextStatus,
+                        statusReason,
+                      ),
                     "案件状态已更新",
                   );
                 }}
@@ -843,7 +902,11 @@ function CaseDetailView({
                     onChange={(event) =>
                       setNextStatus(event.target.value as CaseStatus)
                     }
-                    disabled={detail.status === "closed"}
+                    disabled={
+                      detail.status === "archived" ||
+                      detail.status === "resolved" ||
+                      detail.status === "closed"
+                    }
                   >
                     {statusOptions.map((status) => (
                       <option key={status} value={status}>
@@ -851,12 +914,31 @@ function CaseDetailView({
                       </option>
                     ))}
                   </select>
+                  {((nextStatus === "active" && detail.status !== "active") ||
+                    nextStatus === "ended") && (
+                    <Input
+                      aria-label="重开理由"
+                      value={statusReason}
+                      maxLength={1000}
+                      placeholder={
+                        nextStatus === "ended"
+                          ? "结束理由（必填）"
+                          : "重开理由（必填）"
+                      }
+                      onChange={(event) => setStatusReason(event.target.value)}
+                    />
+                  )}
                   <Button
                     type="submit"
                     size="sm"
                     variant="secondary"
                     isDisabled={
-                      busy === "status" || nextStatus === detail.status
+                      busy === "status" ||
+                      nextStatus === detail.status ||
+                      (((nextStatus === "active" &&
+                        detail.status !== "active") ||
+                        nextStatus === "ended") &&
+                        !statusReason.trim())
                     }
                   >
                     保存
@@ -928,6 +1010,22 @@ function CaseDetailView({
           <Message tone="error">{error}</Message>
         </div>
       )}
+
+      <section
+        id="case-map"
+        className="px-5 py-5 sm:px-6 border-b border-slate-200"
+        aria-labelledby="map-title"
+      >
+        <h3
+          id="map-title"
+          className="m-0 mb-4 text-base font-bold text-slate-950"
+        >
+          地图视图
+        </h3>
+        <div className="h-[600px]">
+          <ClueMapView caseId={detail.id} token={token} />
+        </div>
+      </section>
 
       <section
         id="case-clues"
@@ -1367,6 +1465,9 @@ function CaseDetailView({
                       occurred_at: toIsoOrNull(clueOccurredAt),
                       location_text: location,
                       location_precision: clueLocationPrecision || null,
+                      location_kind: clueCoordinates ? "point" : null,
+                      longitude: clueCoordinates?.longitude ?? null,
+                      latitude: clueCoordinates?.latitude ?? null,
                       next_action: nullable(clueNextAction),
                       attachment_ids: linkedAttachmentIds,
                     }),
@@ -1375,6 +1476,7 @@ function CaseDetailView({
                   if (succeeded) {
                     setClueContent("");
                     setClueLocation("");
+                    setClueCoordinates(null);
                     setClueOccurredAt("");
                     setClueSourceType("manual_report");
                     setClueRawReference("");
@@ -1400,10 +1502,15 @@ function CaseDetailView({
                   onConfirm={(location) => {
                     setClueLocation(location.address);
                     setClueLocationPrecision(location.precision);
+                    setClueCoordinates({
+                      longitude: location.longitude,
+                      latitude: location.latitude,
+                    });
                   }}
                   onClear={() => {
                     setClueLocation("");
                     setClueLocationPrecision("");
+                    setClueCoordinates(null);
                   }}
                 />
               </div>
@@ -1433,7 +1540,10 @@ function CaseDetailView({
                 <Field label="地点">
                   <Input
                     value={clueLocation}
-                    onChange={(event) => setClueLocation(event.target.value)}
+                    onChange={(event) => {
+                      setClueLocation(event.target.value);
+                      setClueCoordinates(null);
+                    }}
                     fullWidth
                   />
                 </Field>
@@ -2404,6 +2514,7 @@ function TaskBoard({
 const mapObjectLabels: Record<CaseMapItem["object_type"], string> = {
   last_seen: "最后出现信息",
   place: "补充地点",
+  location_clue: "地点线索",
   clue: "已确认线索",
   task: "任务区域",
 };
@@ -2744,7 +2855,10 @@ function CaseCollaborationPanel({
       "workflow" in payload &&
       typeof payload.workflow === "string"
     ) {
-      setActiveAiExecution({ id: payload.execution_id, workflow: payload.workflow });
+      setActiveAiExecution({
+        id: payload.execution_id,
+        workflow: payload.workflow,
+      });
       setAiReviewStage("queued");
     }
     if (event !== "progress" || !("stage" in payload)) return;
@@ -2837,7 +2951,9 @@ function CaseCollaborationPanel({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const raw = window.sessionStorage.getItem(`angui:case-ai-execution:${detail.id}`);
+    const raw = window.sessionStorage.getItem(
+      `angui:case-ai-execution:${detail.id}`,
+    );
     if (!raw) return;
     try {
       const value = JSON.parse(raw) as { id?: unknown; workflow?: unknown };
@@ -2851,7 +2967,8 @@ function CaseCollaborationPanel({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const key = `angui:case-ai-execution:${detail.id}`;
-    if (activeAiExecution) window.sessionStorage.setItem(key, JSON.stringify(activeAiExecution));
+    if (activeAiExecution)
+      window.sessionStorage.setItem(key, JSON.stringify(activeAiExecution));
     else window.sessionStorage.removeItem(key);
   }, [activeAiExecution, detail.id]);
 
@@ -3154,9 +3271,14 @@ function CaseCollaborationPanel({
                       source_reference: null,
                     },
                   );
-                  const created = await createClueDraft(token, detail.id, {
-                    source_record_id: record.id,
-                  }, updateAiReviewStage);
+                  const created = await createClueDraft(
+                    token,
+                    detail.id,
+                    {
+                      source_record_id: record.id,
+                    },
+                    updateAiReviewStage,
+                  );
                   setClueDrafts((current) => [...created, ...current]);
                   setClueDraftText("");
                   setActiveAiExecution(null);
@@ -3998,6 +4120,12 @@ function ElderProfileEditor({
     health_notes: detail.elder_profile.health_notes ?? "",
     last_seen_at: detail.elder_profile.last_seen_at ?? "",
     last_seen_location: detail.elder_profile.last_seen_location ?? "",
+    mobility_notes: detail.elder_profile.mobility_notes?.summary ?? "",
+    transportation_ability:
+      detail.elder_profile.transportation_ability?.summary ?? "",
+    frequent_locations: detail.elder_profile.frequent_locations?.summary ?? "",
+    behavior_habits: detail.elder_profile.behavior_habits?.summary ?? "",
+    suspicious_motive: detail.elder_profile.suspicious_motive?.summary ?? "",
   });
   useEffect(
     () =>
@@ -4013,6 +4141,14 @@ function ElderProfileEditor({
         health_notes: detail.elder_profile.health_notes ?? "",
         last_seen_at: detail.elder_profile.last_seen_at ?? "",
         last_seen_location: detail.elder_profile.last_seen_location ?? "",
+        mobility_notes: detail.elder_profile.mobility_notes?.summary ?? "",
+        transportation_ability:
+          detail.elder_profile.transportation_ability?.summary ?? "",
+        frequent_locations:
+          detail.elder_profile.frequent_locations?.summary ?? "",
+        behavior_habits: detail.elder_profile.behavior_habits?.summary ?? "",
+        suspicious_motive:
+          detail.elder_profile.suspicious_motive?.summary ?? "",
       }),
     [detail],
   );
@@ -4065,6 +4201,11 @@ function ElderProfileEditor({
           health_notes: draft.health_notes,
           last_seen_at: draft.last_seen_at,
           last_seen_location: draft.last_seen_location,
+          mobility_notes: draft.mobility_notes,
+          transportation_ability: draft.transportation_ability,
+          frequent_locations: draft.frequent_locations,
+          behavior_habits: draft.behavior_habits,
+          suspicious_motive: draft.suspicious_motive,
         });
       }}
     >
@@ -4088,7 +4229,12 @@ function ElderProfileEditor({
         {field("last_seen_at", "最后出现时间")}{" "}
         {field("physical_description", "体貌", true)}{" "}
         {field("clothing_description", "衣着", true)}{" "}
-        {field("health_notes", "健康注意", true)}
+        {field("health_notes", "健康注意", true)}{" "}
+        {field("mobility_notes", "行动能力", true)}{" "}
+        {field("transportation_ability", "交通工具使用", true)}{" "}
+        {field("frequent_locations", "常去地点", true)}{" "}
+        {field("behavior_habits", "行为习惯", true)}{" "}
+        {field("suspicious_motive", "疑似动机", true)}
       </div>
       <div className="mt-4 flex justify-end">
         <Button

@@ -6,6 +6,7 @@ mod clues;
 mod collaboration_spaces;
 mod health;
 mod intake_sessions;
+mod knowledge;
 mod learning;
 mod tasks;
 mod user_profiles;
@@ -49,6 +50,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .configure(auth::configure)
             .configure(ai_executions::configure)
             .configure(learning::configure)
+            .configure(knowledge::configure)
             .configure(admin::configure)
             .configure(user_profiles::configure)
             // This scope begins with `/cases/{case_id}` and must be registered

@@ -6,21 +6,24 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
     TransactionTrait, TryInsertResult,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     entities::{
         learning_categories, learning_category_review_events, learning_content_review_events,
-        learning_question_answers, learning_questions, learning_resources,
+        learning_question_answers, learning_question_resources, learning_questions,
+        learning_resources,
     },
     error::ApiError,
+    integrations::ai_gateway::AiGateway,
     models::{
         AuthenticatedUser, CreateLearningCategoryRequest, CreateLearningQuestionRequest,
         CreateLearningResourceRequest, KnowledgeAnswerResponse, KnowledgeAskRequest,
-        LearningAnswerSource, LearningCategoryResponse, LearningContentActionRequest,
-        LearningContentLifecycleResponse, LearningContentReviewEventResponse,
-        LearningQuestionQuery, LearningQuestionResponse, LearningResourceQuery,
-        LearningResourceResponse, ManagedLearningCategoryResponse, ManagedLearningQuestionResponse,
+        LearningAnswerHistoryResponse, LearningAnswerSource, LearningCategoryResponse,
+        LearningContentActionRequest, LearningContentLifecycleResponse,
+        LearningContentReviewEventResponse, LearningProgressResponse, LearningQuestionQuery,
+        LearningQuestionResponse, LearningResourceQuery, LearningResourceResponse,
+        ManagedLearningCategoryResponse, ManagedLearningQuestionResponse,
         ManagedLearningResourceResponse, SubmitLearningAnswerRequest, SubmitLearningAnswerResponse,
     },
     roles::{AccountType, GlobalCapability},
@@ -175,7 +178,7 @@ pub async fn propose_category(
             .do_nothing()
             .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(&transaction)
     .await?;
     let (id, name, audit_action) = if matches!(inserted, TryInsertResult::Inserted(_)) {
@@ -366,6 +369,78 @@ pub async fn list_questions(
         .collect()
 }
 
+pub async fn list_answer_history(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<LearningAnswerHistoryResponse>, ApiError> {
+    learning_question_answers::Entity::find()
+        .filter(learning_question_answers::Column::UserId.eq(&auth.id))
+        .order_by_desc(learning_question_answers::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|answer| {
+            Ok(LearningAnswerHistoryResponse {
+                id: answer.id,
+                question_id: answer.question_id,
+                selected_option_id: answer.selected_option_id,
+                is_correct: answer.is_correct,
+                score: answer.score,
+                max_score: answer.max_score,
+                question_version: answer.question_version,
+                question_snapshot: answer
+                    .question_snapshot_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|_| ApiError::Internal)?
+                    .unwrap_or(Value::Null),
+                created_at: answer.created_at,
+            })
+        })
+        .collect()
+}
+
+pub async fn list_wrong_answers(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<LearningAnswerHistoryResponse>, ApiError> {
+    let history = list_answer_history(db, auth).await?;
+    let mut latest = HashSet::new();
+    Ok(history
+        .into_iter()
+        .filter(|answer| latest.insert(answer.question_id.clone()))
+        .filter(|answer| !answer.is_correct)
+        .collect())
+}
+
+pub async fn get_progress(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<LearningProgressResponse, ApiError> {
+    let history = list_answer_history(db, auth).await?;
+    let latest_answered_at = history.first().map(|answer| answer.created_at.clone());
+    let total_answers = history.len() as u64;
+    let mut latest = HashSet::new();
+    let current = history
+        .iter()
+        .filter(|answer| latest.insert(answer.question_id.clone()))
+        .collect::<Vec<_>>();
+    let correct_answers = current.iter().filter(|answer| answer.is_correct).count() as u64;
+    let answered_questions = current.len() as u64;
+    Ok(LearningProgressResponse {
+        answered_questions,
+        total_answers,
+        correct_answers,
+        accuracy: if answered_questions == 0 {
+            0.0
+        } else {
+            correct_answers as f64 / answered_questions as f64
+        },
+        latest_answered_at,
+    })
+}
+
 pub async fn submit_answer(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
@@ -373,8 +448,14 @@ pub async fn submit_answer(
     request: SubmitLearningAnswerRequest,
 ) -> Result<SubmitLearningAnswerResponse, ApiError> {
     let question = visible_question(db, auth, question_id).await?;
-    let selected_option_id = request.selected_option_id.trim();
-    let options = parse_options(&question.options_json)?;
+    let answer_payload = single_choice_answer_payload(request)?;
+    let selected_option_id = answer_payload
+        .get("selected_option_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::Validation("answer_payload.selected_option_id is required".to_owned())
+        })?;
+    let options = question_options(&question)?;
     if selected_option_id.is_empty()
         || selected_option_id.chars().count() > 128
         || !options.iter().any(|option| option.id == selected_option_id)
@@ -401,14 +482,37 @@ pub async fn submit_answer(
             "learning question was not found".to_owned(),
         ));
     }
-    let is_correct = selected_option_id == question.correct_option_id;
+    let answer_key = question_answer_key(&question)?;
+    let correct_option_id = answer_key
+        .get("correct_option_id")
+        .and_then(Value::as_str)
+        .ok_or(ApiError::Internal)?;
+    let is_correct = selected_option_id == correct_option_id;
+    let score = i32::from(is_correct);
+    let snapshot = json!({
+        "question_id": question.id,
+        "question_type": question.question_type,
+        "prompt": question.prompt,
+        "definition": question_definition(&question)?,
+        "explanation": question.explanation,
+        "source_resource_id": question.source_resource_id,
+        "version": question.version,
+    });
     let transaction = db.begin().await?;
     learning_question_answers::ActiveModel {
         id: Set(case_service::new_id()),
         question_id: Set(question.id.clone()),
         user_id: Set(auth.id.clone()),
         selected_option_id: Set(selected_option_id.to_owned()),
+        answer_payload_json: Set(Some(
+            serde_json::to_string(&answer_payload).map_err(|_| ApiError::Internal)?,
+        )),
+        question_snapshot_json: Set(Some(
+            serde_json::to_string(&snapshot).map_err(|_| ApiError::Internal)?,
+        )),
         is_correct: Set(is_correct),
+        score: Set(score),
+        max_score: Set(1),
         question_version: Set(question.version),
         created_at: Set(now()),
     }
@@ -421,7 +525,7 @@ pub async fn submit_answer(
         "learning_question.answered",
         "learning_question",
         question.id.clone(),
-        Some(json!({ "question_version": question.version, "is_correct": is_correct })),
+        Some(json!({ "question_version": question.version, "is_correct": is_correct, "score": score })),
     )
     .await?;
     transaction.commit().await?;
@@ -429,6 +533,8 @@ pub async fn submit_answer(
     Ok(SubmitLearningAnswerResponse {
         question_id: question.id,
         is_correct,
+        score,
+        max_score: 1,
         explanation: question.explanation,
         source: source_reference(&source),
     })
@@ -438,64 +544,39 @@ pub async fn ask_knowledge(
     db: &DatabaseConnection,
     auth: &AuthenticatedUser,
     request: KnowledgeAskRequest,
+    gateway: &AiGateway,
 ) -> Result<KnowledgeAnswerResponse, ApiError> {
-    let prompt = request.question.trim();
-    if prompt.is_empty() || prompt.chars().count() > MAX_QUESTION_LENGTH {
+    let question = request.question.trim();
+    if question.is_empty() || question.chars().count() > MAX_QUESTION_LENGTH {
         return Err(ApiError::Validation(
             "question must contain between 1 and 1000 characters".to_owned(),
         ));
     }
-    let keywords = knowledge_keywords(prompt);
-    let resources = list_resources(
+    let chat = crate::services::knowledge_service::chat_with_gateway_filtered(
         db,
         auth,
-        LearningResourceQuery {
-            resource_type: None,
-            tag: None,
-            category_id: None,
+        "learning-materials",
+        question,
+        crate::services::knowledge_service::KnowledgeChatFilters {
+            category: request.category.as_deref(),
+            tag: request.tag.as_deref(),
         },
+        gateway,
     )
     .await?;
-    let matches: Vec<_> = resources
-        .into_iter()
-        .filter(|resource| {
-            let haystack = format!(
-                "{} {} {} {}",
-                resource.title,
-                resource.summary,
-                resource.content,
-                resource.tags.join(" ")
-            )
-            .to_lowercase();
-            keywords.iter().any(|word| haystack.contains(word))
-        })
-        .take(2)
-        .collect();
-    if matches.is_empty() {
-        return Ok(KnowledgeAnswerResponse {
-            answer: "没有可支持该问题的已审核学习资料。请联系负责人或查阅经审核的手册，不能据此形成行动结论。".to_owned(),
-            certainty: "insufficient_sources".to_owned(),
-            sources: Vec::new(),
-            human_review_notice: "学习问答仅提供资料定位；现场行动以人工审核记录和负责人指令为准。".to_owned(),
-        });
-    }
     Ok(KnowledgeAnswerResponse {
-        answer: matches
-            .iter()
-            .map(|resource| resource.content.clone())
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        certainty: "source_backed".to_owned(),
-        sources: matches
-            .iter()
-            .map(|resource| LearningAnswerSource {
-                resource_id: resource.id.clone(),
-                title: resource.title.clone(),
-                version: resource.version,
+        answer: chat.answer,
+        certainty: chat.certainty,
+        sources: chat
+            .sources
+            .into_iter()
+            .map(|source| LearningAnswerSource {
+                resource_id: source.knowledge_item_id,
+                title: source.title,
+                version: source.version,
             })
             .collect(),
-        human_review_notice: "学习问答仅提供资料定位；现场行动以人工审核记录和负责人指令为准。"
-            .to_owned(),
+        human_review_notice: chat.human_review_notice,
     })
 }
 
@@ -619,7 +700,7 @@ async fn create_resource_inner(
             .do_nothing()
             .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(&transaction)
     .await?;
     if !matches!(insert, TryInsertResult::Inserted(_)) {
@@ -704,7 +785,7 @@ pub async fn list_managed_questions(
         questions.iter().map(|question| question.id.as_str()),
     )
     .await?;
-    questions
+    let result: Vec<ManagedLearningQuestionResponse> = questions
         .into_iter()
         .map(|question| {
             let lifecycle = states
@@ -713,11 +794,23 @@ pub async fn list_managed_questions(
                 .unwrap_or_default()
                 .response()?;
             Ok(ManagedLearningQuestionResponse {
+                answer_key: question_answer_key(&question)?,
                 question: question_response(question)?,
                 lifecycle,
             })
         })
-        .collect()
+        .collect::<Result<_, ApiError>>()?;
+    case_service::write_audit(
+        db,
+        None,
+        auth,
+        "learning_question.answers_viewed",
+        "learning_question_catalog",
+        "all".to_owned(),
+        Some(json!({"question_ids": result.iter().map(|item| item.question.id.as_str()).collect::<Vec<_>>() })),
+    )
+    .await?;
+    Ok(result)
 }
 
 pub async fn create_question(
@@ -732,11 +825,7 @@ pub async fn create_question(
         .await?
         .ok_or_else(|| ApiError::Validation("source_resource_id does not exist".to_owned()))?;
     let prompt = required_text(&request.prompt, "prompt", 2_000)?;
-    let question_type = enum_value(
-        &request.question_type,
-        "question_type",
-        &["single_choice", "true_false", "scenario"],
-    )?;
+    let question_type = registered_question_type(&request.question_type)?;
     let difficulty = enum_value(
         &request.difficulty,
         "difficulty",
@@ -763,6 +852,25 @@ pub async fn create_question(
     let tags_json =
         serde_json::to_string(&normalized_tags(&request.tags)?).map_err(|_| ApiError::Internal)?;
     let options_json = serde_json::to_string(&options).map_err(|_| ApiError::Internal)?;
+    let definition_json =
+        serde_json::to_string(&json!({ "options": options })).map_err(|_| ApiError::Internal)?;
+    let answer_key_json = serde_json::to_string(&json!({
+        "correct_option_id": request.correct_option_id.trim()
+    }))
+    .map_err(|_| ApiError::Internal)?;
+    let supplemental_resource_ids =
+        normalized_supplemental_resources(&request.supplemental_resource_ids, &source_resource_id)?;
+    for resource_id in &supplemental_resource_ids {
+        if learning_resources::Entity::find_by_id(resource_id)
+            .one(db)
+            .await?
+            .is_none()
+        {
+            return Err(ApiError::Validation(
+                "supplemental_resource_id does not exist".to_owned(),
+            ));
+        }
+    }
     let (previous_version_id, version) = question_revision(
         db,
         request.previous_version_id.as_deref(),
@@ -781,6 +889,8 @@ pub async fn create_question(
         tags_json: Set(tags_json),
         options_json: Set(options_json),
         correct_option_id: Set(request.correct_option_id.trim().to_owned()),
+        definition_json: Set(Some(definition_json)),
+        answer_key_json: Set(Some(answer_key_json)),
         explanation: Set(explanation),
         previous_version_id: Set(previous_version_id),
         version: Set(version),
@@ -796,13 +906,23 @@ pub async fn create_question(
             .do_nothing()
             .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(&transaction)
     .await?;
     if !matches!(insert, TryInsertResult::Inserted(_)) {
         return Err(ApiError::Conflict(
             "该学习题目已被其他管理员更正，请刷新后重试".to_owned(),
         ));
+    }
+    for (position, resource_id) in supplemental_resource_ids.iter().enumerate() {
+        learning_question_resources::ActiveModel {
+            question_id: Set(id.clone()),
+            resource_id: Set(resource_id.clone()),
+            position: Set(position as i32),
+            created_at: Set(timestamp.clone()),
+        }
+        .insert(&transaction)
+        .await?;
     }
     append_lifecycle_event(
         &transaction,
@@ -904,6 +1024,32 @@ async fn transition_question(
         .await?
         .ok_or_else(|| ApiError::NotFound("学习题目不存在".to_owned()))?;
     if event_type == "published" {
+        if question.question_type != "single_choice"
+            || question.prompt.trim().is_empty()
+            || question.explanation.trim().is_empty()
+        {
+            return Err(ApiError::Conflict(
+                "题目发布前必须是含题干和解析的单选题".to_owned(),
+            ));
+        }
+        let options = question_options(&question)
+            .map_err(|_| ApiError::Conflict("题目发布前必须有至少两个有效选项".to_owned()))?;
+        let answer_key = question_answer_key(&question)
+            .map_err(|_| ApiError::Conflict("题目发布前必须有唯一正确答案".to_owned()))?;
+        let correct_option_id = answer_key
+            .get("correct_option_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::Conflict("题目发布前必须有唯一正确答案".to_owned()))?;
+        if options
+            .iter()
+            .filter(|option| option.id == correct_option_id)
+            .count()
+            != 1
+        {
+            return Err(ApiError::Conflict(
+                "题目发布前必须有唯一正确答案".to_owned(),
+            ));
+        }
         let source = learning_resources::Entity::find_by_id(&question.source_resource_id)
             .one(db)
             .await?
@@ -917,6 +1063,26 @@ async fn transition_question(
             return Err(ApiError::Conflict(
                 "题目只能在其已审核、已发布的培训来源有效时发布".to_owned(),
             ));
+        }
+        let supplemental_links = learning_question_resources::Entity::find()
+            .filter(learning_question_resources::Column::QuestionId.eq(&question.id))
+            .all(db)
+            .await?;
+        for link in supplemental_links {
+            let resource = learning_resources::Entity::find_by_id(&link.resource_id)
+                .one(db)
+                .await?
+                .ok_or_else(|| ApiError::Validation("补充学习资料不存在".to_owned()))?;
+            if resource.status != "published"
+                || resource.effective_at > now()
+                || !content_lifecycle(db, "resource", &resource.id, resource.version)
+                    .await?
+                    .is_training_published()
+            {
+                return Err(ApiError::Conflict(
+                    "题目只能关联已审核、已发布的补充培训资料".to_owned(),
+                ));
+            }
         }
     }
     transition_content(
@@ -1170,6 +1336,7 @@ async fn managed_question(
         .await?
         .ok_or_else(|| ApiError::NotFound("学习题目不存在".to_owned()))?;
     Ok(ManagedLearningQuestionResponse {
+        answer_key: question_answer_key(&question)?,
         lifecycle: content_lifecycle(db, "question", &question.id, question.version)
             .await?
             .response()?,
@@ -1205,7 +1372,20 @@ pub async fn export_question(
     {
         return Err(ApiError::NotFound("学习题目不存在".to_owned()));
     }
-    question_response(question)
+    let question_id = question.id.clone();
+    let version = question.version;
+    let response = question_response(question)?;
+    case_service::write_audit(
+        db,
+        None,
+        auth,
+        "learning_question.exported",
+        "learning_question",
+        question_id,
+        Some(json!({"version": version})),
+    )
+    .await?;
+    Ok(response)
 }
 
 struct LifecycleEventInput<'a> {
@@ -1265,7 +1445,7 @@ async fn append_lifecycle_event(
         .do_nothing()
         .to_owned(),
     )
-    .do_nothing()
+    .try_insert()
     .exec(transaction)
     .await?;
     if matches!(result, TryInsertResult::Inserted(_)) {
@@ -1472,13 +1652,16 @@ fn category_response(
 fn question_response(
     question: learning_questions::Model,
 ) -> Result<LearningQuestionResponse, ApiError> {
+    let definition = question_definition(&question)?;
+    let options = serde_json::from_str(&question.options_json).map_err(|_| ApiError::Internal)?;
     Ok(LearningQuestionResponse {
         id: question.id,
         prompt: question.prompt,
         question_type: question.question_type,
         difficulty: question.difficulty,
         tags: parse_string_array(&question.tags_json)?,
-        options: serde_json::from_str(&question.options_json).map_err(|_| ApiError::Internal)?,
+        options,
+        definition,
         source_resource_id: question.source_resource_id,
         previous_version_id: question.previous_version_id,
         version: question.version,
@@ -1502,7 +1685,7 @@ struct LearningOption {
 fn parse_options(value: &str) -> Result<Vec<LearningOption>, ApiError> {
     let options: Vec<LearningOption> =
         serde_json::from_str(value).map_err(|_| ApiError::Internal)?;
-    if options.is_empty()
+    if options.len() < 2
         || options.len() > 12
         || options.iter().any(|option| {
             option.id.trim().is_empty()
@@ -1520,6 +1703,92 @@ fn parse_options(value: &str) -> Result<Vec<LearningOption>, ApiError> {
         return Err(ApiError::Internal);
     }
     Ok(options)
+}
+
+/// The registry boundary for question types. New types must add a renderer,
+/// answer validator and scorer here before governance can create them.
+fn registered_question_type(value: &str) -> Result<String, ApiError> {
+    enum_value(value, "question_type", &["single_choice"])
+}
+
+fn question_definition(question: &learning_questions::Model) -> Result<Value, ApiError> {
+    match &question.definition_json {
+        Some(value) => serde_json::from_str(value).map_err(|_| ApiError::Internal),
+        None => Ok(json!({
+            "options": serde_json::from_str::<Value>(&question.options_json)
+                .map_err(|_| ApiError::Internal)?,
+        })),
+    }
+}
+
+fn question_answer_key(question: &learning_questions::Model) -> Result<Value, ApiError> {
+    match &question.answer_key_json {
+        Some(value) => serde_json::from_str(value).map_err(|_| ApiError::Internal),
+        None => Ok(json!({ "correct_option_id": question.correct_option_id })),
+    }
+}
+
+fn question_options(question: &learning_questions::Model) -> Result<Vec<LearningOption>, ApiError> {
+    let definition = question_definition(question)?;
+    let options = definition
+        .get("options")
+        .cloned()
+        .ok_or(ApiError::Internal)?;
+    let serialized = serde_json::to_string(&options).map_err(|_| ApiError::Internal)?;
+    parse_options(&serialized)
+}
+
+fn single_choice_answer_payload(request: SubmitLearningAnswerRequest) -> Result<Value, ApiError> {
+    let legacy = request
+        .selected_option_id
+        .map(|value| value.trim().to_owned());
+    let payload = request
+        .answer_payload
+        .unwrap_or_else(|| json!({ "selected_option_id": legacy.clone().unwrap_or_default() }));
+    let selected = payload
+        .get("selected_option_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::Validation("answer_payload.selected_option_id is required".to_owned())
+        })?;
+    if let Some(legacy) = legacy.filter(|value| !value.is_empty())
+        && legacy != selected
+    {
+        return Err(ApiError::Validation(
+            "selected_option_id and answer_payload must agree".to_owned(),
+        ));
+    }
+    if selected.chars().count() > 128 {
+        return Err(ApiError::Validation(
+            "selected_option_id is not an option on this question".to_owned(),
+        ));
+    }
+    Ok(json!({ "selected_option_id": selected }))
+}
+
+fn normalized_supplemental_resources(
+    resource_ids: &[String],
+    primary_resource_id: &str,
+) -> Result<Vec<String>, ApiError> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for resource_id in resource_ids {
+        let resource_id = required_text(resource_id, "supplemental_resource_id", 64)?;
+        if resource_id == primary_resource_id {
+            return Err(ApiError::Validation(
+                "supplemental resources must not repeat the primary resource".to_owned(),
+            ));
+        }
+        if !seen.insert(resource_id.clone()) {
+            return Err(ApiError::Validation(
+                "supplemental_resource_ids must be unique".to_owned(),
+            ));
+        }
+        normalized.push(resource_id);
+    }
+    Ok(normalized)
 }
 
 fn parse_string_array(value: &str) -> Result<Vec<String>, ApiError> {
@@ -1789,38 +2058,4 @@ fn validated_options(value: serde_json::Value) -> Result<Vec<LearningOption>, Ap
     let serialized = serde_json::to_string(&value)
         .map_err(|_| ApiError::Validation("题目选项无效".to_owned()))?;
     parse_options(&serialized).map_err(|_| ApiError::Validation("题目选项无效".to_owned()))
-}
-
-fn knowledge_keywords(prompt: &str) -> Vec<String> {
-    let mut keywords: Vec<String> = prompt
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| word.chars().count() > 1)
-        .map(str::to_lowercase)
-        .collect();
-
-    let chinese: Vec<char> = prompt
-        .chars()
-        .filter(|character| ('\u{4e00}'..='\u{9fff}').contains(character))
-        .collect();
-    keywords.extend(
-        chinese
-            .windows(2)
-            .map(|window| window.iter().collect::<String>()),
-    );
-    keywords.sort();
-    keywords.dedup();
-    keywords
-}
-
-#[cfg(test)]
-mod tests {
-    use super::knowledge_keywords;
-
-    #[test]
-    fn chinese_questions_produce_searchable_bigrams() {
-        let keywords = knowledge_keywords("如何防止走失？");
-
-        assert!(keywords.iter().any(|keyword| keyword == "防止"));
-        assert!(keywords.iter().any(|keyword| keyword == "走失"));
-    }
 }

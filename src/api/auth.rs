@@ -72,6 +72,39 @@ where
                 return Ok(request
                     .into_response(ApiError::Internal.error_response().map_into_right_body()));
             };
+            if request.path().ends_with("/events/ws") {
+                let ticket = request
+                    .query_string()
+                    .split('&')
+                    .find_map(|part| part.strip_prefix("ticket="))
+                    .ok_or_else(|| ApiError::Unauthorized("socket ticket required".to_owned()));
+                let auth = ticket.ok().and_then(|ticket| {
+                    state
+                        .ws_tickets
+                        .lock()
+                        .ok()
+                        .and_then(|mut tickets| tickets.remove(ticket))
+                });
+                let expected_space = request
+                    .path()
+                    .strip_prefix("/api/collaboration-spaces/")
+                    .and_then(|value| value.strip_suffix("/events/ws"));
+                if let Some(ticket) = auth
+                    && ticket.created.elapsed().as_secs() < 30
+                    && expected_space == Some(ticket.space_id.as_str())
+                {
+                    request.extensions_mut().insert(ticket.auth);
+                    return service
+                        .call(request)
+                        .await
+                        .map(ServiceResponse::map_into_left_body);
+                }
+                return Ok(request.into_response(
+                    ApiError::Unauthorized("socket ticket is invalid or expired".to_owned())
+                        .error_response()
+                        .map_into_right_body(),
+                ));
+            }
             let token = match bearer_token_from_service_request(&request) {
                 Ok(token) => token,
                 Err(error) => {
@@ -148,9 +181,11 @@ fn bearer_token_from_service_request(request: &ServiceRequest) -> Result<String,
     let value = request
         .headers()
         .get(header::AUTHORIZATION)
-        .ok_or_else(|| ApiError::Unauthorized("authentication required".to_owned()))?
-        .to_str()
-        .map_err(|_| ApiError::Unauthorized("invalid authorization header".to_owned()))?;
+        .and_then(|value| value.to_str().ok());
+    if value.is_none() {
+        return Err(ApiError::Unauthorized("authentication required".to_owned()));
+    }
+    let value = value.expect("checked above");
     let mut parts = value.split_whitespace();
     let scheme = parts.next().unwrap_or_default();
     let token = parts.next().unwrap_or_default();

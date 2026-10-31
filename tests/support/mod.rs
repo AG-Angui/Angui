@@ -22,6 +22,7 @@ pub const COMMANDER: &str = "commander@demo.invalid";
 pub const VOLUNTEER: &str = "volunteer@demo.invalid";
 pub const LEARNER: &str = "learner@demo.invalid";
 pub const ADMIN: &str = "admin@demo.invalid";
+pub const ADMIN2: &str = "admin2@demo.invalid";
 
 pub struct TestContext {
     pub(crate) database: DatabaseConnection,
@@ -67,6 +68,9 @@ impl TestContext {
             session_ttl_hours: 8,
             intake_answer_hard_max: 2_000,
             attachment_storage_directory: std::env::temp_dir().join("angui-api-test-attachments"),
+            audio_storage: std::sync::Arc::new(angui::audio_storage::LocalAudioStorage::new(
+                std::env::temp_dir().join("angui-api-test-audio"),
+            )),
             attachment_max_image_bytes: 5 * 1024 * 1024,
             attachment_max_per_case: 12,
             case_place_types: vec![
@@ -81,6 +85,16 @@ impl TestContext {
             amap_service: AmapService::disabled(),
             ai_gateway: AiGateway::from_configurations(Vec::new())
                 .expect("empty AI provider configuration should be valid"),
+            livekit_url: None,
+            livekit_api_key: None,
+            livekit_api_secret: None,
+            livekit_admin_url: None,
+            turn_url: None,
+            turn_secret: None,
+            voice_floors: Default::default(),
+            voice_floor_gate: Default::default(),
+            ws_tickets: Default::default(),
+            voice_sessions: Default::default(),
             login_limiter: LoginRateLimiter::default(),
             message_delivery: angui::message_delivery::MessageDelivery::disabled(),
         }
@@ -147,7 +161,8 @@ impl TestContext {
             &commander,
             case_id,
             UpdateCaseStatusRequest {
-                status: "closed".to_owned(),
+                status: "ended".to_owned(),
+                reason: Some("测试中结束案件".to_owned()),
             },
         )
         .await
@@ -165,6 +180,11 @@ pub fn create_case_request() -> CreateCaseRequest {
         health_notes: Some("仅用于测试的健康备注".to_owned()),
         last_seen_at: Some("2026-07-13T09:00:00Z".to_owned()),
         last_seen_location: Some("测试公园北门".to_owned()),
+        mobility_notes: None,
+        transportation_ability: None,
+        frequent_locations: None,
+        behavior_habits: None,
+        suspicious_motive: None,
     }
 }
 
@@ -190,6 +210,12 @@ pub fn create_clue_request() -> CreateClueRequest {
         occurred_at: Some("2026-07-13T09:10:00Z".to_owned()),
         location_text: Some("测试公园北门".to_owned()),
         location_precision: None,
+        location_kind: None,
+        longitude: None,
+        latitude: None,
+        location_radius_meters: None,
+        visibility: None,
+        confidence: None,
         next_action: None,
         linked_task_reference: None,
         attachment_ids: Vec::new(),

@@ -64,6 +64,7 @@ impl MigrationTrait for Migration {
             DbBackend::MySql => down_mysql_with_write_lock(manager).await,
             DbBackend::Postgres => down_postgres_with_write_lock(manager).await,
             DbBackend::Sqlite => down_sqlite_in_transaction(manager).await,
+            _ => unreachable!("unsupported database backend"),
         }
     }
 }

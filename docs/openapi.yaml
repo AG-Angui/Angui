@@ -271,7 +271,7 @@ paths:
       tags: [Collaboration spaces]
       operationId: listCollaborationSpaceVoiceReports
       summary: List voice-report status; transcripts are commander-only
-      description: Members only receive their own report status. Raw audio has no download endpoint. Transcripts and AI candidates are never exposed to family users.
+      description: Members only receive their own report status. Commanders may receive transcripts. Raw audio uses a separate authorized download endpoint.
       security: [{ bearerAuth: [] }]
       x-case-roles: [commander, volunteer]
       x-data-classification: sensitive
@@ -283,7 +283,7 @@ paths:
       tags: [Collaboration spaces]
       operationId: createCollaborationSpaceVoiceReport
       summary: Upload a bounded private audio report
-      description: Accepted audio types are MPEG, OGG, WAV, and WebM. Without an approved ASR provider the report is explicitly marked failed; the server never fabricates a transcript or confirms a clue.
+      description: Accepted audio types are MPEG, OGG, WAV, and WebM. ASR and AI run asynchronously; unavailable providers cause an explicit retryable failure without fabricating a transcript or confirming a clue.
       security: [{ bearerAuth: [] }]
       x-case-roles: [commander, volunteer]
       x-data-classification: sensitive
@@ -300,6 +300,210 @@ paths:
       responses:
         "201": { description: Stored report status, content: { application/json: { schema: { $ref: "#/components/schemas/VoiceReport" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/messages/{message_id}/ack:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: message_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: acknowledgeCollaborationSpaceMessage
+      summary: Record a member delivery or acknowledgement receipt
+      description: The receipt is stored as a versioned collaboration event visible to commanders for broadcast auditing.
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      x-data-classification: sensitive
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AcknowledgeSpaceMessageRequest" } } }
+      responses:
+        "204": { description: Receipt recorded }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-room/ticket:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: createVoiceRoomTicket
+      summary: Issue a short LiveKit room token and TURN credentials
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: Room token and ICE servers }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-room/floor:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: setVoiceRoomFloor
+      summary: Grant or release server controlled microphone publish permission
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [active], properties: { active: { type: boolean } } } } } }
+      responses:
+        "204": { description: Floor updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/events/ticket:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: createSpaceSocketTicket
+      summary: Issue a one time 30 second WebSocket ticket
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: One time ticket }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/recordings:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Collaboration spaces]
+      operationId: createIntercomRecording
+      summary: Save a PCM WAV room segment for asynchronous clue extraction
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      parameters:
+        - { name: started_at, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: ended_at, in: query, required: true, schema: { type: string, format: date-time } }
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
+      responses:
+        "201": { description: Recording and queued candidate }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates:
+    parameters: [{ name: space_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Collaboration spaces]
+      operationId: listVoiceCandidates
+      summary: List authorized ASR and AI processing status
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: Candidate status and commander only transcript }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/retry:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: retryVoiceCandidate
+      summary: Retry a failed candidate, limited to five attempts
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "204": { description: Queued for retry }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/discoverer:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: confirmVoiceDiscoverer
+      summary: Let the submitter confirm an active space member as discoverer
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [discoverer_user_id], properties: { discoverer_user_id: { type: string, format: uuid } } } } } }
+      responses:
+        "204": { description: Discoverer confirmed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/return:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: returnVoiceCandidate
+      summary: Commander returns a pending voice draft to its submitter
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 1000 } } } } } }
+      responses:
+        "204": { description: Returned for revision }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Draft already reviewed or returned }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/resubmit:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: resubmitVoiceCandidate
+      summary: Submitter edits and resubmits a returned draft
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, description: ClueDraftCandidate JSON } } } }
+      responses:
+        "204": { description: Resubmitted for review }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Draft is not awaiting revision }
+
+  /api/collaboration-spaces/{space_id}/voice-candidates/{id}/merge:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Collaboration spaces]
+      operationId: mergeVoiceCandidate
+      summary: Commander links a reviewed voice draft to an existing clue
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [target_clue_id, reason], properties: { target_clue_id: { type: string, format: uuid }, reason: { type: string, minLength: 1, maxLength: 1000 } } } } } }
+      responses:
+        "204": { description: Linked to existing clue }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Discoverer unconfirmed or draft returned }
+
+  /api/collaboration-spaces/{space_id}/recordings/{id}/audio:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Collaboration spaces]
+      operationId: downloadIntercomRecording
+      summary: Download a private recording as its owner or commander
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: PCM WAV bytes, content: { audio/wav: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/collaboration-spaces/{space_id}/voice-reports/{id}/audio:
+    parameters:
+      - { name: space_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Collaboration spaces]
+      operationId: downloadVoiceReportAudio
+      summary: Download private report audio as its owner or commander
+      security: [{ bearerAuth: [] }]
+      x-case-roles: [commander, volunteer]
+      responses:
+        "200": { description: Audio bytes }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -531,6 +735,19 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/intake-sessions:
+    get:
+      tags: [Intake sessions]
+      operationId: listIntakeSessions
+      summary: List the current member's unfinished intake sessions
+      description: Only the authenticated member's unconfirmed sessions are returned, ordered by latest update, so the family home page can provide a safe resume entry.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Owner-scoped unfinished sessions, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/IntakeSession" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       tags: [Intake sessions]
       operationId: createIntakeSession
@@ -686,6 +903,42 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/intake-sessions/{session_id}:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+    get:
+      tags: [Intake sessions]
+      operationId: getIntakeSession
+      summary: Get one owner-scoped intake session for resume
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Owner-scoped intake session, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeSession" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/intake-sessions/{session_id}/photos/{photo_id}/primary:
+    parameters:
+      - $ref: "#/components/parameters/IntakeSessionId"
+      - name: photo_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Intake sessions]
+      operationId: setPrimaryIntakeSessionPhoto
+      summary: Set an owner-scoped intake photo as the primary portrait
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member]
+      x-data-classification: sensitive
+      responses:
+        "200": { description: Updated photo metadata, content: { application/json: { schema: { $ref: "#/components/schemas/IntakePhoto" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/intake-sessions/{session_id}/profile-draft:
     parameters:
       - $ref: "#/components/parameters/IntakeSessionId"
@@ -824,7 +1077,7 @@ paths:
       tags: [Intake sessions]
       operationId: startIntakeAiInitialReview
       summary: Start the family-visible AI initial review
-      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case. The response is SSE: optional safe `progress` events contain only a stage (`queued`, `preparing`, `generating`, `validating`, or `fallback`), and the final `completed` event contains the review result. Partial streams are not a valid review result.
+      description: The session creator submits the profile snapshot after first confirmation. The service validates model JSON and policy boundaries; the Gateway performs at most two total HTTP calls (one JSON repair or one compliant provider failover, never both), while unavailable providers, invalid output, and execution failures return a rule-based review fallback. This operation never creates a case. The response is SSE; optional safe `progress` events contain only a stage (`queued`, `preparing`, `generating`, `validating`, or `fallback`), and the final `completed` event contains the review result. Partial streams are not a valid review result.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-data-classification: sensitive
@@ -970,8 +1223,9 @@ paths:
       operationId: updateCaseStatus
       summary: 更新案件状态
       description: |
-        仅案件 commander 可以操作。允许 active -> resolved、active -> closed、
-        resolved -> active、resolved -> closed，以及相同状态的幂等更新。closed 不能转回其他状态。
+        仅案件 commander 可以操作。主流程为 active -> ended -> reviewing -> archived；
+        结束和带理由的重开会写入审计，结束时取消未完成任务并关闭活跃协作空间。
+        归档要求已有经过人工脱敏和审核的草稿。重开必须提供理由。
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -984,7 +1238,8 @@ paths:
             schema:
               $ref: "#/components/schemas/UpdateCaseStatusRequest"
             example:
-              status: resolved
+              status: ended
+              reason: 现场行动已经结束
       responses:
         "200":
           description: 更新后的案件详情
@@ -1117,7 +1372,7 @@ paths:
       summary: 向案件提交待审核线索
       description: |
         family、commander 和 volunteer 案件成员均可提交。服务端忽略客户端对状态的控制，
-        新线索始终写为 pending_review。closed 案件不能再添加线索。
+        新线索始终写为 pending_review。非 active 案件不能再添加线索。
       security:
         - bearerAuth: []
       x-account-types: [member]
@@ -1732,7 +1987,7 @@ paths:
       x-case-roles: [volunteer]
       x-data-classification: case-restricted
       responses:
-        "200": { description: Published summary history, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { type: object, required: [version, content, published_at], properties: { version: { type: integer }, content: { type: string }, published_at: { type: string, format: date-time } } } } } } } }
+        "200": { description: Published summary history, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { type: object, required: [version, content, published_at], properties: { version: { type: integer }, content: { type: string }, published_at: { type: string, format: date-time } } } } } } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1789,101 +2044,13 @@ paths:
       tags: [Cases]
       operationId: createCaseArchiveDraft
       summary: Create a controlled internal archive draft
-      description: Only a case commander may create this deterministic internal draft for a resolved or closed case. It records only allowlisted status and count metadata, remains manual_review_required, and cannot publish, index, export, or print case material.
+      description: Only a case commander may create this internal draft after the case reaches ended, reviewing, or archived. The protected review material may contain case facts; the learner-facing draft remains a placeholder until human de-identification and approval. Creation never publishes the material.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-case-roles: [commander]
       x-data-classification: case-restricted
       responses:
         "201": { description: Internal archive draft requiring de-identification review, content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveDraft" } } } }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "500": { $ref: "#/components/responses/InternalError" }
-
-  /api/cases/{case_id}/places:
-    parameters:
-      - $ref: "#/components/parameters/CaseId"
-    get:
-      tags: [Cases]
-      operationId: listCasePlaces
-      summary: 获取按角色裁剪的关键地点
-      description: 服务端按案件角色和审核/可见级别裁剪地点。指挥可见案件内部地点；家属仅见本人提交或已确认的非内部地点；志愿者仅见已确认的公开地点。非成员返回 404。
-      security:
-        - bearerAuth: []
-      x-account-types: [member]
-      x-case-roles: [family, commander, volunteer]
-      x-data-classification: sensitive
-      responses:
-        "200":
-          description: 当前角色可见的地点
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/CasePlace" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "500": { $ref: "#/components/responses/InternalError" }
-    post:
-      tags: [Cases]
-      operationId: createCasePlace
-      summary: 提交常去或关键地点
-      description: 仅 family 和 commander 可提交。服务端验证坐标、地点类型和可见级别；新记录固定为 pending_review。
-      security:
-        - bearerAuth: []
-      x-account-types: [member]
-      x-case-roles: [family, commander]
-      x-data-classification: sensitive
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateCasePlaceRequest"
-      responses:
-        "201":
-          description: 待审核地点已创建
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CasePlace" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "500": { $ref: "#/components/responses/InternalError" }
-
-  /api/cases/{case_id}/places/{place_id}/review:
-    parameters:
-      - $ref: "#/components/parameters/CaseId"
-      - name: place_id
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
-    patch:
-      tags: [Cases]
-      operationId: reviewCasePlace
-      summary: 审核家属或案件成员提交的地点
-      description: 仅当前案件的 commander 可操作。地点必须仍为 pending_review，审核理由必填；确认或驳回会原子更新状态并写入审计事件。
-      security:
-        - bearerAuth: []
-      x-account-types: [member]
-      x-case-roles: [commander]
-      x-data-classification: sensitive
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ReviewCasePlaceRequest" }
-      responses:
-        "200":
-          description: 已审核的地点
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CasePlace" }
-        "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -2290,8 +2457,8 @@ paths:
     patch:
       tags: [Admin]
       operationId: reviewArchiveDraft
-      summary: Publish, reject, or withdraw a reviewed archive draft
-      description: Admin capability only. Publication is allowed only after recorded manual de-identification confirmation. Publishing only marks a controlled archive as a learning_resource; it does not expose a RAG, export, print, public, or cross-case read path. Withdrawal immediately removes that learning-resource designation while preserving the auditable version history.
+      summary: Approve, publish, reject, or withdraw a reviewed archive draft
+      description: Admin capability only. Approval requires a reviewing case, confirmed human de-identification, and explicit retention/access-scope confirmation. The case may then be archived. Publication requires an archived case and independent approval; it creates a learner-visible knowledge item from the approved de-identified content. Withdrawal revokes that item's learner access while preserving audit history.
       security: [{ bearerAuth: [] }]
       x-account-types: [member]
       x-global-capabilities: [admin]
@@ -2821,6 +2988,361 @@ paths:
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+
+  /api/admin/knowledge-bases:
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeBases
+      summary: List knowledge bases
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge bases, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeBase" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeBase
+      summary: Create a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateKnowledgeBaseRequest" } } } }
+      responses:
+        "201": { description: Created knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/knowledge-bases/{base_id}:
+    parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeBase
+      summary: Get a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Knowledge]
+      operationId: updateKnowledgeBase
+      summary: Update a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateKnowledgeBaseRequest" } } } }
+      responses:
+        "200": { description: Updated knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-bases/{base_id}/enable:
+    post:
+      tags: [Knowledge]
+      operationId: enableKnowledgeBase
+      summary: Enable a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Enabled knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-bases/{base_id}/disable:
+    post:
+      tags: [Knowledge]
+      operationId: disableKnowledgeBase
+      summary: Disable a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Disabled knowledge base, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeBase" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-bases/{base_id}/items:
+    parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeItems
+      summary: List knowledge items in a base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge items, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeItem" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeItem
+      summary: Create a draft knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateKnowledgeItemRequest" } } } }
+      responses:
+        "201": { description: Created knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-bases/{base_id}/terms:
+    parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeTerms
+      summary: List category and tag vocabulary for a knowledge base
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Active and archived terms, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeTerm" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeTerm
+      summary: Create an active category or tag vocabulary entry
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateKnowledgeTermRequest" } } } }
+      responses:
+        "201": { description: Created term, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeTerm" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-terms/{term_id}/disable:
+    post:
+      tags: [Knowledge]
+      operationId: disableKnowledgeTerm
+      summary: Archive a category or tag vocabulary entry
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: term_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeTermTransitionRequest" } } } }
+      responses:
+        "200": { description: Archived term, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeTerm" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-bases/{base_id}/imports/preview:
+    post:
+      tags: [Knowledge]
+      operationId: previewKnowledgeImport
+      summary: Preview a CSV knowledge import
+      description: Accepts one multipart file containing UTF-8 CSV; validates the exact nine-column header and 5 MiB/5000-row limits, then classifies rows without publishing content.
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
+      responses:
+        "201": { description: Import preview, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-items/{item_id}:
+    parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeItem
+      summary: Get a knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Knowledge]
+      operationId: updateKnowledgeItem
+      summary: Update a knowledge item and return it to draft
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateKnowledgeItemRequest" } } } }
+      responses:
+        "200": { description: Updated draft knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-items/{item_id}/learner-preview:
+    parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Knowledge]
+      operationId: previewKnowledgeItemForLearner
+      summary: Preview only the current published learner-visible knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      responses:
+        "200": { description: Learner-visible item projection, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-items/{item_id}/review:
+    post:
+      tags: [Knowledge]
+      operationId: reviewKnowledgeItem
+      summary: Review a knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Reviewed knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-items/{item_id}/publish:
+    post:
+      tags: [Knowledge]
+      operationId: publishKnowledgeItem
+      summary: Publish a reviewed knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Published knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-items/{item_id}/withdraw:
+    post:
+      tags: [Knowledge]
+      operationId: withdrawKnowledgeItem
+      summary: Withdraw a published knowledge item
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: item_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Withdrawn knowledge item, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeItem" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-imports/{import_id}:
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeImport
+      summary: Get an import batch
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: import_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Import batch, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/knowledge-imports/{import_id}/confirm:
+    post:
+      tags: [Knowledge]
+      operationId: confirmKnowledgeImport
+      summary: Confirm an import batch
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: import_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Confirmed import batch, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/admin/knowledge-imports/{import_id}/cancel:
+    post:
+      tags: [Knowledge]
+      operationId: cancelKnowledgeImport
+      summary: Cancel an unconfirmed import batch
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters: [{ name: import_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Cancelled import batch, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/knowledge-bases/{base_id}/search:
+    post:
+      tags: [Knowledge]
+      operationId: searchKnowledgeBase
+      summary: Search published visible knowledge items
+      description: Searches only enabled bases and published, effective, non-withdrawn items visible to the caller. Results are source material, not a factual determination.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: training
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeSearchRequest" } } } }
+      responses:
+        "200": { description: Ranked published knowledge items, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeSearchResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/knowledge-bases/{base_id}/chat:
+    post:
+      tags: [Knowledge]
+      operationId: chatKnowledgeBase
+      summary: Answer from published visible knowledge items
+      description: Performs the same governed keyword match as search, then supplies every matched published item as source context to the answer workflow (the legacy limit is ignored for this endpoint). Returns retrieved sources and an explicit human-review notice; insufficient sources are not a conclusion.
+      security: [{ bearerAuth: [] }]
+      x-account-types: [member, learner]
+      x-data-classification: training
+      parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeChatRequest" } } } }
+      responses:
+        "200": { description: Source-backed or insufficient-sources answer, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeChatResponse" } } } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     bearerAuth:
@@ -3326,7 +3848,7 @@ components:
 
     CaseStatus:
       type: string
-      enum: [active, resolved, closed]
+      enum: [active, ended, reviewing, archived]
 
     TaskStatus:
       type: string
@@ -3428,13 +3950,14 @@ components:
     IntakePhoto:
       type: object
       additionalProperties: false
-      required: [id, original_filename, content_type, byte_size, created_at]
+      required: [id, original_filename, content_type, byte_size, created_at, is_primary]
       properties:
         id: { type: string, format: uuid }
         original_filename: { type: string, maxLength: 255 }
         content_type: { type: string, enum: [image/jpeg, image/png] }
         byte_size: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }
+        is_primary: { type: boolean }
 
     SubmitIntakeAnswerRequest:
       type: object
@@ -3710,7 +4233,7 @@ components:
     IntakeAiInitialReviewResponse:
       type: object
       additionalProperties: false
-      required: [session_id, status, degradation_status, issues, blocking_assessments, generated_at, requires_family_acknowledgement, ready_for_second_confirmation]
+      required: [session_id, status, degradation_status, issues, blocking_assessments, reviewed_profile, generated_at, requires_family_acknowledgement, ready_for_second_confirmation]
       properties:
         session_id: { type: string, format: uuid }
         status: { type: string, enum: [collecting, ready_for_confirmation, awaiting_family_review, ready_for_second_confirmation, confirmed, closed] }
@@ -3721,6 +4244,11 @@ components:
         blocking_assessments:
           type: array
           items: { $ref: "#/components/schemas/IntakeAssessment" }
+        reviewed_profile:
+          oneOf:
+            - $ref: "#/components/schemas/ConfirmedIntakeProfile"
+            - type: "null"
+          description: Exact profile snapshot currently held by the initial review. The family must submit this snapshot for second confirmation.
         generated_at: { type: string, format: date-time }
         requires_family_acknowledgement: { type: boolean }
         ready_for_second_confirmation: { type: boolean }
@@ -3828,6 +4356,7 @@ components:
       properties:
         status:
           $ref: "#/components/schemas/CaseStatus"
+        reason: { type: [string, "null"], minLength: 1, maxLength: 1000, description: Required when ending or reopening a case. }
 
     UpdateElderProfileRequest:
       type: object
@@ -4442,26 +4971,6 @@ components:
           minimum: 0
           description: Only tasks visible to the authenticated case role are counted.
 
-    CreateCasePlaceRequest:
-      type: object
-      additionalProperties: false
-      required: [name, place_type, address, visibility]
-      properties:
-        name: { type: string, minLength: 1, maxLength: 120 }
-        place_type: { type: string, description: Value must appear in the current case resource configuration. }
-        address: { type: string, minLength: 1, maxLength: 500 }
-        longitude: { type: [number, "null"], minimum: -180, maximum: 180 }
-        latitude: { type: [number, "null"], minimum: -90, maximum: 90 }
-        visibility: { type: string, enum: [public, confirmed, internal] }
-
-    ReviewCasePlaceRequest:
-      type: object
-      additionalProperties: false
-      required: [status, reason]
-      properties:
-        status: { type: string, enum: [confirmed, rejected] }
-        reason: { type: string, minLength: 1, maxLength: 1000 }
-
     CaseMapView:
       type: object
       additionalProperties: false
@@ -4751,8 +5260,9 @@ components:
       additionalProperties: false
       required: [action, reason]
       properties:
-        action: { type: string, enum: [publish, reject, withdraw] }
+        action: { type: string, enum: [approve, publish, reject, withdraw] }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+        confirm_retention: { type: boolean, description: Must be true when action is approve. }
 
     UpdateAdminUserStatusRequest:
       type: object
@@ -5028,6 +5538,13 @@ components:
         content: { type: string, minLength: 1, maxLength: 2000 }
         message_type: { type: [string, "null"], enum: [text, broadcast, null] }
 
+    AcknowledgeSpaceMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [delivered, acknowledged] }
+
     SpaceMessage:
       type: object
       additionalProperties: false
@@ -5068,6 +5585,206 @@ components:
             - type: "null"
           description: Omitted for non-commanders and when no completed transcript exists.
 
+    KnowledgeBase:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, visibility, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+        status: { type: string, enum: [enabled, disabled] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateKnowledgeBaseRequest:
+      type: object
+      additionalProperties: false
+      required: [name, visibility]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000, default: "" }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+
+    UpdateKnowledgeBaseRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+
+    KnowledgeTerm:
+      type: object
+      additionalProperties: false
+      required: [id, knowledge_base_id, kind, name, status, created_by_user_id, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        knowledge_base_id: { type: string, format: uuid }
+        kind: { type: string, enum: [category, tag] }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        status: { type: string, enum: [active, archived] }
+        created_by_user_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateKnowledgeTermRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, name]
+      properties:
+        kind: { type: string, enum: [category, tag] }
+        name: { type: string, minLength: 1, maxLength: 160 }
+
+    KnowledgeTermTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    KnowledgeImage:
+      type: object
+      additionalProperties: false
+      required: [id, storage_path, mime_type, width, height, metadata]
+      properties:
+        id: { type: string, format: uuid }
+        storage_path: { type: string }
+        mime_type: { type: string }
+        width: { type: [integer, "null"] }
+        height: { type: [integer, "null"] }
+        metadata: { type: object }
+
+    KnowledgeImageInput:
+      type: object
+      additionalProperties: false
+      required: [storage_path, mime_type]
+      properties:
+        storage_path: { type: string, minLength: 1 }
+        mime_type: { type: string, minLength: 1 }
+        width: { type: [integer, "null"] }
+        height: { type: [integer, "null"] }
+        metadata: { type: object, default: {} }
+
+    KnowledgeItem:
+      type: object
+      additionalProperties: false
+      required: [knowledge_item_id, title, content, score, knowledge_base_id, version, source_name, source_url, images]
+      properties:
+        knowledge_item_id: { type: string, format: uuid }
+        title: { type: string }
+        content: { type: string }
+        score: { type: number, format: double, minimum: 0 }
+        knowledge_base_id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        source_name: { type: string }
+        source_url: { type: [string, "null"], format: uri }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImage" } }
+
+    CreateKnowledgeItemRequest:
+      type: object
+      additionalProperties: false
+      required: [title, content, visibility]
+      properties:
+        title: { type: string, minLength: 1 }
+        summary: { type: string, default: "" }
+        content: { type: string, minLength: 1 }
+        category: { type: string, default: "" }
+        category_id: { type: [string, "null"] }
+        keywords: { type: array, items: { type: string }, default: [] }
+        source_name: { type: [string, "null"] }
+        source_url: { type: [string, "null"], format: uri }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImageInput" }, default: [] }
+
+    UpdateKnowledgeItemRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1 }
+        summary: { type: string }
+        content: { type: string, minLength: 1 }
+        category: { type: string }
+        category_id: { type: [string, "null"] }
+        keywords: { type: array, items: { type: string } }
+        source_name: { type: [string, "null"] }
+        source_url: { type: [string, "null"], format: uri }
+        visibility: { type: string, enum: [public, authenticated, volunteer, learner] }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImageInput" } }
+
+    KnowledgeImportRow:
+      type: object
+      additionalProperties: false
+      required: [id, row_number, status, error_message, normalized_data, knowledge_item_id]
+      properties:
+        id: { type: string, format: uuid }
+        row_number: { type: integer, minimum: 2 }
+        status: { type: string, enum: [valid, invalid, duplicate, imported] }
+        error_message: { type: [string, "null"] }
+        normalized_data: { type: object }
+        knowledge_item_id: { type: [string, "null"], format: uuid }
+
+    KnowledgeImportBatch:
+      type: object
+      additionalProperties: false
+      required: [id, knowledge_base_id, file_name, status, total_rows, valid_rows, invalid_rows, rows, confirmed_at]
+      properties:
+        id: { type: string, format: uuid }
+        knowledge_base_id: { type: string, format: uuid }
+        file_name: { type: string }
+        status: { type: string, enum: [previewed, confirmed, cancelled] }
+        total_rows: { type: integer, minimum: 0, maximum: 5000 }
+        valid_rows: { type: integer, minimum: 0 }
+        invalid_rows: { type: integer, minimum: 0 }
+        rows: { type: array, items: { $ref: "#/components/schemas/KnowledgeImportRow" }, maxItems: 5000 }
+        confirmed_at: { type: [string, "null"], format: date-time }
+
+    KnowledgeSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 1000 }
+        limit: { type: [integer, "null"], minimum: 1, maximum: 20, default: 5 }
+
+    KnowledgeSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results: { type: array, items: { $ref: "#/components/schemas/KnowledgeItem" }, maxItems: 20 }
+
+    KnowledgeChatRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 1000 }
+        limit: { type: [integer, "null"], minimum: 1, maximum: 20, default: 5 }
+
+    KnowledgeChatSource:
+      type: object
+      additionalProperties: false
+      required: [knowledge_item_id, title, version, score, images]
+      properties:
+        knowledge_item_id: { type: string, format: uuid }
+        title: { type: string }
+        version: { type: integer, minimum: 1 }
+        score: { type: number, format: double, minimum: 0 }
+        images: { type: array, items: { $ref: "#/components/schemas/KnowledgeImage" } }
+
+    KnowledgeChatResponse:
+      type: object
+      additionalProperties: false
+      required: [answer, certainty, sources, human_review_notice]
+      properties:
+        answer: { type: string }
+        certainty: { type: string, enum: [rule_based, model_generated, insufficient_sources] }
+        sources: { type: array, items: { $ref: "#/components/schemas/KnowledgeChatSource" }, maxItems: 20 }
+        human_review_notice: { type: string }
     ErrorResponse:
       type: object
       additionalProperties: false

@@ -47,6 +47,22 @@ mod m0044_add_learning_category_governance;
 mod m0045_create_auth_access_and_message_delivery;
 mod m0046_create_collaboration_spaces;
 mod m0047_add_collaboration_activity;
+mod m0048_create_knowledge_rag_v0;
+mod m0049_add_elder_profile_extended_fields;
+mod m0050_add_intake_primary_photo;
+mod m0051_add_learning_question_engine;
+mod m0052_add_knowledge_governance;
+mod m0053_unify_case_places_as_location_clues;
+mod m0054_link_archive_learning_items;
+mod m0055_unique_knowledge_correction;
+mod m0056_create_knowledge_terms;
+mod m0057_create_case_map_areas;
+mod m0058_create_intercom_recordings;
+mod m0059_create_voice_clue_candidates;
+mod m0060_link_voice_drafts;
+mod m0061_audio_retention;
+mod m0062_voice_candidate_revision;
+mod m0063_create_space_message_receipts;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -103,6 +119,22 @@ impl MigratorTrait for Migrator {
             Box::new(m0045_create_auth_access_and_message_delivery::Migration),
             Box::new(m0046_create_collaboration_spaces::Migration),
             Box::new(m0047_add_collaboration_activity::Migration),
+            Box::new(m0048_create_knowledge_rag_v0::Migration),
+            Box::new(m0049_add_elder_profile_extended_fields::Migration),
+            Box::new(m0050_add_intake_primary_photo::Migration),
+            Box::new(m0051_add_learning_question_engine::Migration),
+            Box::new(m0052_add_knowledge_governance::Migration),
+            Box::new(m0053_unify_case_places_as_location_clues::Migration),
+            Box::new(m0054_link_archive_learning_items::Migration),
+            Box::new(m0055_unique_knowledge_correction::Migration),
+            Box::new(m0056_create_knowledge_terms::Migration),
+            Box::new(m0057_create_case_map_areas::Migration),
+            Box::new(m0058_create_intercom_recordings::Migration),
+            Box::new(m0059_create_voice_clue_candidates::Migration),
+            Box::new(m0060_link_voice_drafts::Migration),
+            Box::new(m0061_audio_retention::Migration),
+            Box::new(m0062_voice_candidate_revision::Migration),
+            Box::new(m0063_create_space_message_receipts::Migration),
         ]
     }
 }
@@ -117,6 +149,7 @@ pub(crate) fn sql_for_backend(
         DbBackend::Sqlite => sqlite,
         DbBackend::Postgres => postgres,
         DbBackend::MySql => mysql,
+        _ => unreachable!("unsupported database backend"),
     }
 }
 
@@ -168,7 +201,7 @@ pub(crate) async fn ensure_rollback_is_safe(
     for (description, query) in checks {
         let found = manager
             .get_connection()
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 manager.get_database_backend(),
                 (*query).to_owned(),
             ))
@@ -407,6 +440,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_legacy_places_become_auditable_location_clues() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connection should succeed");
+        Migrator::up(&database, Some(52))
+            .await
+            .expect("migrations before location conversion should succeed");
+        database.execute_unprepared(
+            "INSERT INTO users (id, email, display_name, account_type, password_hash, status, created_at, updated_at) VALUES ('place-owner', 'place-owner@demo.invalid', 'Place owner', 'member', 'hash', 'active', '2026-07-25T00:00:00.000Z', '2026-07-25T00:00:00.000Z'); INSERT INTO cases (id, case_code, status, created_at, updated_at) VALUES ('place-case', 'AG-00000053', 'active', '2026-07-25T00:00:00.000Z', '2026-07-25T00:00:00.000Z'); INSERT INTO case_places (id, case_id, name, place_type, address, longitude, latitude, source, visibility, review_status, created_by_user_id, created_at, updated_at) VALUES ('old-place', 'place-case', 'Old location', 'frequent', 'Fictional north gate', 117.2272, 31.8206, 'family', 'confirmed', 'confirmed', 'place-owner', '2026-07-25T00:00:00.000Z', '2026-07-25T01:00:00.000Z'); INSERT INTO audit_events (id, case_id, actor, action, entity_type, entity_id, metadata_json, created_at) VALUES ('old-place-review', 'place-case', 'place-owner', 'case_place.reviewed', 'case_place', 'old-place', '{\"reason\":\"verified\"}', '2026-07-25T01:00:00.000Z')"
+        ).await.expect("historical place and audit should insert");
+        Migrator::up(&database, Some(1))
+            .await
+            .expect("location conversion should succeed");
+        let clue = database.query_one_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT id, legacy_case_place_id, status, visibility, created_by_user_id, longitude, latitude FROM clues WHERE legacy_case_place_id = 'old-place'".to_owned(),
+        )).await.expect("clue query should succeed").expect("converted clue should exist");
+        let clue_id: String = clue.try_get("", "id").expect("clue ID");
+        assert_eq!(clue_id.len(), 36);
+        assert_eq!(
+            clue.try_get::<String>("", "status").expect("status"),
+            "confirmed"
+        );
+        assert_eq!(
+            clue.try_get::<String>("", "visibility")
+                .expect("visibility"),
+            "confirmed"
+        );
+        assert_eq!(
+            clue.try_get::<String>("", "created_by_user_id")
+                .expect("creator"),
+            "place-owner"
+        );
+        assert_eq!(
+            clue.try_get::<f64>("", "longitude").expect("longitude"),
+            117.2272
+        );
+        assert_eq!(
+            clue.try_get::<f64>("", "latitude").expect("latitude"),
+            31.8206
+        );
+        let link = database.query_one_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            format!("SELECT metadata_json FROM audit_events WHERE action = 'location_clue.migrated' AND entity_id = '{clue_id}'"),
+        )).await.expect("link query should succeed").expect("migration audit should exist");
+        let metadata: String = link.try_get("", "metadata_json").expect("link metadata");
+        assert!(metadata.contains("old-place"));
+        let old_audit = database
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT id FROM audit_events WHERE id = 'old-place-review'".to_owned(),
+            ))
+            .await
+            .expect("old audit query should succeed");
+        assert!(
+            old_audit.is_some(),
+            "original review audit must remain intact"
+        );
+    }
+
+    #[tokio::test]
     async fn sqlite_intake_report_details_rollback_refuses_to_discard_photos() {
         let database = Database::connect("sqlite::memory:")
             .await
@@ -502,7 +596,7 @@ mod tests {
         assert!(Migrator::down(&database, Some(1)).await.is_err());
         assert!(
             database
-                .query_one(Statement::from_string(
+                .query_one_raw(Statement::from_string(
                     sea_orm_migration::sea_orm::DbBackend::Sqlite,
                     "SELECT 1 FROM learning_resources WHERE id = 'lineage-v2' AND previous_version_id = 'lineage-v1'",
                 ))
@@ -512,7 +606,7 @@ mod tests {
         );
         assert!(
             database
-                .query_one(Statement::from_string(
+                .query_one_raw(Statement::from_string(
                     sea_orm_migration::sea_orm::DbBackend::Sqlite,
                     "SELECT 1 FROM learning_questions WHERE id = 'lineage-question-v2' AND previous_version_id = 'lineage-question-v1'",
                 ))
@@ -557,7 +651,7 @@ mod tests {
             "learning_question_answers",
         ] {
             let found = database
-                .query_one(Statement::from_string(
+                .query_one_raw(Statement::from_string(
                     DbBackend::Sqlite,
                     format!(
                         "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = '{table}'"
@@ -569,7 +663,7 @@ mod tests {
         }
 
         let preserved = database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "SELECT 1 AS found FROM learning_resources WHERE id = 'preserved-resource'"
                     .to_owned(),
@@ -638,7 +732,7 @@ mod tests {
         assert!(Migrator::down(&database, Some(1)).await.is_err());
         assert!(
             database
-                .query_one(Statement::from_string(
+                .query_one_raw(Statement::from_string(
                     sea_orm_migration::sea_orm::DbBackend::Sqlite,
                     "SELECT 1 FROM archive_drafts WHERE id = 'archive-draft-1'",
                 ))
@@ -685,7 +779,7 @@ mod tests {
         assert!(Migrator::down(&database, Some(1)).await.is_err());
         assert!(
             database
-                .query_one(Statement::from_string(
+                .query_one_raw(Statement::from_string(
                     sea_orm_migration::sea_orm::DbBackend::Sqlite,
                     "SELECT 1 FROM archive_drafts WHERE id = 'archive-review-draft' AND status = 'pending_review' AND version = 2",
                 ))
@@ -725,7 +819,7 @@ mod tests {
             .expect("locked status should be accepted after migration");
         assert!(Migrator::down(&database, Some(1)).await.is_err());
         let locked = database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT 1 FROM users WHERE id = 'locked-account-user' AND status = 'locked'",
             ))
@@ -754,7 +848,7 @@ mod tests {
             .await
             .expect("published summary constraint migration should succeed");
         let published = database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT id FROM summary_drafts WHERE case_id = 'published-summary-case' AND status = 'published'",
             ))
@@ -819,7 +913,7 @@ mod tests {
         assert!(Migrator::down(&template_database, Some(1)).await.is_err());
         assert!(
             template_database
-                .query_one(Statement::from_string(
+                .query_one_raw(Statement::from_string(
                     sea_orm_migration::sea_orm::DbBackend::Sqlite,
                     "SELECT 1 FROM ai_prompt_templates WHERE id = 'operator-template'",
                 ))
@@ -869,7 +963,7 @@ mod tests {
                 .is_err()
         );
         assert!(database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT 1 FROM clues WHERE id = 'reported-at-clue' AND reported_at = '2026-07-26T12:30:00.000Z'",
             ))
@@ -956,7 +1050,7 @@ mod tests {
             .await
             .expect("task cleanup should succeed");
         assert!(database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT 1 FROM task_assignments WHERE task_id = 'task-1' UNION ALL SELECT 1 FROM task_location_reports WHERE task_id = 'task-1'",
             ))
@@ -984,7 +1078,7 @@ mod tests {
             .expect("two-phase question migration should succeed");
 
         let operator_question = database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT status FROM intake_question_definitions WHERE id = 'operator-question'",
             ))
@@ -1006,7 +1100,7 @@ mod tests {
         assert!(Migrator::down(&database, Some(1)).await.is_err());
         assert!(
             database
-                .query_one(Statement::from_string(
+                .query_one_raw(Statement::from_string(
                     sea_orm_migration::sea_orm::DbBackend::Sqlite,
                     "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0201'",
                 ))
@@ -1035,7 +1129,7 @@ mod tests {
             .expect("operator edit should be stored without changing the migration timestamp");
         assert!(Migrator::down(&v2_database, Some(1)).await.is_err());
         assert!(v2_database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0201' AND prompt = 'Operator-edited prompt'",
             ))
@@ -1057,7 +1151,7 @@ mod tests {
             .expect("operator status change should be stored");
         assert!(Migrator::down(&v1_database, Some(1)).await.is_err());
         assert!(v1_database
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT 1 FROM intake_question_definitions WHERE id = 'intake-q-0001' AND status = 'active'",
             ))
@@ -1079,7 +1173,7 @@ mod tests {
 
     async fn intake_question_prompt(database: &impl ConnectionTrait, id: &str) -> String {
         database
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT prompt FROM intake_question_definitions WHERE id = ?",
                 [id.into()],
@@ -1132,7 +1226,7 @@ mod tests {
             .await
             .expect("existing user should remain a valid foreign-key target");
         let migrated = database
-            .query_all(Statement::from_string(
+            .query_all_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT id, account_type FROM users ORDER BY id",
             ))
@@ -1160,7 +1254,7 @@ mod tests {
             "member"
         );
         let capabilities = database
-            .query_all(Statement::from_string(
+            .query_all_raw(Statement::from_string(
                 sea_orm_migration::sea_orm::DbBackend::Sqlite,
                 "SELECT user_id, capability FROM user_global_capabilities ORDER BY user_id",
             ))

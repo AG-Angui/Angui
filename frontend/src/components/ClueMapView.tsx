@@ -1,0 +1,350 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@heroui/react";
+import { RotateCcw } from "lucide-react";
+import { useAMap } from "../hooks/useAMap";
+import { MapTimelineCard } from "./MapTimelineCard";
+import type { AMap as AMapType } from "../types/amap";
+import { LoadingState, ErrorState, EmptyState } from "./ContentState";
+import {
+  getCaseMapView,
+  type CaseMapArea,
+  type CaseMapItem,
+} from "../api/cases";
+
+export interface ClueMapViewProps {
+  caseId: string;
+  token: string | null;
+  className?: string;
+}
+
+// 类型对应的标记颜色
+const markerColors: Record<string, string> = {
+  clue: "#d84343",
+  location_clue: "#d84343",
+  task: "#2e8b57",
+  place: "#6a43cf",
+  last_seen: "#ef8f26",
+};
+
+/**
+ * 线索地图视图组件
+ * 使用高德地图展示线索、任务和地点，支持卡片与地图标记的交互同步
+ */
+export function ClueMapView({
+  caseId,
+  token,
+  className = "",
+}: ClueMapViewProps) {
+  const [items, setItems] = useState<CaseMapItem[]>([]);
+  const [areas, setAreas] = useState<CaseMapArea[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<Error | null>(null);
+
+  // 获取地图数据
+  useEffect(() => {
+    if (!token) {
+      setItems([]);
+      setDataLoading(false);
+      return;
+    }
+
+    setDataLoading(true);
+    setDataError(null);
+
+    getCaseMapView(token, caseId)
+      .then((response) => {
+        setItems(response.items as CaseMapItem[]);
+        setAreas(response.areas ?? []);
+      })
+      .catch((err) => {
+        setDataError(err);
+      })
+      .finally(() => {
+        setDataLoading(false);
+      });
+  }, [caseId, token]);
+  const [mapContainer, setMapContainer] = useState<HTMLDivElement | null>(null);
+  const { map, AMap, loading, error } = useAMap({
+    container: mapContainer,
+    zoom: 12,
+    viewMode: "3D",
+  });
+
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  const markersRef = useRef<Map<string, AMapType.Marker>>(new Map());
+  const infoWindowRef = useRef<AMapType.InfoWindow | null>(null);
+
+  // The API already returns the case timeline in its authorized order. Keep
+  // the same order for both cards and marker labels, so marker 2 always means
+  // the second timeline entry rather than the second entry that happened to
+  // include coordinates.
+  const timelineItems = useMemo(() => items, [items]);
+  const itemsWithCoords = useMemo(
+    () =>
+      timelineItems.filter(
+        (item) => item.longitude !== null && item.latitude !== null,
+      ),
+    [timelineItems],
+  );
+
+  // 创建自定义标记图标
+  const createMarkerIcon = useCallback(
+    (type: string, index: number) => {
+      if (!AMap) return undefined;
+
+      const color = markerColors[type] || "#66717f";
+      const canvas = document.createElement("canvas");
+      canvas.width = 40;
+      canvas.height = 50;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return undefined;
+
+      // 绘制水滴形状标记
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(20, 16, 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(20, 30);
+      ctx.lineTo(14, 42);
+      ctx.quadraticCurveTo(20, 50, 26, 42);
+      ctx.closePath();
+      ctx.fill();
+
+      // 绘制编号文字
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 14px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(index + 1), 20, 16);
+
+      return new AMap.Icon({
+        image: canvas.toDataURL(),
+        size: new AMap.Size(40, 50),
+        imageSize: new AMap.Size(40, 50),
+      });
+    },
+    [AMap],
+  );
+
+  // 初始化地图标记
+  useEffect(() => {
+    if (!map || !AMap) return;
+
+    // 清除旧标记
+    markersRef.current.forEach((marker) => marker.setMap(null));
+    markersRef.current.clear();
+
+    if (itemsWithCoords.length === 0) return;
+
+    // 创建信息窗体
+    if (!infoWindowRef.current) {
+      infoWindowRef.current = new AMap.InfoWindow({
+        offset: new AMap.Pixel(0, -30),
+      });
+    }
+
+    // 添加新标记
+    itemsWithCoords.forEach((item) => {
+      if (item.longitude === null || item.latitude === null) return;
+
+      const position = new AMap.LngLat(item.longitude, item.latitude);
+      const timelineIndex = timelineItems.findIndex(
+        (timelineItem) => timelineItem.id === item.id,
+      );
+      const icon = createMarkerIcon(item.object_type, timelineIndex);
+
+      const marker = new AMap.Marker({
+        position,
+        icon,
+        extData: { itemId: item.id },
+      });
+
+      // 点击标记显示信息窗体
+      marker.on("click", () => {
+        const content = `
+          <div style="padding: 12px; min-width: 200px;">
+            <h3 style="margin: 0 0 8px; font-size: 15px; font-weight: bold;">
+              ${item.display_name || "未命名"}
+            </h3>
+            <p style="margin: 4px 0; font-size: 13px; color: #666;">
+              ${item.location_text || ""}
+            </p>
+            ${
+              item.occurred_at
+                ? `<p style="margin: 4px 0; font-size: 12px; color: #999;">
+                时间: ${new Date(item.occurred_at).toLocaleString("zh-CN")}
+              </p>`
+                : ""
+            }
+          </div>
+        `;
+
+        infoWindowRef.current?.setContent(content);
+        infoWindowRef.current?.open(map, position);
+        setActiveItemId(item.id);
+      });
+
+      marker.setMap(map);
+      markersRef.current.set(item.id, marker);
+    });
+
+    // 自适应显示所有标记
+    if (itemsWithCoords.length > 0) {
+      map.setFitView(Array.from(markersRef.current.values()));
+    }
+  }, [map, AMap, itemsWithCoords, timelineItems, createMarkerIcon]);
+
+  // 卡片点击处理：飞到对应标记
+  const handleCardClick = useCallback(
+    (item: CaseMapItem) => {
+      if (!map || item.longitude === null || item.latitude === null) return;
+
+      const marker = markersRef.current.get(item.id);
+      if (marker) {
+        const position = marker.getPosition();
+        map.setZoom(16);
+        map.setCenter(position);
+        setActiveItemId(item.id);
+
+        // 自动打开信息窗体
+        setTimeout(() => {
+          const content = `
+            <div style="padding: 12px; min-width: 200px;">
+              <h3 style="margin: 0 0 8px; font-size: 15px; font-weight: bold;">
+                ${item.display_name || "未命名"}
+              </h3>
+              <p style="margin: 4px 0; font-size: 13px; color: #666;">
+                ${item.location_text || ""}
+              </p>
+              ${
+                item.occurred_at
+                  ? `<p style="margin: 4px 0; font-size: 12px; color: #999;">
+                  时间: ${new Date(item.occurred_at).toLocaleString("zh-CN")}
+                </p>`
+                  : ""
+              }
+            </div>
+          `;
+
+          infoWindowRef.current?.setContent(content);
+          infoWindowRef.current?.open(map, position);
+        }, 300);
+      }
+    },
+    [map],
+  );
+
+  // 重置视图：显示所有标记
+  const handleResetView = useCallback(() => {
+    if (!map || itemsWithCoords.length === 0) return;
+    map.setFitView(Array.from(markersRef.current.values()));
+    setActiveItemId(null);
+    infoWindowRef.current?.close();
+  }, [map, itemsWithCoords.length]);
+
+  return (
+    <div
+      className={`grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-full ${className}`}
+    >
+      {/* 侧边栏：时间线卡片列表 */}
+      <aside className="flex flex-col gap-4 overflow-hidden">
+        <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+          {dataLoading ? (
+            <LoadingState label="正在加载地图数据" />
+          ) : dataError ? (
+            <ErrorState
+              message="地图数据加载失败"
+              onRetry={() => window.location.reload()}
+            />
+          ) : timelineItems.length === 0 ? (
+            <EmptyState title="暂无地图数据" />
+          ) : (
+            timelineItems.map((item, index) => (
+              <MapTimelineCard
+                key={item.id}
+                item={item}
+                index={index}
+                isActive={activeItemId === item.id}
+                onClick={() => handleCardClick(item)}
+              />
+            ))
+          )}
+          {areas.length > 0 && (
+            <section
+              className="border-t border-slate-200 pt-3"
+              aria-label="案件区域图层"
+            >
+              <h3 className="mb-2 text-xs font-semibold text-slate-700">
+                区域图层
+              </h3>
+              {areas.map((area) => (
+                <div
+                  className="mb-2 border border-slate-200 bg-white p-2 text-xs"
+                  key={area.id}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <strong>{area.title}</strong>
+                    <span className="text-slate-500">
+                      {area.status === "approved" ? "已审核" : "待审核"}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-slate-500">
+                    {area.area_type === "search"
+                      ? "搜索区"
+                      : area.area_type === "searched"
+                        ? "已搜区"
+                        : area.area_type === "risk"
+                          ? "风险区"
+                          : "集合区"}{" "}
+                    · {area.vertices.length} 个顶点
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
+        </div>
+
+        <Button
+          variant="ghost"
+          onClick={handleResetView}
+          isDisabled={dataLoading || itemsWithCoords.length === 0}
+          className="flex items-center gap-2 flex-shrink-0"
+        >
+          <RotateCcw className="w-4 h-4" />
+          重置视图
+        </Button>
+      </aside>
+
+      {/* 地图容器 */}
+      <div className="relative min-h-[500px] overflow-hidden rounded-2xl shadow-lg">
+        <div
+          ref={setMapContainer}
+          data-testid="clue-map-container"
+          className="h-full min-h-[500px] w-full"
+        />
+        {!loading &&
+          !error &&
+          timelineItems.length > 0 &&
+          itemsWithCoords.length === 0 && (
+            <div className="pointer-events-none absolute inset-x-4 top-4 rounded-md bg-white/95 p-3 text-center text-sm text-slate-600 shadow-sm">
+              当前线索只有文字地点，暂无可安全标注的坐标。后续请通过地点选取器确认坐标。
+            </div>
+          )}
+        {loading && !error && (
+          <div className="absolute inset-0 grid place-items-center bg-white/80">
+            <LoadingState label="正在加载地图" />
+          </div>
+        )}
+        {error && (
+          <div className="absolute inset-0 grid place-items-center bg-white/90 p-4">
+            <ErrorState
+              message="地图加载失败"
+              onRetry={() => window.location.reload()}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

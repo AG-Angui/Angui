@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     entities::{
-        audit_events, case_attachments, case_memberships, cases, clue_attachment_links,
-        clue_attributions, clues, elder_profile_revisions, elder_profiles,
-        user_global_capabilities, users,
+        archive_drafts, audit_events, case_attachments, case_memberships, cases,
+        clue_attachment_links, clue_attributions, clues, collaboration_spaces,
+        elder_profile_revisions, elder_profiles, tasks, user_global_capabilities, users,
     },
     error::ApiError,
     models::{
@@ -24,7 +24,7 @@ use crate::{
     roles::{AccountType, CaseRole, GlobalCapability},
 };
 
-const CASE_STATUSES: &[&str] = &["active", "resolved", "closed"];
+const CASE_STATUSES: &[&str] = &["active", "ended", "reviewing", "archived"];
 const CLUE_REVIEW_STATUSES: &[&str] = &[
     "needs_verification",
     "confirmed",
@@ -262,7 +262,15 @@ pub async fn update_case_status(
     case_id: &str,
     request: UpdateCaseStatusRequest,
 ) -> Result<CaseDetail, ApiError> {
-    let next_status = request.status.trim().to_lowercase();
+    // Keep accepting the pre-lifecycle `resolved` label from older clients,
+    // while persisting the canonical task-6 `ended` state.
+    let requested_status = request.status.trim().to_lowercase();
+    let legacy_resolved = requested_status == "resolved";
+    let next_status = if legacy_resolved {
+        "ended".to_owned()
+    } else {
+        requested_status
+    };
     if !CASE_STATUSES.contains(&next_status.as_str()) {
         return Err(ApiError::Validation(format!(
             "unsupported case status {next_status:?}"
@@ -283,11 +291,119 @@ pub async fn update_case_status(
         )));
     }
 
+    let reopening = next_status == "active"
+        && matches!(
+            case_model.status.as_str(),
+            "ended" | "reviewing" | "archived" | "resolved" | "closed"
+        );
+    let reason = trim_optional(request.reason);
+    if (reopening || (next_status == "ended" && !legacy_resolved))
+        && reason
+            .as_deref()
+            .is_none_or(|value| value.chars().count() > 1_000)
+    {
+        return Err(ApiError::Validation(
+            "an end or re-open reason between 1 and 1000 characters is required".to_owned(),
+        ));
+    }
+    if next_status == "archived"
+        && archive_drafts::Entity::find()
+            .filter(archive_drafts::Column::CaseId.eq(case_id))
+            .filter(archive_drafts::Column::Status.eq("pending_review"))
+            .filter(archive_drafts::Column::DeidentificationStatus.eq("deidentified"))
+            .filter(archive_drafts::Column::ReviewedByUserId.is_not_null())
+            .one(&transaction)
+            .await?
+            .is_none()
+    {
+        return Err(ApiError::Conflict(
+            "an approved, de-identified archive draft is required".to_owned(),
+        ));
+    }
+
     let previous_status = case_model.status.clone();
     let mut active = case_model.into_active_model();
     active.status = Set(next_status.clone());
     active.updated_at = Set(now());
     active.update(&transaction).await?;
+
+    if next_status == "ended" {
+        // Ending a case is an operational stop, not just a label change.
+        // Preserve task history while preventing any pending/assigned work
+        // from remaining actionable after the commander ends the case.
+        let unfinished_tasks = tasks::Entity::find()
+            .filter(tasks::Column::CaseId.eq(case_id))
+            .filter(tasks::Column::Status.is_in([
+                "pending_claim",
+                "assigned",
+                "accepted",
+                "active",
+                "blocked",
+            ]))
+            .all(&transaction)
+            .await?;
+        let active_spaces = collaboration_spaces::Entity::find()
+            .filter(collaboration_spaces::Column::CaseId.eq(case_id))
+            .filter(collaboration_spaces::Column::Status.eq("active"))
+            .all(&transaction)
+            .await?;
+        tasks::Entity::update_many()
+            .col_expr(
+                tasks::Column::Status,
+                sea_orm::sea_query::Expr::value("cancelled"),
+            )
+            .col_expr(
+                tasks::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now()),
+            )
+            .filter(tasks::Column::CaseId.eq(case_id))
+            .filter(tasks::Column::Status.is_in([
+                "pending_claim",
+                "assigned",
+                "accepted",
+                "active",
+                "blocked",
+            ]))
+            .exec(&transaction)
+            .await?;
+        for task in unfinished_tasks {
+            write_audit(
+                &transaction,
+                Some(case_id.to_owned()),
+                auth,
+                "task.closed_on_case_end",
+                "task",
+                task.id,
+                Some(json!({"from": task.status, "to": "cancelled", "reason": reason})),
+            )
+            .await?;
+        }
+        for space in active_spaces {
+            write_audit(
+                &transaction,
+                Some(case_id.to_owned()),
+                auth,
+                "collaboration_space.closed_on_case_end",
+                "collaboration_space",
+                space.id,
+                Some(json!({"from": "active", "to": "archived"})),
+            )
+            .await?;
+        }
+        collaboration_spaces::Entity::update_many()
+            .col_expr(
+                collaboration_spaces::Column::Status,
+                sea_orm::sea_query::Expr::value("archived"),
+            )
+            .col_expr(
+                collaboration_spaces::Column::ArchivedAt,
+                sea_orm::sea_query::Expr::value(Some(now())),
+            )
+            .filter(collaboration_spaces::Column::CaseId.eq(case_id))
+            .filter(collaboration_spaces::Column::Status.eq("active"))
+            .exec(&transaction)
+            .await?;
+    }
 
     write_audit(
         &transaction,
@@ -296,7 +412,11 @@ pub async fn update_case_status(
         "case.status_changed",
         "case",
         case_id.to_owned(),
-        Some(json!({ "from": previous_status, "to": next_status })),
+        Some(json!({
+            "from": previous_status,
+            "to": next_status,
+            "reason": reason,
+        })),
     )
     .await?;
 
@@ -381,6 +501,61 @@ pub async fn update_elder_profile(
             active.last_seen_location = Set(value);
             changed_fields.push("last_seen_location");
         }
+    }
+    if let Some(value) = request.mobility_notes
+        && previous
+            .mobility_notes
+            .as_ref()
+            .and_then(|m| m.summary.as_ref())
+            .map(|s| s.as_str())
+            != Some(value.as_str())
+    {
+        active.mobility_notes = Set(Some(value));
+        changed_fields.push("mobility_notes");
+    }
+    if let Some(value) = request.transportation_ability
+        && previous
+            .transportation_ability
+            .as_ref()
+            .and_then(|t| t.summary.as_ref())
+            .map(|s| s.as_str())
+            != Some(value.as_str())
+    {
+        active.transportation_ability = Set(Some(value));
+        changed_fields.push("transportation_ability");
+    }
+    if let Some(value) = request.frequent_locations
+        && previous
+            .frequent_locations
+            .as_ref()
+            .and_then(|f| f.summary.as_ref())
+            .map(|s| s.as_str())
+            != Some(value.as_str())
+    {
+        active.frequent_locations = Set(Some(value));
+        changed_fields.push("frequent_locations");
+    }
+    if let Some(value) = request.behavior_habits
+        && previous
+            .behavior_habits
+            .as_ref()
+            .and_then(|b| b.summary.as_ref())
+            .map(|s| s.as_str())
+            != Some(value.as_str())
+    {
+        active.behavior_habits = Set(Some(value));
+        changed_fields.push("behavior_habits");
+    }
+    if let Some(value) = request.suspicious_motive
+        && previous
+            .suspicious_motive
+            .as_ref()
+            .and_then(|s| s.summary.as_ref())
+            .map(|s_val| s_val.as_str())
+            != Some(value.as_str())
+    {
+        active.suspicious_motive = Set(Some(value));
+        changed_fields.push("suspicious_motive");
     }
     if changed_fields.is_empty() {
         return Err(ApiError::Validation(
@@ -483,6 +658,16 @@ pub(crate) async fn create_clue_in_transaction<C: ConnectionTrait>(
         confirmed_at: Set(None),
         location_text: Set(trim_optional(request.location_text)),
         location_precision: Set(location_precision),
+        location_kind: Set(request
+            .location_kind
+            .map(|value| value.trim().to_lowercase())),
+        longitude: Set(request.longitude),
+        latitude: Set(request.latitude),
+        location_radius_meters: Set(request.location_radius_meters),
+        visibility: Set(request.visibility.map(|value| value.trim().to_lowercase())),
+        confidence: Set(request.confidence.map(|value| value.trim().to_lowercase())),
+        created_by_user_id: Set(Some(auth.id.clone())),
+        legacy_case_place_id: Set(None),
         next_action: Set(trim_optional(request.next_action)),
         linked_task_reference: Set(trim_optional(request.linked_task_reference)),
         related_clue_id: Set(None),
@@ -1215,6 +1400,11 @@ pub(crate) async fn insert_case_records<C: ConnectionTrait>(
         health_notes: Set(trim_optional(request.health_notes.clone())),
         last_seen_at: Set(trim_optional(request.last_seen_at.clone())),
         last_seen_location: Set(trim_optional(request.last_seen_location.clone())),
+        mobility_notes: Set(request.mobility_notes.clone()),
+        transportation_ability: Set(request.transportation_ability.clone()),
+        frequent_locations: Set(request.frequent_locations.clone()),
+        behavior_habits: Set(request.behavior_habits.clone()),
+        suspicious_motive: Set(request.suspicious_motive.clone()),
         created_at: Set(timestamp.to_owned()),
         updated_at: Set(timestamp.to_owned()),
     }
@@ -1323,6 +1513,11 @@ fn validate_elder_profile_update(request: &UpdateElderProfileRequest) -> Result<
         && request.health_notes.is_none()
         && request.last_seen_at.is_none()
         && request.last_seen_location.is_none()
+        && request.mobility_notes.is_none()
+        && request.transportation_ability.is_none()
+        && request.frequent_locations.is_none()
+        && request.behavior_habits.is_none()
+        && request.suspicious_motive.is_none()
     {
         return Err(ApiError::Validation(
             "at least one elder profile field is required".to_owned(),
@@ -1401,6 +1596,64 @@ fn validate_clue_request(request: &CreateClueRequest) -> Result<(), ApiError> {
             "location_precision requires location_text".to_owned(),
         ));
     }
+    let location_kind = request
+        .location_kind
+        .as_deref()
+        .map(|value| value.trim().to_lowercase());
+    if let Some(kind) = location_kind.as_deref()
+        && !matches!(kind, "point" | "area")
+    {
+        return Err(ApiError::Validation(
+            "location_kind must be point or area".to_owned(),
+        ));
+    }
+    if request.longitude.is_some() != request.latitude.is_some() {
+        return Err(ApiError::Validation(
+            "longitude and latitude must be supplied together".to_owned(),
+        ));
+    }
+    if let Some(longitude) = request.longitude
+        && !(-180.0..=180.0).contains(&longitude)
+    {
+        return Err(ApiError::Validation("longitude is out of range".to_owned()));
+    }
+    if let Some(latitude) = request.latitude
+        && !(-90.0..=90.0).contains(&latitude)
+    {
+        return Err(ApiError::Validation("latitude is out of range".to_owned()));
+    }
+    if request.location_radius_meters.is_some() && location_kind.as_deref() != Some("area") {
+        return Err(ApiError::Validation(
+            "location_radius_meters is only valid for an area".to_owned(),
+        ));
+    }
+    if let Some(radius) = request.location_radius_meters
+        && (!radius.is_finite() || radius <= 0.0)
+    {
+        return Err(ApiError::Validation(
+            "location_radius_meters must be greater than zero".to_owned(),
+        ));
+    }
+    if let Some(visibility) = request.visibility.as_deref()
+        && !matches!(
+            visibility.trim().to_lowercase().as_str(),
+            "public" | "confirmed" | "internal"
+        )
+    {
+        return Err(ApiError::Validation(
+            "visibility must be public, confirmed, or internal".to_owned(),
+        ));
+    }
+    if let Some(confidence) = request.confidence.as_deref()
+        && !matches!(
+            confidence.trim().to_lowercase().as_str(),
+            "high" | "medium" | "low" | "unverified"
+        )
+    {
+        return Err(ApiError::Validation(
+            "confidence must be high, medium, low, or unverified".to_owned(),
+        ));
+    }
     if request.attachment_ids.len() > 10 {
         return Err(ApiError::Validation(
             "attachment_ids cannot contain more than 10 items".to_owned(),
@@ -1476,10 +1729,10 @@ fn case_transition_allowed(current: &str, next: &str) -> bool {
     current == next
         || matches!(
             (current, next),
-            ("active", "resolved")
-                | ("active", "closed")
-                | ("resolved", "active")
-                | ("resolved", "closed")
+            ("active", "ended")
+                | ("ended", "reviewing" | "active")
+                | ("reviewing", "archived" | "active")
+                | ("archived", "active")
         )
 }
 
@@ -1569,6 +1822,11 @@ mod tests {
                 health_notes: Some("模拟认知障碍信息".to_owned()),
                 last_seen_at: Some("2026-07-13T09:00:00Z".to_owned()),
                 last_seen_location: Some("模拟公园北门".to_owned()),
+                mobility_notes: None,
+                transportation_ability: None,
+                frequent_locations: None,
+                behavior_habits: None,
+                suspicious_motive: None,
             },
         )
         .await
@@ -1613,6 +1871,12 @@ mod tests {
                 occurred_at: Some("2026-07-13T09:10:00Z".to_owned()),
                 location_text: Some("模拟公园北门".to_owned()),
                 location_precision: None,
+                location_kind: None,
+                longitude: None,
+                latitude: None,
+                location_radius_meters: None,
+                visibility: None,
+                confidence: None,
                 next_action: None,
                 linked_task_reference: None,
                 attachment_ids: Vec::new(),
@@ -1668,6 +1932,7 @@ mod tests {
             &case.id,
             UpdateCaseStatusRequest {
                 status: "resolved".to_owned(),
+                reason: None,
             },
         )
         .await

@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { apiBlobRequest, apiRequest } from "./client";
 
 export interface LearningResource {
   id: string;
@@ -33,10 +33,11 @@ export interface LearningQuestionOption {
 export interface LearningQuestion {
   id: string;
   prompt: string;
-  question_type: "single_choice" | "true_false" | "scenario";
+  question_type: "single_choice";
   difficulty: "basic" | "intermediate" | "advanced";
   tags: string[];
   options: LearningQuestionOption[];
+  definition: { options: LearningQuestionOption[] };
   source_resource_id: string;
   previous_version_id?: string | null;
   version: number;
@@ -44,17 +45,51 @@ export interface LearningQuestion {
 export interface LearningAnswer {
   question_id: string;
   is_correct: boolean;
+  score: number;
+  max_score: number;
   explanation: string;
   source: LearningSource;
 }
+export interface LearningAnswerHistory {
+  id: string;
+  question_id: string;
+  selected_option_id: string;
+  is_correct: boolean;
+  score: number;
+  max_score: number;
+  question_version: number;
+  question_snapshot: {
+    prompt?: string;
+    explanation?: string;
+    version?: number;
+  };
+  created_at: string;
+}
+export interface LearningProgress {
+  answered_questions: number;
+  total_answers: number;
+  correct_answers: number;
+  accuracy: number;
+  latest_answered_at: string | null;
+}
+export interface KnowledgeImage {
+  id: string;
+  storage_path: string;
+  mime_type: string;
+  width: number | null;
+  height: number | null;
+  metadata: Record<string, unknown>;
+}
 export interface LearningSource {
-  resource_id: string;
+  knowledge_item_id: string;
   title: string;
   version: number;
+  score: number;
+  images: KnowledgeImage[];
 }
 export interface KnowledgeAnswer {
   answer: string;
-  certainty: "source_backed" | "insufficient_sources";
+  certainty: "source_backed" | "rule_based" | "insufficient_sources";
   sources: LearningSource[];
   human_review_notice: string;
 }
@@ -85,6 +120,7 @@ export interface ManagedLearningResource extends LearningResource {
   lifecycle: LearningContentLifecycle;
 }
 export interface ManagedLearningQuestion extends LearningQuestion {
+  answer_key: { correct_option_id: string };
   lifecycle: LearningContentLifecycle;
 }
 export interface CreateLearningResourceInput {
@@ -110,6 +146,7 @@ export interface CreateLearningQuestionInput {
   tags: string[];
   options: LearningQuestionOption[];
   correct_option_id: string;
+  supplemental_resource_ids?: string[];
   explanation: string;
   visibility: "authenticated" | "volunteer" | "learner";
   effective_at: string;
@@ -123,10 +160,17 @@ export const listLearningResources = (
   filters: { category_id?: string; tag?: string } = {},
 ) => {
   const query = new URLSearchParams(
-    Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][],
+    Object.entries(filters).filter(([, value]) => Boolean(value)) as [
+      string,
+      string,
+    ][],
   );
   const suffix = query.size ? `?${query}` : "";
-  return apiRequest<LearningResource[]>(`/learning/resources${suffix}`, {}, token);
+  return apiRequest<LearningResource[]>(
+    `/learning/resources${suffix}`,
+    {},
+    token,
+  );
 };
 export const listLearningCategories = (token: string) =>
   apiRequest<LearningCategory[]>("/learning/categories", {}, token);
@@ -134,23 +178,31 @@ export const submitLearningCategoryProposal = (
   token: string,
   name: string,
   submission_reason: string,
-) => apiRequest<LearningCategory>(
-  "/learning/categories/proposals",
-  { method: "POST", body: JSON.stringify({ name, submission_reason }) },
-  token,
-);
+) =>
+  apiRequest<LearningCategory>(
+    "/learning/categories/proposals",
+    { method: "POST", body: JSON.stringify({ name, submission_reason }) },
+    token,
+  );
 export const submitLearningResourceDraft = (
   token: string,
   input: CreateLearningResourceInput,
-) => apiRequest<ManagedLearningResource>(
-  "/learning/resources/drafts",
-  { method: "POST", body: JSON.stringify(input) },
-  token,
-);
+) =>
+  apiRequest<ManagedLearningResource>(
+    "/learning/resources/drafts",
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
 export const getPublicPreventionCard = () =>
   apiRequest<LearningResource>("/learning/public/prevention-card");
 export const listLearningQuestions = (token: string) =>
   apiRequest<LearningQuestion[]>("/learning/questions", {}, token);
+export const listLearningAnswers = (token: string) =>
+  apiRequest<LearningAnswerHistory[]>("/learning/answers", {}, token);
+export const listWrongLearningAnswers = (token: string) =>
+  apiRequest<LearningAnswerHistory[]>("/learning/wrong-answers", {}, token);
+export const getLearningProgress = (token: string) =>
+  apiRequest<LearningProgress>("/learning/progress", {}, token);
 export const submitLearningAnswer = (
   token: string,
   questionId: string,
@@ -160,30 +212,41 @@ export const submitLearningAnswer = (
     `/learning/questions/${questionId}/answers`,
     {
       method: "POST",
-      body: JSON.stringify({ selected_option_id: selectedOptionId }),
+      body: JSON.stringify({
+        answer_payload: { selected_option_id: selectedOptionId },
+      }),
     },
     token,
   );
-export const askKnowledge = (token: string, question: string) =>
+export const askKnowledge = (
+  token: string,
+  question: string,
+  filters: { category?: string; tag?: string } = {},
+) =>
   apiRequest<KnowledgeAnswer>(
-    "/knowledge/ask",
-    { method: "POST", body: JSON.stringify({ question }) },
+    "/knowledge-bases/learning-materials/chat",
+    { method: "POST", body: JSON.stringify({ query: question, ...filters }) },
     token,
   );
 export const listManagedLearningResources = (token: string) =>
   apiRequest<ManagedLearningResource[]>("/admin/learning/resources", {}, token);
 export const listManagedLearningCategories = (token: string) =>
-  apiRequest<ManagedLearningCategory[]>("/admin/learning/categories", {}, token);
+  apiRequest<ManagedLearningCategory[]>(
+    "/admin/learning/categories",
+    {},
+    token,
+  );
 export const transitionManagedLearningCategory = (
   token: string,
   categoryId: string,
   action: "enable" | "reject" | "disable",
   reason: string,
-) => apiRequest<LearningCategory>(
-  `/admin/learning/categories/${categoryId}/${action}`,
-  { method: "POST", body: JSON.stringify({ reason }) },
-  token,
-);
+) =>
+  apiRequest<LearningCategory>(
+    `/admin/learning/categories/${categoryId}/${action}`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+    token,
+  );
 export const listManagedLearningQuestions = (token: string) =>
   apiRequest<ManagedLearningQuestion[]>("/admin/learning/questions", {}, token);
 export const createManagedLearningResource = (
@@ -215,6 +278,304 @@ export const transitionManagedLearningResource = (
     { method: "POST", body: JSON.stringify({ reason }) },
     token,
   );
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  visibility: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+export interface KnowledgeTerm {
+  id: string;
+  knowledge_base_id: string;
+  kind: "category" | "tag";
+  name: string;
+  status: "active" | "archived";
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+export interface KnowledgeImportRow {
+  id: string;
+  row_number: number;
+  status: string;
+  error_message: string | null;
+  normalized_data: Record<string, unknown>;
+  knowledge_item_id: string | null;
+}
+export interface KnowledgeImportBatch {
+  id: string;
+  knowledge_base_id: string;
+  file_name: string;
+  status: string;
+  total_rows: number;
+  valid_rows: number;
+  invalid_rows: number;
+  rows: KnowledgeImportRow[];
+  confirmed_at: string | null;
+}
+export interface KnowledgeAttachment {
+  id: string;
+  file_name: string;
+  storage_path: string;
+  mime_type: string;
+  byte_size: number;
+  created_at: string;
+}
+export interface KnowledgeItem {
+  knowledge_item_id: string;
+  title: string;
+  summary: string;
+  content: string;
+  category: string;
+  keywords: string[];
+  score: number;
+  knowledge_base_id: string;
+  version: number;
+  source_name: string;
+  source_url: string | null;
+  images: KnowledgeImage[];
+  attachments?: KnowledgeAttachment[];
+  status: string;
+}
+export interface KnowledgeSearchResult extends KnowledgeItem {
+  matched_fields: string[];
+  attachments: KnowledgeAttachment[];
+}
+export interface KnowledgeBaseOverview {
+  id: string;
+  name: string;
+  status: string;
+  visibility: string;
+  total_items: number;
+  draft_items: number;
+  reviewed_items: number;
+  published_items: number;
+  withdrawn_items: number;
+  image_count: number;
+}
+export interface KnowledgeOverview {
+  total_bases: number;
+  enabled_bases: number;
+  total_items: number;
+  draft_items: number;
+  reviewed_items: number;
+  published_items: number;
+  withdrawn_items: number;
+  image_count: number;
+  bases: KnowledgeBaseOverview[];
+}
+export const listKnowledgeBases = (token: string) =>
+  apiRequest<KnowledgeBase[]>("/admin/knowledge-bases", {}, token);
+export const createKnowledgeBase = (
+  token: string,
+  input: { name: string; description: string; visibility: string },
+) =>
+  apiRequest<KnowledgeBase>(
+    "/admin/knowledge-bases",
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+export const previewKnowledgeImport = (
+  token: string,
+  baseId: string,
+  file: File,
+) => {
+  const form = new FormData();
+  form.append("file", file);
+  return apiRequest<KnowledgeImportBatch>(
+    `/admin/knowledge-bases/${baseId}/imports/preview`,
+    { method: "POST", body: form },
+    token,
+  );
+};
+export const getKnowledgeImport = (token: string, batchId: string) =>
+  apiRequest<KnowledgeImportBatch>(
+    `/admin/knowledge-imports/${batchId}`,
+    {},
+    token,
+  );
+export const confirmKnowledgeImport = (token: string, batchId: string) =>
+  apiRequest<KnowledgeImportBatch>(
+    `/admin/knowledge-imports/${batchId}/confirm`,
+    { method: "POST" },
+    token,
+  );
+export const cancelKnowledgeImport = (token: string, batchId: string) =>
+  apiRequest<KnowledgeImportBatch>(
+    `/admin/knowledge-imports/${batchId}/cancel`,
+    { method: "POST" },
+    token,
+  );
+export const listKnowledgeItems = (token: string, baseId: string) =>
+  apiRequest<KnowledgeItem[]>(
+    `/admin/knowledge-bases/${baseId}/items`,
+    {},
+    token,
+  );
+export const listKnowledgeTerms = (token: string, baseId: string) =>
+  apiRequest<KnowledgeTerm[]>(
+    `/admin/knowledge-bases/${baseId}/terms`,
+    {},
+    token,
+  );
+export const createKnowledgeTerm = (
+  token: string,
+  baseId: string,
+  input: { kind: "category" | "tag"; name: string },
+) =>
+  apiRequest<KnowledgeTerm>(
+    `/admin/knowledge-bases/${baseId}/terms`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+export const disableKnowledgeTerm = (
+  token: string,
+  termId: string,
+  reason: string,
+) =>
+  apiRequest<KnowledgeTerm>(
+    `/admin/knowledge-terms/${termId}/disable`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+    token,
+  );
+export const previewKnowledgeItemForLearner = (token: string, itemId: string) =>
+  apiRequest<KnowledgeSearchResult>(
+    `/admin/knowledge-items/${itemId}/learner-preview`,
+    {},
+    token,
+  );
+export const getKnowledgeOverview = (token: string, baseId: string) =>
+  apiRequest<KnowledgeOverview>(
+    `/admin/knowledge-bases/${baseId}/overview`,
+    {},
+    token,
+  );
+export const uploadKnowledgeImage = (
+  token: string,
+  itemId: string,
+  file: File,
+) => {
+  const form = new FormData();
+  form.append("file", file);
+  return apiRequest<KnowledgeImage>(
+    `/admin/knowledge-items/${itemId}/images`,
+    { method: "POST", body: form },
+    token,
+  );
+};
+export const downloadKnowledgeImage = (
+  token: string,
+  itemId: string,
+  imageId: string,
+  options: RequestInit = {},
+) =>
+  apiBlobRequest(
+    `/admin/knowledge-items/${itemId}/images/${imageId}`,
+    options,
+    token,
+  );
+export const uploadKnowledgeAttachment = (
+  token: string,
+  itemId: string,
+  file: File,
+) => {
+  const form = new FormData();
+  form.append("file", file);
+  return apiRequest<KnowledgeAttachment>(
+    `/admin/knowledge-items/${itemId}/attachments`,
+    { method: "POST", body: form },
+    token,
+  );
+};
+export const downloadKnowledgeAttachment = (
+  token: string,
+  itemId: string,
+  attachmentId: string,
+) =>
+  apiBlobRequest(
+    `/admin/knowledge-items/${itemId}/attachments/${attachmentId}`,
+    {},
+    token,
+  );
+export const createKnowledgeItem = (
+  token: string,
+  baseId: string,
+  input: {
+    title: string;
+    summary: string;
+    content: string;
+    category: string;
+    category_id: string | null;
+    keywords: string[];
+    source_name: string;
+    source_url: string | null;
+    visibility: string;
+    previous_version_id?: string | null;
+    images: {
+      storage_path: string;
+      mime_type: string;
+      width: number | null;
+      height: number | null;
+      metadata: Record<string, unknown>;
+    }[];
+  },
+) =>
+  apiRequest<KnowledgeItem>(
+    `/admin/knowledge-bases/${baseId}/items`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+export const updateKnowledgeItem = (
+  token: string,
+  itemId: string,
+  input: {
+    title?: string;
+    summary?: string;
+    content?: string;
+    category?: string;
+    category_id?: string | null;
+    keywords?: string[];
+    source_name?: string;
+    source_url?: string | null;
+    visibility?: string;
+  },
+) =>
+  apiRequest<KnowledgeItem>(
+    `/admin/knowledge-items/${itemId}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+    token,
+  );
+export const transitionKnowledgeItem = (
+  token: string,
+  itemId: string,
+  action: "deidentify" | "review" | "publish" | "withdraw",
+  reason: string,
+) =>
+  apiRequest<KnowledgeItem>(
+    `/admin/knowledge-items/${itemId}/${action}`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+    token,
+  );
+export const searchLearningKnowledge = (
+  token: string,
+  filters: { query?: string; category_id?: string; tag?: string } = {},
+) => {
+  const query = new URLSearchParams(
+    Object.entries(filters).filter(([, value]) => Boolean(value)) as [
+      string,
+      string,
+    ][],
+  );
+  return apiRequest<{ results: KnowledgeSearchResult[] }>(
+    `/learning/resources/search${query.size ? `?${query}` : ""}`,
+    {},
+    token,
+  );
+};
 export const transitionManagedLearningQuestion = (
   token: string,
   questionId: string,

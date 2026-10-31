@@ -547,6 +547,7 @@ fn order_name(order: &sea_orm::Order) -> &'static str {
         sea_orm::Order::Asc => "asc",
         sea_orm::Order::Desc => "desc",
         sea_orm::Order::Field(_) => "field",
+        _ => "unknown",
     }
 }
 

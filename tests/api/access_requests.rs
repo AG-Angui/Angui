@@ -13,7 +13,7 @@ async fn access_request_verification_is_public_and_admin_review_is_protected() {
     assert_eq!(body["status"], "pending_verification");
     let token = context
         .database
-        .query_one(sea_orm::Statement::from_string(
+        .query_one_raw(sea_orm::Statement::from_string(
             sea_orm::DbBackend::Sqlite,
             "SELECT token_hash FROM auth_email_tokens LIMIT 1",
         ))

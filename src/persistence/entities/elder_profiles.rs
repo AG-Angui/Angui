@@ -16,6 +16,16 @@ pub struct Model {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobility_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transportation_ability: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequent_locations: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_habits: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspicious_motive: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

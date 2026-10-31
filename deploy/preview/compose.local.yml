@@ -45,6 +45,16 @@ services:
       # Preview is disposable; retain location samples for one day so the
       # collaboration map and E2E/demo sharing flow are usable by default.
       ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: ${ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS:-24}
+      ANGUI_AUDIO_STORAGE_DIRECTORY: ${ANGUI_AUDIO_STORAGE_DIRECTORY:-/app/data/audio}
+      ANGUI_AUDIO_RETENTION_DAYS: ${ANGUI_AUDIO_RETENTION_DAYS:-1}
+      ANGUI_ASR_URL: http://asr:8000/transcribe
+      ANGUI_ASR_KEY: ${ANGUI_ASR_KEY:?ANGUI_ASR_KEY is required}
+      ANGUI_LIVEKIT_URL: ${PREVIEW_LIVEKIT_URL:?PREVIEW_LIVEKIT_URL is required}
+      ANGUI_LIVEKIT_ADMIN_URL: http://livekit:7880
+      ANGUI_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}
+      ANGUI_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
+      ANGUI_TURN_URL: ${PREVIEW_TURN_URL:?PREVIEW_TURN_URL is required}
+      ANGUI_TURN_SECRET: ${TURN_SECRET:?TURN_SECRET is required}
       # Optional server-only Web Service credential. It is intentionally not
       # present in the frontend, migration, or bootstrap containers.
       AMAP_WEBSERVICE_KEY: ${AMAP_WEBSERVICE_KEY:-}
@@ -89,8 +99,51 @@ services:
       - default
       - angui-proxy
 
+  livekit:
+    image: livekit/livekit-server:v1.9.7
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "${PREVIEW_LIVEKIT_UDP_PORT:?PREVIEW_LIVEKIT_UDP_PORT is required}:${PREVIEW_LIVEKIT_UDP_PORT:?PREVIEW_LIVEKIT_UDP_PORT is required}/udp"
+      - "${PREVIEW_LIVEKIT_TCP_PORT:?PREVIEW_LIVEKIT_TCP_PORT is required}:${PREVIEW_LIVEKIT_TCP_PORT:?PREVIEW_LIVEKIT_TCP_PORT is required}/tcp"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${PREVIEW_PROXY_NETWORK:-angui-proxy}
+      - traefik.http.routers.${PREVIEW_ROUTER:?PREVIEW_ROUTER is required}-livekit.rule=Host(`livekit-${PREVIEW_HOST:?PREVIEW_HOST is required}`)
+      - traefik.http.routers.${PREVIEW_ROUTER:?PREVIEW_ROUTER is required}-livekit.entrypoints=web
+      - traefik.http.services.${PREVIEW_ROUTER:?PREVIEW_ROUTER is required}-livekit.loadbalancer.server.port=7880
+    networks:
+      - default
+      - angui-proxy
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    command: ["-n", "--fingerprint", "--use-auth-secret", "--static-auth-secret=${TURN_SECRET:?TURN_SECRET is required}", "--realm=${PREVIEW_HOST:?PREVIEW_HOST is required}", "--external-ip=${PREVIEW_PUBLIC_IP:?PREVIEW_PUBLIC_IP is required}", "--min-port=${PREVIEW_TURN_RELAY_MIN:?PREVIEW_TURN_RELAY_MIN is required}", "--max-port=${PREVIEW_TURN_RELAY_MAX:?PREVIEW_TURN_RELAY_MAX is required}", "--no-cli", "--no-tls", "--no-dtls"]
+    ports:
+      - "${PREVIEW_TURN_PORT:?PREVIEW_TURN_PORT is required}:3478/udp"
+      - "${PREVIEW_TURN_RELAY_MIN:?PREVIEW_TURN_RELAY_MIN is required}-${PREVIEW_TURN_RELAY_MAX:?PREVIEW_TURN_RELAY_MAX is required}:${PREVIEW_TURN_RELAY_MIN:?PREVIEW_TURN_RELAY_MIN is required}-${PREVIEW_TURN_RELAY_MAX:?PREVIEW_TURN_RELAY_MAX is required}/udp"
+
+  asr:
+    image: ${PREVIEW_ASR_IMAGE:-angui-asr:cpu}
+    restart: unless-stopped
+    environment:
+      ASR_API_KEY: ${ANGUI_ASR_KEY:?ANGUI_ASR_KEY is required}
+      ASR_MODEL: ${ASR_MODEL:-small}
+      ASR_DEVICE: cpu
+      ASR_COMPUTE_TYPE: int8
+    volumes:
+      - preview-asr-models:/models
+
 volumes:
   preview-data:
+  preview-asr-models:
+    external: true
+    name: angui-preview-asr-models
 
 networks:
   angui-proxy:

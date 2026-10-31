@@ -98,6 +98,12 @@ pub struct CreateSpaceMessageRequest {
     pub message_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgeSpaceMessageRequest {
+    pub status: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SpaceMessageResponse {
     pub id: String,
@@ -146,6 +152,8 @@ pub struct LearningResourceQuery {
     pub resource_type: Option<String>,
     pub tag: Option<String>,
     pub category_id: Option<String>,
+    /// Keyword query against the governed knowledge title, body, category and tags.
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +204,8 @@ pub struct LearningQuestionResponse {
     pub difficulty: String,
     pub tags: Vec<String>,
     pub options: Value,
+    /// Public, renderer-facing question data. It never contains the answer key.
+    pub definition: Value,
     pub source_resource_id: String,
     pub previous_version_id: Option<String>,
     pub version: i32,
@@ -204,15 +214,42 @@ pub struct LearningQuestionResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmitLearningAnswerRequest {
-    pub selected_option_id: String,
+    /// Compatibility input for the original single-choice endpoint.
+    pub selected_option_id: Option<String>,
+    /// Type-specific answer data. New clients must use this field.
+    pub answer_payload: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SubmitLearningAnswerResponse {
     pub question_id: String,
     pub is_correct: bool,
+    pub score: i32,
+    pub max_score: i32,
     pub explanation: String,
     pub source: LearningAnswerSource,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningAnswerHistoryResponse {
+    pub id: String,
+    pub question_id: String,
+    pub selected_option_id: String,
+    pub is_correct: bool,
+    pub score: i32,
+    pub max_score: i32,
+    pub question_version: i32,
+    pub question_snapshot: Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LearningProgressResponse {
+    pub answered_questions: u64,
+    pub total_answers: u64,
+    pub correct_answers: u64,
+    pub accuracy: f64,
+    pub latest_answered_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,6 +263,8 @@ pub struct LearningAnswerSource {
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeAskRequest {
     pub question: String,
+    pub category: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -234,6 +273,245 @@ pub struct KnowledgeAnswerResponse {
     pub certainty: String,
     pub sources: Vec<LearningAnswerSource>,
     pub human_review_notice: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateKnowledgeBaseRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub visibility: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateKnowledgeBaseRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub visibility: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeBaseResponse {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub visibility: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateKnowledgeTermRequest {
+    /// Controlled vocabulary kind. Only `category` and `tag` are accepted.
+    pub kind: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeTermResponse {
+    pub id: String,
+    pub knowledge_base_id: String,
+    pub kind: String,
+    pub name: String,
+    pub status: String,
+    pub created_by_user_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeTermTransitionRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeImageInput {
+    pub storage_path: String,
+    pub mime_type: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    #[serde(default = "empty_json_object")]
+    pub metadata: Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeImageResponse {
+    pub id: String,
+    pub storage_path: String,
+    pub mime_type: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeAttachmentResponse {
+    pub id: String,
+    pub file_name: String,
+    pub storage_path: String,
+    pub mime_type: String,
+    pub byte_size: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateKnowledgeItemRequest {
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    pub content: String,
+    #[serde(default)]
+    pub category: String,
+    pub category_id: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    pub source_name: Option<String>,
+    pub source_url: Option<String>,
+    pub visibility: String,
+    /// Existing governed item when this draft is a correction version.
+    pub previous_version_id: Option<String>,
+    #[serde(default)]
+    pub images: Vec<KnowledgeImageInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateKnowledgeItemRequest {
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub content: Option<String>,
+    pub category: Option<String>,
+    pub category_id: Option<String>,
+    pub keywords: Option<Vec<String>>,
+    pub source_name: Option<String>,
+    pub source_url: Option<String>,
+    pub visibility: Option<String>,
+    pub images: Option<Vec<KnowledgeImageInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeTransitionRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeImportRowResponse {
+    pub id: String,
+    pub row_number: i32,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub normalized_data: Value,
+    pub knowledge_item_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeImportBatchResponse {
+    pub id: String,
+    pub knowledge_base_id: String,
+    pub file_name: String,
+    pub status: String,
+    pub total_rows: i32,
+    pub valid_rows: i32,
+    pub invalid_rows: i32,
+    pub rows: Vec<KnowledgeImportRowResponse>,
+    pub confirmed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeSearchRequest {
+    pub query: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeBaseOverviewResponse {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub visibility: String,
+    pub total_items: u64,
+    pub draft_items: u64,
+    pub reviewed_items: u64,
+    pub published_items: u64,
+    pub withdrawn_items: u64,
+    pub image_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeOverviewResponse {
+    pub total_bases: u64,
+    pub enabled_bases: u64,
+    pub total_items: u64,
+    pub draft_items: u64,
+    pub reviewed_items: u64,
+    pub published_items: u64,
+    pub withdrawn_items: u64,
+    pub image_count: u64,
+    pub bases: Vec<KnowledgeBaseOverviewResponse>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct KnowledgeSearchResultResponse {
+    pub summary: String,
+    pub knowledge_item_id: String,
+    pub category: String,
+    pub keywords: Vec<String>,
+    pub title: String,
+    pub content: String,
+    pub score: f64,
+    pub knowledge_base_id: String,
+    pub version: i32,
+    pub source_name: String,
+    pub source_url: Option<String>,
+    pub images: Vec<KnowledgeImageResponse>,
+    pub attachments: Vec<KnowledgeAttachmentResponse>,
+    pub status: String,
+    /// Fields that contributed to the keyword match. This is intentionally
+    /// returned by the server so the UI does not have to guess.
+    pub matched_fields: Vec<String>,
+}
+#[derive(Debug, Serialize)]
+pub struct KnowledgeSearchResponse {
+    pub results: Vec<KnowledgeSearchResultResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeChatRequest {
+    pub query: String,
+    pub limit: Option<u32>,
+    pub category: Option<String>,
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeChatSourceResponse {
+    pub knowledge_item_id: String,
+    pub title: String,
+    pub version: i32,
+    pub score: f64,
+    pub images: Vec<KnowledgeImageResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeChatResponse {
+    pub answer: String,
+    pub certainty: String,
+    pub sources: Vec<KnowledgeChatSourceResponse>,
+    pub human_review_notice: String,
+}
+
+fn empty_json_object() -> Value {
+    Value::Object(Default::default())
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,6 +554,8 @@ pub struct CreateLearningQuestionRequest {
     pub tags: Vec<String>,
     pub options: Value,
     pub correct_option_id: String,
+    #[serde(default)]
+    pub supplemental_resource_ids: Vec<String>,
     pub explanation: String,
     pub previous_version_id: Option<String>,
     pub visibility: String,
@@ -321,6 +601,8 @@ pub struct ManagedLearningResourceResponse {
 pub struct ManagedLearningQuestionResponse {
     #[serde(flatten)]
     pub question: LearningQuestionResponse,
+    /// Only governance endpoints expose the answer key.
+    pub answer_key: Value,
     pub lifecycle: LearningContentLifecycleResponse,
 }
 
@@ -475,6 +757,7 @@ pub struct DeidentifyArchiveDraftRequest {
 pub struct ReviewArchiveDraftRequest {
     pub action: String,
     pub reason: String,
+    pub confirm_retention: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -558,6 +841,16 @@ pub struct CreateCaseRequest {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobility_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transportation_ability: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequent_locations: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_habits: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspicious_motive: Option<String>,
 }
 
 /// Starts a family-owned intake session. These values remain unconfirmed
@@ -631,6 +924,14 @@ pub struct StartIntakeAiInitialReviewRequest {
 pub struct AcknowledgeIntakeAiInitialReviewRequest {
     pub confirmed_issue_ids: Vec<String>,
     pub human_confirmed: bool,
+    #[serde(default)]
+    pub issue_responses: Vec<IssueResponseEdit>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IssueResponseEdit {
+    pub issue_id: String,
+    pub user_answer: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -644,6 +945,16 @@ pub struct ConfirmedIntakeProfile {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobility_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transportation_ability: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequent_locations: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_habits: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspicious_motive: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -664,6 +975,8 @@ pub struct IntakeAiInitialReviewResponse {
     pub degradation_status: String,
     pub issues: Vec<IntakeAiInitialReviewIssue>,
     pub blocking_assessments: Vec<IntakeAssessment>,
+    /// Exact profile snapshot that the later second confirmation must submit.
+    pub reviewed_profile: Option<ConfirmedIntakeProfile>,
     pub generated_at: String,
     pub requires_family_acknowledgement: bool,
     pub ready_for_second_confirmation: bool,
@@ -718,6 +1031,7 @@ pub struct IntakePhotoResponse {
     pub content_type: String,
     pub byte_size: i64,
     pub created_at: String,
+    pub is_primary: bool,
 }
 
 impl IntakeSessionResponse {
@@ -959,6 +1273,9 @@ impl IntakePhaseProgress {
 #[serde(deny_unknown_fields)]
 pub struct UpdateCaseStatusRequest {
     pub status: String,
+    /// Required when a commander re-opens a case after it has ended.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -972,6 +1289,16 @@ pub struct UpdateElderProfileRequest {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+    #[serde(default)]
+    pub mobility_notes: Option<String>,
+    #[serde(default)]
+    pub transportation_ability: Option<String>,
+    #[serde(default)]
+    pub frequent_locations: Option<String>,
+    #[serde(default)]
+    pub behavior_habits: Option<String>,
+    #[serde(default)]
+    pub suspicious_motive: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -987,6 +1314,18 @@ pub struct CreateClueRequest {
     pub location_text: Option<String>,
     #[serde(default)]
     pub location_precision: Option<String>,
+    #[serde(default)]
+    pub location_kind: Option<String>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub location_radius_meters: Option<f64>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<String>,
     #[serde(default)]
     pub next_action: Option<String>,
     #[serde(default)]
@@ -1197,6 +1536,23 @@ pub struct ElderProfileResponse {
     pub health_notes: Option<String>,
     pub last_seen_at: Option<String>,
     pub last_seen_location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobility_notes: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transportation_ability: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequent_locations: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_habits: Option<ElderProfileExtendedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspicious_motive: Option<ElderProfileExtendedField>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ElderProfileExtendedField {
+    pub summary: Option<String>,
+    pub source_fields: Vec<String>,
+    pub confidence: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1213,6 +1569,13 @@ pub struct ClueResponse {
     pub confirmed_at: Option<String>,
     pub location_text: Option<String>,
     pub location_precision: Option<String>,
+    pub location_kind: Option<String>,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub location_radius_meters: Option<f64>,
+    pub visibility: Option<String>,
+    pub confidence: Option<String>,
+    pub legacy_case_place_id: Option<String>,
     pub next_action: Option<String>,
     pub linked_task_reference: Option<String>,
     pub related_clue_id: Option<String>,
@@ -1299,6 +1662,75 @@ pub struct TaskListResponse {
 #[derive(Debug, Serialize)]
 pub struct CaseMapViewResponse {
     pub items: Vec<CaseMapItem>,
+    #[serde(default)]
+    pub areas: Vec<CaseMapAreaResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MapAreaVertexResponse {
+    pub vertex_order: i32,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseMapAreaResponse {
+    pub id: String,
+    pub case_id: String,
+    pub area_type: String,
+    pub status: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub version: i32,
+    pub vertices: Vec<MapAreaVertexResponse>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapAreaVertexInput {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCaseMapAreaRequest {
+    pub area_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub vertices: Vec<MapAreaVertexInput>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateCaseMapAreaRequest {
+    pub expected_version: i32,
+    pub area_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub vertices: Vec<MapAreaVertexInput>,
+    pub task_id: Option<String>,
+    pub clue_id: Option<String>,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewCaseMapAreaRequest {
+    pub expected_version: i32,
+    pub action: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1598,6 +2030,7 @@ pub struct ArchiveDraftResponse {
     pub version: i32,
     pub usage_scope: String,
     pub retention_status: String,
+    pub knowledge_item_id: Option<String>,
     pub deidentified_at: Option<String>,
     pub reviewed_at: Option<String>,
     pub created_at: String,
@@ -1746,6 +2179,21 @@ impl From<elder_profiles::Model> for ElderProfileResponse {
             health_notes: model.health_notes,
             last_seen_at: model.last_seen_at,
             last_seen_location: model.last_seen_location,
+            mobility_notes: model
+                .mobility_notes
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            transportation_ability: model
+                .transportation_ability
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            frequent_locations: model
+                .frequent_locations
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            behavior_habits: model
+                .behavior_habits
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            suspicious_motive: model
+                .suspicious_motive
+                .and_then(|json| serde_json::from_str(&json).ok()),
         }
     }
 }
@@ -1770,6 +2218,13 @@ impl ClueResponse {
             confirmed_at: model.confirmed_at,
             location_text: model.location_text,
             location_precision: model.location_precision,
+            location_kind: model.location_kind,
+            longitude: model.longitude,
+            latitude: model.latitude,
+            location_radius_meters: model.location_radius_meters,
+            visibility: model.visibility,
+            confidence: model.confidence,
+            legacy_case_place_id: model.legacy_case_place_id,
             next_action: model.next_action,
             linked_task_reference: model.linked_task_reference,
             related_clue_id: model.related_clue_id,

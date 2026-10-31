@@ -10,10 +10,10 @@ use crate::{
     error::ApiError,
     models::{
         AddCaseMemberRequest, AuthenticatedUser, CaseMapItem, CaseMapViewResponse, CasePoiQuery,
-        CasePoiRouteQuery, CaseResourceConfigurationResponse, CreateCasePlaceRequest,
-        CreateCaseRequest, CreateCaseSourceRecordRequest, CreateClueDraftRequest,
-        CreateClueRequest, CreateSummaryDraftRequest, CreateTaskRequest, ReviewCasePlaceRequest,
-        ReviewClueDraftRequest, ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
+        CasePoiRouteQuery, CaseResourceConfigurationResponse, CreateCaseRequest,
+        CreateCaseSourceRecordRequest, CreateClueDraftRequest, CreateClueRequest,
+        CreateSummaryDraftRequest, CreateTaskRequest, ReviewClueDraftRequest,
+        ReviewSummaryDraftRequest, TaskListQuery, UpdateCaseStatusRequest,
         UpdateElderProfileRequest,
     },
     roles::CaseRole,
@@ -38,6 +38,16 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/tasks", web::get().to(list_tasks))
             .route("/{case_id}/tasks", web::post().to(create_task))
             .route("/{case_id}/map-view", web::get().to(get_map_view))
+            .route("/{case_id}/map-areas", web::get().to(list_map_areas))
+            .route("/{case_id}/map-areas", web::post().to(create_map_area))
+            .route(
+                "/{case_id}/map-areas/{area_id}",
+                web::patch().to(update_map_area),
+            )
+            .route(
+                "/{case_id}/map-areas/{area_id}/review",
+                web::patch().to(review_map_area),
+            )
             .route("/{case_id}/summary", web::get().to(get_case_summary))
             .route(
                 "/{case_id}/public-progress",
@@ -87,12 +97,6 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 "/{case_id}/archive-drafts",
                 web::post().to(create_archive_draft),
             )
-            .route("/{case_id}/places", web::get().to(list_places))
-            .route("/{case_id}/places", web::post().to(create_place))
-            .route(
-                "/{case_id}/places/{place_id}/review",
-                web::patch().to(review_place),
-            )
             .route(
                 "/{case_id}/resource-configuration",
                 web::get().to(get_resource_configuration),
@@ -105,6 +109,70 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/members", web::get().to(list_case_members))
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn list_map_areas(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(crate::services::case_map_area_service::list(&state.db, &auth, &case_id).await?))
+}
+
+async fn create_map_area(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+    request: web::Json<crate::models::CreateCaseMapAreaRequest>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Created().json(
+        crate::services::case_map_area_service::create(
+            &state.db,
+            &auth,
+            &case_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn update_map_area(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    path: web::Path<(String, String)>,
+    request: web::Json<crate::models::UpdateCaseMapAreaRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, area_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_map_area_service::update(
+            &state.db,
+            &auth,
+            &case_id,
+            &area_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
+}
+
+async fn review_map_area(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    path: web::Path<(String, String)>,
+    request: web::Json<crate::models::ReviewCaseMapAreaRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let (case_id, area_id) = path.into_inner();
+    Ok(HttpResponse::Ok().json(
+        crate::services::case_map_area_service::review(
+            &state.db,
+            &auth,
+            &case_id,
+            &area_id,
+            request.into_inner(),
+        )
+        .await?,
+    ))
 }
 
 async fn list_command_intake(
@@ -148,59 +216,6 @@ async fn get_resource_configuration(
         attachment_max_per_case: state.attachment_max_per_case,
         case_place_types: state.case_place_types.clone(),
     }))
-}
-
-async fn create_place(
-    auth: AuthenticatedUser,
-    state: web::Data<AppState>,
-    case_id: web::Path<String>,
-    request: web::Json<CreateCasePlaceRequest>,
-) -> Result<HttpResponse, ApiError> {
-    let place = crate::services::case_resource_service::create_place(
-        &state.db,
-        &auth,
-        &case_id,
-        request.into_inner(),
-        &state.case_place_types,
-    )
-    .await?;
-    Ok(HttpResponse::Created().json(place))
-}
-
-async fn list_places(
-    auth: AuthenticatedUser,
-    state: web::Data<AppState>,
-    case_id: web::Path<String>,
-) -> Result<HttpResponse, ApiError> {
-    let role = case_service::require_case_role(
-        &state.db,
-        &auth.id,
-        &case_id,
-        &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
-    )
-    .await?;
-    let places =
-        crate::services::case_resource_service::visible_places(&state.db, &case_id, &auth.id, role)
-            .await?;
-    Ok(HttpResponse::Ok().json(places))
-}
-
-async fn review_place(
-    auth: AuthenticatedUser,
-    state: web::Data<AppState>,
-    path: web::Path<(String, String)>,
-    request: web::Json<ReviewCasePlaceRequest>,
-) -> Result<HttpResponse, ApiError> {
-    let (case_id, place_id) = path.into_inner();
-    let place = crate::services::case_resource_service::review_place(
-        &state.db,
-        &auth,
-        &case_id,
-        &place_id,
-        request.into_inner(),
-    )
-    .await?;
-    Ok(HttpResponse::Ok().json(place))
 }
 
 async fn create_attachment(
@@ -358,53 +373,49 @@ async fn get_map_view(
             updated_at: detail.updated_at.clone(),
         });
     }
-    items.extend(detail.places.into_iter().map(|place| {
-        CaseMapItem {
-            id: place.id,
-            object_type: "place".to_owned(),
-            display_name: Some(place.name),
-            longitude: place.longitude,
-            latitude: place.latitude,
-            location_text: Some(place.address),
-            location_precision: if place.longitude.is_some() {
-                "exact"
-            } else {
-                "unknown"
-            }
-            .to_owned(),
-            source: place.source,
-            occurred_at: None,
-            reported_at: Some(place.created_at),
-            review_status: place.review_status,
-            related_task_id: None,
-            updated_at: place.updated_at,
-        }
-    }));
-    if detail.access_role == CaseRole::Commander {
-        items.extend(
-            detail
-                .clues
-                .into_iter()
-                .filter(|clue| clue.status == "confirmed" && clue.location_text.is_some())
-                .map(|clue| CaseMapItem {
-                    id: clue.id,
-                    object_type: "clue".to_owned(),
-                    display_name: Some(clue.content),
-                    longitude: None,
-                    latitude: None,
-                    location_text: clue.location_text,
-                    location_precision: clue
-                        .location_precision
-                        .unwrap_or_else(|| "unknown".to_owned()),
-                    source: clue.source_type,
-                    occurred_at: clue.occurred_at,
-                    reported_at: Some(clue.reported_at),
-                    review_status: clue.status,
-                    related_task_id: clue.linked_task_reference,
-                    updated_at: clue.updated_at,
-                }),
-        );
-    }
+    // Project every visible clue that supplies a location. This deliberately
+    // includes older records with coordinates that predate `location_kind`;
+    // otherwise their valid positions disappear from the map.
+    items.extend(
+        detail
+            .clues
+            .iter()
+            .filter(|clue| {
+                (detail.access_role == CaseRole::Commander
+                    || clue.location_kind.is_some()
+                    || (clue.longitude.is_some() && clue.latitude.is_some()))
+                    && (clue.location_text.is_some()
+                        || (clue.longitude.is_some() && clue.latitude.is_some()))
+                    && (detail.access_role == CaseRole::Commander || clue.status == "confirmed")
+            })
+            .map(|clue| CaseMapItem {
+                id: clue.id.clone(),
+                object_type: if clue
+                    .raw_record_reference
+                    .as_deref()
+                    .is_some_and(|reference| reference.starts_with("legacy-place-type:"))
+                {
+                    "place"
+                } else {
+                    "clue"
+                }
+                .to_owned(),
+                display_name: Some(clue.content.clone()),
+                longitude: clue.longitude,
+                latitude: clue.latitude,
+                location_text: clue.location_text.clone(),
+                location_precision: clue
+                    .location_precision
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                source: clue.source_type.clone(),
+                occurred_at: clue.occurred_at.clone(),
+                reported_at: Some(clue.reported_at.clone()),
+                review_status: clue.status.clone(),
+                related_task_id: None,
+                updated_at: clue.updated_at.clone(),
+            }),
+    );
     items.extend(task_items.into_iter().map(|task| {
         CaseMapItem {
             id: task.id.clone(),
@@ -427,7 +438,24 @@ async fn get_map_view(
             updated_at: task.updated_at,
         }
     }));
-    Ok(HttpResponse::Ok().json(CaseMapViewResponse { items }))
+    // Keep the same newest-first order used by the clue timeline. Stable
+    // fallback fields make records with only a report timestamp predictable.
+    items.sort_by(|left, right| {
+        right
+            .occurred_at
+            .as_deref()
+            .or(right.reported_at.as_deref())
+            .or(Some(right.updated_at.as_str()))
+            .cmp(
+                &left
+                    .occurred_at
+                    .as_deref()
+                    .or(left.reported_at.as_deref())
+                    .or(Some(left.updated_at.as_str())),
+            )
+    });
+    let areas = crate::services::case_map_area_service::list(&state.db, &auth, &case_id).await?;
+    Ok(HttpResponse::Ok().json(CaseMapViewResponse { items, areas }))
 }
 
 async fn get_case_summary(

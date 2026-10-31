@@ -366,8 +366,38 @@ pub async fn bootstrap_demo_users_with_reviewer_admins(
             },
         ),
         (
+            "commander2@demo.invalid",
+            "模拟指挥 2",
+            AccountType::Member,
+            if grant_reviewer_admins {
+                &[GlobalCapability::Commander, GlobalCapability::Admin][..]
+            } else {
+                &[GlobalCapability::Commander][..]
+            },
+        ),
+        (
             "volunteer@demo.invalid",
             "模拟志愿者",
+            AccountType::Member,
+            if grant_reviewer_admins {
+                &[GlobalCapability::Volunteer, GlobalCapability::Admin][..]
+            } else {
+                &[GlobalCapability::Volunteer][..]
+            },
+        ),
+        (
+            "volunteer2@demo.invalid",
+            "模拟志愿者 2",
+            AccountType::Member,
+            if grant_reviewer_admins {
+                &[GlobalCapability::Volunteer, GlobalCapability::Admin][..]
+            } else {
+                &[GlobalCapability::Volunteer][..]
+            },
+        ),
+        (
+            "volunteer3@demo.invalid",
+            "模拟志愿者 3",
             AccountType::Member,
             if grant_reviewer_admins {
                 &[GlobalCapability::Volunteer, GlobalCapability::Admin][..]
@@ -384,6 +414,12 @@ pub async fn bootstrap_demo_users_with_reviewer_admins(
         (
             "admin@demo.invalid",
             "模拟管理员",
+            AccountType::Member,
+            &[GlobalCapability::Admin][..],
+        ),
+        (
+            "admin2@demo.invalid",
+            "模拟管理员 2",
             AccountType::Member,
             &[GlobalCapability::Admin][..],
         ),

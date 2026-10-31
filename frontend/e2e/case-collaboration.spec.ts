@@ -10,7 +10,9 @@ import {
 } from "./support";
 
 async function useAccount(page: Page, token: string, path: string) {
-  await page.goto("/", { waitUntil: "networkidle" });
+  // Use a same-origin document without the React app so the previous account's
+  // in-flight auth request cannot clear the next account's token on navigation.
+  await page.goto("/api/health", { waitUntil: "domcontentloaded" });
   await page.evaluate((sessionToken) => {
     sessionStorage.clear();
     sessionStorage.setItem("angui.session.token", sessionToken);
@@ -32,7 +34,9 @@ test("a family clue moves through commander review and returns as confirmed prog
     name: fixture.displayName,
     exact: false,
   });
-  await expect(page.getByRole("region", { name: "案件列表" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("region", { name: "案件列表" })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(familyCaseLink).toBeVisible();
   await familyCaseLink.click();
   await page.getByRole("button", { name: /提交一条新线索/ }).click();
@@ -45,15 +49,22 @@ test("a family clue moves through commander review and returns as confirmed prog
     familyToken,
     `/api/cases/${fixture.caseId}/clues`,
   )) as { items: Array<{ id: string; content: string; status: string }> };
-  const submitted = familyClues.items.find((item) => item.content === clueContent);
+  const submitted = familyClues.items.find(
+    (item) => item.content === clueContent,
+  );
   expect(submitted).toBeDefined();
   expect(submitted?.status).toBe("pending_review");
 
   const commanderToken = await tokenFor(request, accounts.commander);
-  await apiPatch(request, commanderToken, `/api/clues/${submitted!.id}/review`, {
-    status: "confirmed",
-    reason: "The E2E commander verified this browser submission.",
-  });
+  await apiPatch(
+    request,
+    commanderToken,
+    `/api/clues/${submitted!.id}/review`,
+    {
+      status: "confirmed",
+      reason: "The E2E commander verified this browser submission.",
+    },
+  );
 
   await useAccount(page, commanderToken, `/command/cases/${fixture.caseId}`);
   await expect(
@@ -89,18 +100,26 @@ test("a commander creates a collaboration space through the browser and its acti
   await page.getByRole("button", { name: "创建空间" }).click();
 
   const commanderSpaceRow = page.locator("li").filter({ hasText: spaceName });
-  await expect(commanderSpaceRow.getByRole("button", { name: "开始位置共享" })).toBeVisible();
+  await expect(
+    commanderSpaceRow.getByRole("button", { name: "开始位置共享" }),
+  ).toBeVisible();
   await commanderSpaceRow.getByRole("button", { name: "开始位置共享" }).click();
-  await expect(commanderSpaceRow.getByRole("button", { name: "停止位置共享" })).toBeVisible();
+  await expect(
+    commanderSpaceRow.getByRole("button", { name: "停止位置共享" }),
+  ).toBeVisible();
   await commanderSpaceRow.getByRole("button", { name: "停止位置共享" }).click();
-  await expect(commanderSpaceRow.getByRole("button", { name: "开始位置共享" })).toBeVisible();
+  await expect(
+    commanderSpaceRow.getByRole("button", { name: "开始位置共享" }),
+  ).toBeVisible();
 
   const commanderSpaces = (await apiGet(
     request,
     commanderToken,
     `/api/cases/${fixture.caseId}/collaboration-spaces`,
   )) as Array<{ id: string; name: string; status: string }>;
-  const space = commanderSpaces.find((candidate) => candidate.name === spaceName);
+  const space = commanderSpaces.find(
+    (candidate) => candidate.name === spaceName,
+  );
   expect(space).toBeDefined();
   expect(space?.status).toBe("active");
 
@@ -108,11 +127,17 @@ test("a commander creates a collaboration space through the browser and its acti
     request,
     commanderToken,
     `/api/collaboration-spaces/${space!.id}/snapshot`,
-  )) as { members: Array<{ display_name: string; role: string; status: string }> };
+  )) as {
+    members: Array<{ display_name: string; role: string; status: string }>;
+  };
   expect(commanderSnapshot.members).toEqual(
-    expect.arrayContaining([expect.objectContaining({ role: "commander", status: "active" })]),
+    expect.arrayContaining([
+      expect.objectContaining({ role: "commander", status: "active" }),
+    ]),
   );
-  expect(commanderSnapshot.members.every((member) => member.display_name.length > 0)).toBe(true);
+  expect(
+    commanderSnapshot.members.every((member) => member.display_name.length > 0),
+  ).toBe(true);
 
   const commanderMessage = (await apiPost(
     request,
@@ -120,7 +145,9 @@ test("a commander creates a collaboration space through the browser and its acti
     `/api/collaboration-spaces/${space!.id}/messages`,
     { content: `Commander update ${suffix}` },
   )) as { sender_display_name: string; sent_at: string; content: string };
-  expect(commanderMessage).toMatchObject({ content: `Commander update ${suffix}` });
+  expect(commanderMessage).toMatchObject({
+    content: `Commander update ${suffix}`,
+  });
   expect(commanderMessage.sender_display_name).toBeTruthy();
   expect(Number.isNaN(Date.parse(commanderMessage.sent_at))).toBe(false);
 
@@ -158,24 +185,41 @@ test("a commander creates a collaboration space through the browser and its acti
   )) as Array<{ id: string; status: string; member_status: string | null }>;
   expect(availableVolunteerSpaces).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ id: space!.id, status: "active", member_status: null }),
+      expect.objectContaining({
+        id: space!.id,
+        status: "active",
+        member_status: null,
+      }),
     ]),
   );
 
   await useAccount(page, volunteerToken, "/volunteer");
   const volunteerSpace = page.locator("li").filter({ hasText: spaceName });
-  await expect(volunteerSpace.getByRole("button", { name: "同意并加入" })).toBeVisible({
+  await expect(
+    volunteerSpace.getByRole("button", { name: "同意并加入" }),
+  ).toBeVisible({
     timeout: 15_000,
   });
   await volunteerSpace.getByRole("button", { name: "同意并加入" }).click();
   await expect(volunteerSpace.getByText("已在空间中")).toBeVisible();
 
-  await expect(volunteerSpace.getByRole("button", { name: "开始位置共享" })).toBeVisible();
+  await expect(
+    volunteerSpace.getByRole("button", { name: "开始位置共享" }),
+  ).toBeVisible();
   await volunteerSpace.getByRole("button", { name: "开始位置共享" }).click();
-  await expect(volunteerSpace.getByRole("button", { name: "停止位置共享" }).first()).toBeVisible();
-  await volunteerSpace.getByRole("button", { name: "停止位置共享" }).last().click();
-  await expect(volunteerSpace.getByRole("button", { name: "开始位置共享" })).toBeVisible();
-  await expect(volunteerSpace.getByText(`Commander update ${suffix}`)).toBeVisible();
+  await expect(
+    volunteerSpace.getByRole("button", { name: "停止位置共享" }).first(),
+  ).toBeVisible();
+  await volunteerSpace
+    .getByRole("button", { name: "停止位置共享" })
+    .last()
+    .click();
+  await expect(
+    volunteerSpace.getByRole("button", { name: "开始位置共享" }),
+  ).toBeVisible();
+  await expect(
+    volunteerSpace.getByText(`Commander update ${suffix}`),
+  ).toBeVisible();
 
   const volunteerSpaces = (await apiGet(
     request,
@@ -184,7 +228,11 @@ test("a commander creates a collaboration space through the browser and its acti
   )) as Array<{ id: string; status: string; member_status: string | null }>;
   expect(volunteerSpaces).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ id: space!.id, status: "active", member_status: "active" }),
+      expect.objectContaining({
+        id: space!.id,
+        status: "active",
+        member_status: "active",
+      }),
     ]),
   );
 
@@ -203,20 +251,41 @@ test("a commander creates a collaboration space through the browser and its acti
   );
   await expect(reportResponse).toBeOK();
   const report = (await reportResponse.json()) as {
+    id: string;
     status: string;
     failed_reason: string | null;
   };
-  // There is intentionally no configured ASR provider in the E2E environment.
-  expect(report.status).toBe("failed");
-  expect(report.failed_reason).toBe("ASR provider is not configured");
+  expect(report.status).toBe("uploaded");
+  expect(report.failed_reason).toBeNull();
 
-  const volunteerReports = (await apiGet(
-    request,
-    volunteerToken,
-    `/api/collaboration-spaces/${space!.id}/voice-reports`,
-  )) as Array<{ reporter_id: string; status: string; transcript?: unknown }>;
+  // Upload returns before the asynchronous worker runs. This environment has
+  // no ASR provider, so the persisted report must eventually fail explicitly.
+  let volunteerReports: Array<{
+    id: string;
+    reporter_id: string;
+    status: string;
+    failed_reason: string | null;
+    transcript?: unknown;
+  }> = [];
+  await expect
+    .poll(
+      async () => {
+        volunteerReports = (await apiGet(
+          request,
+          volunteerToken,
+          `/api/collaboration-spaces/${space!.id}/voice-reports`,
+        )) as typeof volunteerReports;
+        return volunteerReports.find((item) => item.id === report.id)?.status;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe("failed");
   expect(volunteerReports).toHaveLength(1);
-  expect(volunteerReports[0]).toMatchObject({ status: "failed" });
+  expect(volunteerReports[0]).toMatchObject({
+    id: report.id,
+    status: "failed",
+    failed_reason: "ASR provider is not configured",
+  });
   expect(volunteerReports[0]).not.toHaveProperty("transcript");
 
   const commanderReports = (await apiGet(
@@ -226,7 +295,10 @@ test("a commander creates a collaboration space through the browser and its acti
   )) as Array<{ reporter_id: string; status: string }>;
   expect(commanderReports).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ reporter_id: volunteerReports[0].reporter_id, status: "failed" }),
+      expect.objectContaining({
+        reporter_id: volunteerReports[0].reporter_id,
+        status: "failed",
+      }),
     ]),
   );
 
@@ -235,7 +307,9 @@ test("a commander creates a collaboration space through the browser and its acti
     { headers: { Authorization: `Bearer ${commanderToken}` } },
   );
   await expect(archiveResponse).toBeOK();
-  await expect((await archiveResponse.json()) as { status: string }).toMatchObject({
+  await expect(
+    (await archiveResponse.json()) as { status: string },
+  ).toMatchObject({
     status: "archived",
   });
 
@@ -245,7 +319,9 @@ test("a commander creates a collaboration space through the browser and its acti
     `/api/cases/${fixture.caseId}/collaboration-spaces`,
   )) as Array<{ id: string; status: string }>;
   expect(archivedSpaces).toEqual(
-    expect.arrayContaining([expect.objectContaining({ id: space!.id, status: "archived" })]),
+    expect.arrayContaining([
+      expect.objectContaining({ id: space!.id, status: "archived" }),
+    ]),
   );
 
   const volunteerArchiveWrite = await request.post(

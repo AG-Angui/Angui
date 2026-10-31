@@ -355,6 +355,7 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     assert_eq!(question.status(), StatusCode::CREATED);
     let question: Value = test::read_body_json(question).await;
     let question_id = question["id"].as_str().expect("question id").to_owned();
+    assert_eq!(question["answer_key"]["correct_option_id"], "a");
 
     for (email, action) in [
         (COMMANDER, "deidentify"),
@@ -494,6 +495,7 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
     let questions: Value = test::read_body_json(questions).await;
     assert_eq!(questions.as_array().map(Vec::len), Some(1));
     assert!(questions[0].get("correct_option_id").is_none());
+    assert_eq!(questions[0]["definition"]["options"][0]["id"], "a");
 
     let family_export = test::call_service(
         &app,
@@ -555,14 +557,71 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
                 header::AUTHORIZATION,
                 format!("Bearer {}", context.token(LEARNER).await),
             ))
-            .set_json(json!({ "selected_option_id": "a" }))
+            .set_json(json!({ "answer_payload": { "selected_option_id": "a" } }))
             .to_request(),
     )
     .await;
     assert_eq!(answer.status(), StatusCode::OK);
     let answer: Value = test::read_body_json(answer).await;
     assert_eq!(answer["is_correct"], true);
+    assert_eq!(answer["score"], 1);
+    assert_eq!(answer["max_score"], 1);
     assert_eq!(answer["source"]["resource_id"], resource_id);
+    let snapshot = context
+        .database
+        .query_one_raw(sea_orm::Statement::from_string(
+            sea_orm::DbBackend::Sqlite,
+            format!(
+                "SELECT 1 FROM learning_question_answers WHERE question_id = '{question_id}' AND answer_payload_json IS NOT NULL AND question_snapshot_json IS NOT NULL AND score = 1"
+            ),
+        ))
+        .await
+        .expect("answer snapshot query should succeed");
+    assert!(
+        snapshot.is_some(),
+        "new attempts must retain an immutable snapshot"
+    );
+
+    let learner_token = context.token(LEARNER).await;
+    let history = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/answers")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(history.status(), StatusCode::OK);
+    let history: Value = test::read_body_json(history).await;
+    assert_eq!(history[0]["question_id"], question_id);
+    assert_eq!(history[0]["question_version"], 1);
+    assert_eq!(
+        history[0]["question_snapshot"]["explanation"],
+        "解析仅在提交后返回，并携带来源。"
+    );
+    let wrong = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/wrong-answers")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(wrong.status(), StatusCode::OK);
+    let wrong: Value = test::read_body_json(wrong).await;
+    assert_eq!(wrong, json!([]));
+    let progress = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/progress")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(progress.status(), StatusCode::OK);
+    let progress: Value = test::read_body_json(progress).await;
+    assert_eq!(progress["answered_questions"], 1);
+    assert_eq!(progress["correct_answers"], 1);
 
     let duplicate_submission_event = context
         .database
@@ -599,6 +658,20 @@ async fn learning_content_requires_independent_governance_and_withdrawal_revokes
         "not_found",
     )
     .await;
+    let retained_history = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/learning/answers")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {learner_token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(retained_history.status(), StatusCode::OK);
+    let retained_history: Value = test::read_body_json(retained_history).await;
+    assert_eq!(
+        retained_history[0]["question_snapshot"],
+        history[0]["question_snapshot"]
+    );
 
     let manually_withdrawn_original = test::call_service(
         &app,

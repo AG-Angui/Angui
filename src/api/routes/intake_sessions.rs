@@ -22,12 +22,26 @@ use crate::{
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/intake-sessions")
+            .route("", web::get().to(list_intake_sessions))
             .route("", web::post().to(create_intake_session))
+            .route("/{session_id}", web::get().to(get_intake_session))
             .route("/{session_id}/photos", web::get().to(list_intake_photos))
             .route("/{session_id}/photos", web::post().to(upload_intake_photo))
             .route(
                 "/{session_id}/photos/{photo_id}",
                 web::get().to(download_intake_photo),
+            )
+            .route(
+                "/{session_id}/photos/{photo_id}",
+                web::delete().to(delete_intake_photo),
+            )
+            .route(
+                "/{session_id}/photos/{photo_id}",
+                web::put().to(replace_intake_photo),
+            )
+            .route(
+                "/{session_id}/photos/{photo_id}/primary",
+                web::patch().to(set_primary_intake_photo),
             )
             .route(
                 "/{session_id}/answers",
@@ -98,6 +112,23 @@ async fn list_intake_photos(
     ))
 }
 
+async fn list_intake_sessions(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(intake_session_service::list_intake_sessions(&state.db, &auth).await?))
+}
+
+async fn get_intake_session(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    session_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(intake_session_service::get_intake_session(&state.db, &auth, &session_id).await?))
+}
+
 async fn upload_intake_photo(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -148,6 +179,67 @@ async fn download_intake_photo(
         .body(photo.bytes))
 }
 
+async fn delete_intake_photo(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, photo_id) = path.into_inner();
+    crate::services::intake_photo_service::delete_photo(
+        &state.db,
+        &auth,
+        &session_id,
+        &photo_id,
+        &state.attachment_storage_directory,
+    )
+    .await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+async fn replace_intake_photo(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    multipart: Multipart,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, photo_id) = path.into_inner();
+    let (filename, content_type, bytes) =
+        crate::services::case_resource_service::read_single_image_upload(
+            multipart,
+            state.attachment_max_image_bytes,
+        )
+        .await?;
+    let photo = crate::services::intake_photo_service::replace_photo(
+        &state.db,
+        &auth,
+        &session_id,
+        &photo_id,
+        crate::services::case_resource_service::AttachmentUpload {
+            filename: &filename,
+            declared_content_type: &content_type,
+            bytes: &bytes,
+        },
+        &state.attachment_storage_directory,
+        state.attachment_max_image_bytes,
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(photo))
+}
+
+async fn set_primary_intake_photo(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    let (session_id, photo_id) = path.into_inner();
+    let photo = crate::services::intake_photo_service::set_primary_photo(
+        &state.db,
+        &auth,
+        &session_id,
+        &photo_id,
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(photo))
+}
 async fn get_intake_profile_draft(
     auth: AuthenticatedUser,
     state: web::Data<AppState>,
@@ -466,6 +558,7 @@ async fn acknowledge_ai_initial_review(
             &auth,
             &session_id,
             request.into_inner(),
+            &state.ai_gateway,
         )
         .await?,
     ))

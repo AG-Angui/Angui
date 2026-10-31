@@ -44,6 +44,7 @@ import type {
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
+import { ClueMapView } from "../components/ClueMapView";
 import {
   EmptyState,
   ErrorState,
@@ -64,6 +65,9 @@ const statusLabels: Record<TaskStatus, string> = {
 
 const caseStatusLabels: Record<string, string> = {
   active: "进行中",
+  ended: "已结束",
+  reviewing: "复盘中",
+  archived: "已归档",
   resolved: "已找到",
   closed: "已关闭",
 };
@@ -85,6 +89,21 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "操作未能完成，请稍后重试。";
 }
 
+function emptyCaseSummary(caseId: string): CaseSummary {
+  return {
+    case_id: caseId,
+    access_role: "volunteer",
+    generated_at: new Date(0).toISOString(),
+    source_scope: [],
+    last_confirmed_information: null,
+    confirmed_clues: [],
+    pending_verification: [],
+    excluded_directions: [],
+    current_focus: [],
+    task_status: [],
+    safety_reminders: [],
+  };
+}
 function poiListErrorMessage(cause: unknown) {
   if (cause instanceof ApiClientError && cause.status === 409)
     return "当前中心不能用于附近资源检索。可改用本人的当前位置，或联系指挥确认任务区域和公开地点。";
@@ -99,7 +118,9 @@ function poiRouteErrorMessage(cause: unknown) {
 
 function currentBrowserLocation(): Promise<BrowserPoiLocation> {
   if (!navigator.geolocation) {
-    return Promise.reject(new Error("当前浏览器不支持定位，请使用案件授权中心检索。"));
+    return Promise.reject(
+      new Error("当前浏览器不支持定位，请使用案件授权中心检索。"),
+    );
   }
   return new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(
@@ -108,7 +129,8 @@ function currentBrowserLocation(): Promise<BrowserPoiLocation> {
           longitude: position.coords.longitude,
           latitude: position.coords.latitude,
         }),
-      () => reject(new Error("未获得当前位置授权，请检查浏览器定位权限后重试。")),
+      () =>
+        reject(new Error("未获得当前位置授权，请检查浏览器定位权限后重试。")),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
     );
   });
@@ -175,25 +197,49 @@ export function VolunteerWorkspacePage() {
         listCases(token),
         listMyTasks(token),
       ]);
-      const volunteerCases = memberships.filter(
-        (item) => item.access_role === "volunteer",
+      const volunteerCases = Array.from(
+        new Map(
+          memberships
+            .filter((item) => item.access_role === "volunteer")
+            .map((item) => [item.id, item]),
+        ).values(),
       );
-      const workspaces = await Promise.all(
+      const workspaceResults = await Promise.allSettled(
         volunteerCases.map(async (item) => {
-          const [detail, summary, publishedSummaryVersions, taskPage] = await Promise.all([
-            getCase(token, item.id),
-            getCaseSummary(token, item.id),
-            listVolunteerPublishedSummaryVersions(token, item.id),
-            listCaseTasks(token, item.id),
-          ]);
+          const detail = await getCase(token, item.id);
+          const [summaryResult, publishedSummaryResult, taskResult] =
+            await Promise.allSettled([
+              getCaseSummary(token, item.id),
+              listVolunteerPublishedSummaryVersions(token, item.id),
+              listCaseTasks(token, item.id),
+            ]);
           return {
             detail,
-            summary,
-            publishedSummaries: publishedSummaryVersions.items,
-            tasks: taskPage.items,
+            summary:
+              summaryResult.status === "fulfilled"
+                ? summaryResult.value
+                : emptyCaseSummary(item.id),
+            publishedSummaries:
+              publishedSummaryResult.status === "fulfilled"
+                ? publishedSummaryResult.value.items
+                : [],
+            tasks:
+              taskResult.status === "fulfilled"
+                ? Array.from(
+                    new Map(
+                      taskResult.value.items.map((task) => [task.id, task]),
+                    ).values(),
+                  )
+                : [],
           };
         }),
       );
+      const workspaces = workspaceResults.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      if (workspaces.length < volunteerCases.length) {
+        setNotice("部分案件暂时无法加载，其他案件仍可正常协作。");
+      }
       setCases(workspaces);
       setMyTasks(assigned);
     } catch (cause) {
@@ -259,6 +305,7 @@ export function VolunteerWorkspacePage() {
     return (
       <article
         key={task.id}
+        data-testid="volunteer-task-card"
         className="rounded-md border border-slate-200 bg-white p-4 shadow-sm"
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -736,6 +783,17 @@ export function VolunteerWorkspacePage() {
                     </p>
                   </section>
                 )}
+                <section className="mt-4 border-t border-slate-200 pt-4">
+                  <h3 className="m-0 text-sm font-semibold text-slate-950">
+                    任务地图
+                  </h3>
+                  <div className="mt-3">
+                    <VolunteerMapViewSection
+                      detail={workspace.detail}
+                      token={token}
+                    />
+                  </div>
+                </section>
                 <section className="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700">
                   <h3 className="m-0 text-sm font-semibold text-slate-950">
                     已审核关键地点（含家属提供）
@@ -753,7 +811,11 @@ export function VolunteerWorkspacePage() {
                             {place.name}
                           </p>
                           <p className="mb-0 mt-1 text-xs text-slate-600">
-                            <MapPin aria-hidden="true" className="mr-1 inline" size={14} />
+                            <MapPin
+                              aria-hidden="true"
+                              className="mr-1 inline"
+                              size={14}
+                            />
                             {place.address}
                           </p>
                         </li>
@@ -1002,8 +1064,7 @@ export function VolunteerWorkspacePage() {
                           "browser_location"
                             ? "当前设备位置（仅本次使用）"
                             : "案件授权位置"}
-                          。
-                          数据来源：
+                          。 数据来源：
                           {poiSourceLabel(pois[workspace.detail.id].source)}
                           {pois[workspace.detail.id].fallback_message
                             ? ` · ${pois[workspace.detail.id].fallback_message}`
@@ -1034,7 +1095,9 @@ export function VolunteerWorkspacePage() {
                                     )}
                                     onPress={() => {
                                       const origin =
-                                        browserPoiLocations[workspace.detail.id];
+                                        browserPoiLocations[
+                                          workspace.detail.id
+                                        ];
                                       if (!token || !origin) return;
                                       void run(
                                         `case-${workspace.detail.id}-poi-route-${poi.id}`,
@@ -1043,16 +1106,23 @@ export function VolunteerWorkspacePage() {
                                             token,
                                             workspace.detail.id,
                                             {
-                                              browser_longitude: origin.longitude,
+                                              browser_longitude:
+                                                origin.longitude,
                                               browser_latitude: origin.latitude,
-                                              selection_token: poi.selection_token!,
+                                              selection_token:
+                                                poi.selection_token!,
                                             },
                                           ).catch((cause) => {
-                                            throw new Error(poiRouteErrorMessage(cause));
+                                            throw new Error(
+                                              poiRouteErrorMessage(cause),
+                                            );
                                           });
                                           setPoiRoutes((value) => ({
                                             ...value,
-                                            [workspace.detail.id]: { poi, route },
+                                            [workspace.detail.id]: {
+                                              poi,
+                                              route,
+                                            },
                                           }));
                                         },
                                         "步行路线已更新。",
@@ -1069,12 +1139,17 @@ export function VolunteerWorkspacePage() {
                         {poiRoutes[workspace.detail.id] && (
                           <div className="mt-3 border-t border-slate-200 pt-3">
                             <p className="m-0 font-medium text-slate-900">
-                              到 {poiRoutes[workspace.detail.id].poi.name} 的步行路线
+                              到 {poiRoutes[workspace.detail.id].poi.name}{" "}
+                              的步行路线
                             </p>
                             <p className="mb-0 mt-1 text-xs text-slate-600">
-                              直线约 {distanceLabel(poiRoutes[workspace.detail.id].route.straight_line_meters)}
-                              {poiRoutes[workspace.detail.id].route.walking_distance_meters !==
-                              null
+                              直线约{" "}
+                              {distanceLabel(
+                                poiRoutes[workspace.detail.id].route
+                                  .straight_line_meters,
+                              )}
+                              {poiRoutes[workspace.detail.id].route
+                                .walking_distance_meters !== null
                                 ? `；步行约 ${distanceLabel(poiRoutes[workspace.detail.id].route.walking_distance_meters)}，预计 ${durationLabel(poiRoutes[workspace.detail.id].route.walking_duration_seconds)}。`
                                 : "；路线服务暂不可用，以上为直线距离估算。"}
                             </p>
@@ -1122,4 +1197,23 @@ export function VolunteerWorkspacePage() {
       )}
     </main>
   );
+}
+
+// 志愿者地图视图组件
+function VolunteerMapViewSection({
+  detail,
+  token,
+}: {
+  detail: CaseDetail;
+  token: string | null;
+}) {
+  if (!token) {
+    return (
+      <div className="py-8 text-center text-sm text-slate-500">
+        需要登录后才能查看地图
+      </div>
+    );
+  }
+
+  return <ClueMapView caseId={detail.id} token={token} className="h-[500px]" />;
 }

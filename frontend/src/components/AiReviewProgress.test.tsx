@@ -18,8 +18,6 @@ describe("AiReviewProgress", () => {
     render(<AiReviewProgress stage="fallback" />);
 
     expect(screen.getByText("正在切换规则结果")).toBeInTheDocument();
-    expect(
-      screen.getByText(/AI 结果不可用或未通过校验/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/AI 结果不可用或未通过校验/)).toBeInTheDocument();
   });
 });

@@ -22,9 +22,9 @@ use crate::{
         IntakeInitialAnswers, IntakePhaseProgress, IntakeProfileDraft,
         IntakeProfileDraftDiffResponse, IntakeProfileDraftFieldMetadata, IntakeProfileDraftFields,
         IntakeProfileDraftVersionsResponse, IntakeQuestion, IntakeSessionResponse,
-        IntakeStructuredFacts, RestoreIntakeAnswerRequest, RestoreIntakeProfileDraftRequest,
-        ReviewIntakeProfileDraftRequest, StartIntakeAiInitialReviewRequest,
-        SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
+        IntakeStructuredFacts, IssueResponseEdit, RestoreIntakeAnswerRequest,
+        RestoreIntakeProfileDraftRequest, ReviewIntakeProfileDraftRequest,
+        StartIntakeAiInitialReviewRequest, SubmitIntakeAnswerRequest, SubmitIntakeAnswerResponse,
     },
     roles::AccountType,
 };
@@ -71,6 +71,7 @@ pub async fn create_intake_session(
         id: Set(session_id.clone()),
         created_by_user_id: Set(auth.id.clone()),
         case_id: Set(None),
+        primary_photo_id: Set(None),
         question_set_version: Set(question_set_version),
         status: Set(status.to_owned()),
         answers_json: Set(answers_json),
@@ -101,6 +102,54 @@ pub async fn create_intake_session(
 
     transaction.commit().await?;
     Ok(response_for(session, answers, &questions))
+}
+
+/// Lists the caller's unfinished intake sessions so the family home page can
+/// offer a cross-device resume entry. Only the session owner can see these
+/// unconfirmed answers.
+pub async fn list_intake_sessions(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+) -> Result<Vec<IntakeSessionResponse>, ApiError> {
+    require_operational_member(auth)?;
+    let sessions = intake_sessions::Entity::find()
+        .filter(intake_sessions::Column::CreatedByUserId.eq(auth.id.clone()))
+        .filter(intake_sessions::Column::Status.is_in([
+            "collecting",
+            "ready_for_confirmation",
+            "awaiting_family_review",
+            "ready_for_second_confirmation",
+        ]))
+        .order_by_desc(intake_sessions::Column::UpdatedAt)
+        .all(db)
+        .await?;
+    let mut responses = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        let questions = questions_for_version(db, session.question_set_version).await?;
+        let answers = parse_answers(&session)?;
+        responses.push(response_for(session, answers, &questions));
+    }
+    Ok(responses)
+}
+
+/// Loads one family-owned intake session for an explicit resume link.
+pub async fn get_intake_session(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    session_id: &str,
+) -> Result<IntakeSessionResponse, ApiError> {
+    require_operational_member(auth)?;
+    let session = intake_sessions::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("intake session was not found".to_owned()))?;
+    require_session_creator(&session, auth)?;
+    let questions = questions_for_version(db, session.question_set_version).await?;
+    Ok(response_for(
+        session.clone(),
+        parse_answers(&session)?,
+        &questions,
+    ))
 }
 
 pub async fn submit_intake_answer(
@@ -691,6 +740,7 @@ pub async fn acknowledge_ai_initial_review(
     auth: &AuthenticatedUser,
     session_id: &str,
     request: AcknowledgeIntakeAiInitialReviewRequest,
+    gateway: &crate::ai_gateway::AiGateway,
 ) -> Result<IntakeAiInitialReviewResponse, ApiError> {
     require_operational_member(auth)?;
     if !request.human_confirmed {
@@ -716,7 +766,7 @@ pub async fn acknowledge_ai_initial_review(
         .map(|issue| issue.id.clone())
         .collect::<Vec<_>>();
     expected.sort();
-    let mut submitted = request.confirmed_issue_ids;
+    let mut submitted = request.confirmed_issue_ids.clone();
     submitted.sort();
     submitted.dedup();
     if submitted != expected {
@@ -725,9 +775,38 @@ pub async fn acknowledge_ai_initial_review(
                 .to_owned(),
         ));
     }
+
     let assessments = parse_assessments(&session)?;
     let next_review_status = acknowledged_review_status(&session.ai_initial_review_status);
+
+    // If user edited issue responses, regenerate profile with AI before moving session
+    let regenerated_profile_json = if !request.issue_responses.is_empty() {
+        let original_profile = session
+            .ai_initial_review_profile_json
+            .as_ref()
+            .ok_or_else(|| ApiError::Internal)?;
+        let original_profile: ConfirmedIntakeProfile =
+            serde_json::from_str(original_profile).map_err(|_| ApiError::Internal)?;
+
+        let regenerated_profile = regenerate_profile_with_edited_issues(
+            &session,
+            &original_profile,
+            &request.issue_responses,
+            gateway,
+        )
+        .await?;
+
+        Some(serde_json::to_string(&regenerated_profile).map_err(|_| ApiError::Internal)?)
+    } else {
+        None
+    };
+
     let mut updated = session.into_active_model();
+
+    if let Some(profile_json) = regenerated_profile_json {
+        updated.ai_initial_review_profile_json = Set(Some(profile_json));
+    }
+
     updated.status = Set("ready_for_second_confirmation".to_owned());
     updated.ai_initial_review_status = Set(next_review_status);
     updated.updated_at = Set(now());
@@ -740,6 +819,7 @@ pub async fn acknowledge_ai_initial_review(
         Some(json!({
             "issue_count": issues.len(),
             "has_blocking_rule_checks": assessments.iter().any(|item| item.severity == "blocking"),
+            "user_edited_issues": !request.issue_responses.is_empty(),
         })),
     )
     .await?;
@@ -1593,6 +1673,12 @@ pub async fn confirm_intake_session(
             "upload at least one missing-person photo before confirming the case".to_owned(),
         ));
     }
+    if session.question_set_version >= 3 && session.primary_photo_id.is_none() {
+        return Err(ApiError::Conflict(
+            "choose one missing-person photo as the primary portrait before confirming the case"
+                .to_owned(),
+        ));
+    }
 
     let timestamp = now();
     let case_model =
@@ -1705,12 +1791,19 @@ fn initial_review_response(
     } else {
         "available"
     };
+    let reviewed_profile = session
+        .ai_initial_review_profile_json
+        .as_deref()
+        .map(serde_json::from_str::<ConfirmedIntakeProfile>)
+        .transpose()
+        .map_err(|_| ApiError::Internal)?;
     Ok(IntakeAiInitialReviewResponse {
         session_id: session.id.clone(),
         status: session.status.clone(),
         degradation_status: degradation_status.to_owned(),
         issues,
         blocking_assessments,
+        reviewed_profile,
         generated_at: session
             .ai_initial_reviewed_at
             .clone()
@@ -1731,6 +1824,88 @@ fn acknowledged_review_status(status: &str) -> String {
         "available_pending" => "available_acknowledged".to_owned(),
         "rule_based_fallback_pending" => "rule_based_fallback_acknowledged".to_owned(),
         other => other.to_owned(),
+    }
+}
+
+async fn regenerate_profile_with_edited_issues(
+    session: &intake_sessions::Model,
+    original_profile: &ConfirmedIntakeProfile,
+    issue_responses: &[IssueResponseEdit],
+    gateway: &crate::ai_gateway::AiGateway,
+) -> Result<ConfirmedIntakeProfile, ApiError> {
+    let answers = parse_answers(session)?;
+    let ai_answers = answers_for_ai(&answers);
+
+    // Build input with user clarifications
+    let clarifications: Vec<_> = issue_responses
+        .iter()
+        .map(|edit| {
+            json!({
+                "issue_id": edit.issue_id,
+                "clarified_answer": edit.user_answer,
+            })
+        })
+        .collect();
+
+    let input = serde_json::to_string(&json!({
+        "family_answers": ai_answers,
+        "user_clarifications": clarifications,
+        "regeneration_task": "Re-integrate the elder profile using the original answers plus the family's clarifications for flagged issues."
+    }))
+    .map_err(|_| ApiError::Internal)?;
+
+    let ai_request = AiRequest {
+        capability: AiCapability::StructuredExtraction,
+        data_level: DataLevel::Sensitive,
+        purpose: AiPurpose::IntakeDraft,
+        data_region: "CN".to_owned(),
+        system_instruction: Some(profile_extraction_system_instruction()),
+        output_schema: Some(profile_extraction_schema()),
+        output_schema_name: Some("intake_profile_candidate".to_owned()),
+        input,
+        requested_output_tokens: 900,
+        template_version: "intake-profile-extraction-v1".to_owned(),
+        input_scope_reference: "intake-session-family-answers-with-clarifications".to_owned(),
+        redaction_policy_version: "intake-sensitive-minimization-v1".to_owned(),
+    };
+
+    let execution = gateway.execute(&ai_request).await;
+
+    match execution {
+        AiExecutionResult::Completed { output, .. } => {
+            match decode_profile_extraction_output(&output, &answers) {
+                Ok((profile_output, _)) => {
+                    match validate_profile_extraction(profile_output, &answers) {
+                        Ok((profile_fields, _)) => {
+                            // Merge: keep original basic info, update descriptive fields from AI
+                            Ok(ConfirmedIntakeProfile {
+                                display_name: original_profile.display_name.clone(),
+                                age: original_profile.age,
+                                gender: original_profile.gender.clone(),
+                                physical_description: profile_fields.physical_description,
+                                clothing_description: profile_fields.clothing_description,
+                                health_notes: profile_fields.health_notes,
+                                last_seen_at: original_profile.last_seen_at.clone(),
+                                last_seen_location: original_profile.last_seen_location.clone(),
+                                mobility_notes: profile_fields.mobility_notes,
+                                transportation_ability: profile_fields.transportation_ability,
+                                frequent_locations: profile_fields.frequent_locations,
+                                behavior_habits: profile_fields.behavior_habits,
+                                suspicious_motive: profile_fields.suspicious_motive,
+                            })
+                        }
+                        Err(error) => Err(ApiError::Validation(format!(
+                            "regenerated profile validation failed: {}",
+                            error
+                        ))),
+                    }
+                }
+                Err(_) => Err(ApiError::Internal),
+            }
+        }
+        AiExecutionResult::Degraded { .. } | AiExecutionResult::Failed { .. } => Err(
+            ApiError::Conflict("AI profile regeneration is temporarily unavailable".to_owned()),
+        ),
     }
 }
 
@@ -1947,6 +2122,11 @@ fn case_request_from_confirmed_profile(request: ConfirmIntakeSessionRequest) -> 
         health_notes: request.profile.health_notes,
         last_seen_at: request.profile.last_seen_at,
         last_seen_location: Some(request.profile.last_seen_location),
+        mobility_notes: request.profile.mobility_notes,
+        transportation_ability: request.profile.transportation_ability,
+        frequent_locations: request.profile.frequent_locations,
+        behavior_habits: request.profile.behavior_habits,
+        suspicious_motive: request.profile.suspicious_motive,
     }
 }
 
@@ -1970,8 +2150,11 @@ fn duplicate_answer_conflict() -> ApiError {
 fn is_unique_constraint_error(error: &DbErr) -> bool {
     matches!(
         error,
-        DbErr::Exec(RuntimeErr::SqlxError(SqlxError::Database(database_error)))
-            if database_error.is_unique_violation()
+        DbErr::Exec(RuntimeErr::SqlxError(sqlx_error))
+            if matches!(
+                sqlx_error.as_ref(),
+                SqlxError::Database(database_error) if database_error.is_unique_violation()
+            )
     )
 }
 

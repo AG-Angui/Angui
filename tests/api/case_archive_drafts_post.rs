@@ -48,7 +48,7 @@ async fn post_archive_drafts_requires_finished_commander_case_and_keeps_raw_mate
         test::TestRequest::patch()
             .uri(&format!("/api/cases/{case_id}/status"))
             .insert_header((header::AUTHORIZATION, format!("Bearer {commander_token}")))
-            .set_json(json!({ "status": "resolved" }))
+            .set_json(json!({ "status": "ended", "reason": "已完成现场行动" }))
             .to_request(),
     )
     .await;
@@ -84,7 +84,10 @@ async fn post_archive_drafts_requires_finished_commander_case_and_keeps_raw_mate
         created["source_scope"],
         json!([
             "confirmed_clue_review_material",
-            "completed_task_review_material"
+            "completed_task_review_material",
+            "case_source_record_review_material",
+            "collaboration_message_review_material",
+            "decision_audit_review_material"
         ])
     );
     assert!(created["provider_model"].is_null());

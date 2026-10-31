@@ -28,6 +28,11 @@ export interface IntakeSession {
   guidance_mode: "rule_based" | "ai_assisted";
   ai_initial_review_status: string;
   privacy_notice: string;
+  initial_answers?: {
+    basic_information: string | null;
+  };
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface IntakePhoto {
@@ -36,6 +41,7 @@ export interface IntakePhoto {
   content_type: "image/jpeg" | "image/png";
   byte_size: number;
   created_at: string;
+  is_primary?: boolean;
 }
 
 export interface IntakeAiFollowUp {
@@ -152,6 +158,11 @@ export interface ConfirmedIntakeProfile {
   health_notes: string | null;
   last_seen_at: string | null;
   last_seen_location: string;
+  mobility_notes?: string | null;
+  transportation_ability?: string | null;
+  frequent_locations?: string | null;
+  behavior_habits?: string | null;
+  suspicious_motive?: string | null;
 }
 
 export interface ConfirmIntakeResponse {
@@ -171,7 +182,21 @@ export function createIntakeSession(token: string): Promise<IntakeSession> {
   );
 }
 
-export function listIntakePhotos(token: string, sessionId: string): Promise<IntakePhoto[]> {
+export function listIntakeSessions(token: string): Promise<IntakeSession[]> {
+  return apiRequest<IntakeSession[]>("/intake-sessions", {}, token);
+}
+
+export function getIntakeSession(
+  token: string,
+  sessionId: string,
+): Promise<IntakeSession> {
+  return apiRequest<IntakeSession>(`/intake-sessions/${sessionId}`, {}, token);
+}
+
+export function listIntakePhotos(
+  token: string,
+  sessionId: string,
+): Promise<IntakePhoto[]> {
   return apiRequest(`/intake-sessions/${sessionId}/photos`, {}, token);
 }
 
@@ -182,7 +207,11 @@ export function uploadIntakePhoto(
 ): Promise<IntakePhoto> {
   const body = new FormData();
   body.append("file", file);
-  return apiRequest(`/intake-sessions/${sessionId}/photos`, { method: "POST", body }, token);
+  return apiRequest(
+    `/intake-sessions/${sessionId}/photos`,
+    { method: "POST", body },
+    token,
+  );
 }
 
 export function downloadIntakePhoto(
@@ -190,9 +219,50 @@ export function downloadIntakePhoto(
   sessionId: string,
   photoId: string,
 ): Promise<Blob> {
-  return apiBlobRequest(`/intake-sessions/${sessionId}/photos/${photoId}`, {}, token);
+  return apiBlobRequest(
+    `/intake-sessions/${sessionId}/photos/${photoId}`,
+    {},
+    token,
+  );
 }
 
+export function deleteIntakePhoto(
+  token: string,
+  sessionId: string,
+  photoId: string,
+): Promise<void> {
+  return apiRequest(
+    `/intake-sessions/${sessionId}/photos/${photoId}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+export function replaceIntakePhoto(
+  token: string,
+  sessionId: string,
+  photoId: string,
+  file: File,
+): Promise<IntakePhoto> {
+  const body = new FormData();
+  body.append("file", file);
+  return apiRequest(
+    `/intake-sessions/${sessionId}/photos/${photoId}`,
+    { method: "PUT", body },
+    token,
+  );
+}
+
+export function setPrimaryIntakePhoto(
+  token: string,
+  sessionId: string,
+  photoId: string,
+): Promise<IntakePhoto> {
+  return apiRequest<IntakePhoto>(
+    `/intake-sessions/${sessionId}/photos/${photoId}/primary`,
+    { method: "PATCH" },
+    token,
+  );
+}
 export function submitIntakeAnswer(
   token: string,
   sessionId: string,
@@ -291,6 +361,7 @@ export interface IntakeAiInitialReviewResponse {
   degradation_status: "available" | "rule_based_fallback" | "not_started";
   issues: IntakeAiInitialReviewIssue[];
   blocking_assessments: IntakeAssessment[];
+  reviewed_profile?: ConfirmedIntakeProfile | null;
   generated_at: string;
   requires_family_acknowledgement: boolean;
   ready_for_second_confirmation: boolean;
@@ -340,10 +411,16 @@ export function startIntakeAiInitialReview(
   );
 }
 
+export interface IssueResponseEdit {
+  issue_id: string;
+  user_answer: string;
+}
+
 export function acknowledgeIntakeAiInitialReview(
   token: string,
   sessionId: string,
   confirmedIssueIds: string[],
+  issueResponses?: IssueResponseEdit[],
 ): Promise<IntakeAiInitialReviewResponse> {
   return apiRequest<IntakeAiInitialReviewResponse>(
     `/intake-sessions/${sessionId}/ai-initial-review/acknowledge`,
@@ -352,6 +429,7 @@ export function acknowledgeIntakeAiInitialReview(
       body: JSON.stringify({
         human_confirmed: true,
         confirmed_issue_ids: confirmedIssueIds,
+        issue_responses: issueResponses || [],
       }),
     },
     token,

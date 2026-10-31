@@ -8,6 +8,7 @@ pub struct Model {
     pub id: String,
     pub created_by_user_id: String,
     pub case_id: Option<String>,
+    pub primary_photo_id: Option<String>,
     pub question_set_version: i32,
     pub status: String,
     pub answers_json: String,
