@@ -44,6 +44,14 @@ at 00:00 UTC on Monday and Thursday. It fails on RustSec advisories in `Cargo.lo
 high or critical Yarn advisories in the frontend lockfile, and detected secrets.
 Routine runs scan the working tree; the weekly run scans all Git history.
 
+RustSec runs on an isolated GitHub-hosted runner. It installs cargo-audit
+0.22.2 with a job-local target directory under `runner.temp`, avoiding shared
+self-hosted `/tmp` build directories. Rust installation paths must be absolute
+and contain no newline before being exported to later steps.
+The lockfile contains patched TLS/crypto dependencies. Actix zstd compression
+is disabled while its supported dependency line remains vulnerable; gzip and
+Brotli remain enabled. The existing RSA advisory exception is unchanged.
+
 The frontend lockfile downloads packages through npmmirror, which does not
 implement its advisory endpoint. The workflow intentionally sends only the Yarn
 audit request to `registry.npmjs.org`; ordinary CI dependency installation uses
