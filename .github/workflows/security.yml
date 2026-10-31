@@ -29,6 +29,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure Rust environment
+        uses: ./.github/actions/configure-rust
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
@@ -71,9 +73,22 @@ jobs:
         # npmmirror does not implement the advisory endpoint, so audit against
         # the public registry while ordinary installs continue using the mirror.
         working-directory: frontend
-        run: >-
-          yarn audit --level high
-          --registry=https://registry.npmjs.org
+        shell: bash
+        run: |
+          audit_status=0
+          yarn audit --level high \
+            --registry=https://registry.npmjs.org || audit_status=$?
+
+          # Yarn Classic reports advisory severities as a bitmask. The --level
+          # option filters output only, so moderate advisories still return 4.
+          if (( audit_status & (8 | 16) )); then
+            echo "::error::High or critical frontend vulnerabilities detected"
+            exit "${audit_status}"
+          fi
+
+          if (( audit_status != 0 )); then
+            echo "::warning::Frontend vulnerabilities below the high threshold detected (Yarn exit code: ${audit_status})"
+          fi
 
   secrets:
     name: Secret scanning

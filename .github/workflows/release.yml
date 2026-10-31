@@ -32,7 +32,7 @@ jobs:
           POSTGRES_USER: angui
           POSTGRES_PASSWORD: angui
         ports:
-          - 15432:5432
+          - 127.0.0.1::5432
         options: >-
           --health-cmd "pg_isready -U angui -d angui"
           --health-interval 5s
@@ -46,7 +46,7 @@ jobs:
           MYSQL_PASSWORD: angui
           MYSQL_ROOT_PASSWORD: root
         ports:
-          - 13306:3306
+          - 127.0.0.1::3306
         options: >-
           --health-cmd "mysqladmin ping --silent"
           --health-interval 5s
@@ -63,6 +63,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure Rust environment
+        uses: ./.github/actions/configure-rust
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt, clippy
@@ -76,7 +78,7 @@ jobs:
 
       - name: Exercise release migrations against PostgreSQL
         env:
-          DATABASE_URL: postgres://angui:angui@127.0.0.1:15432/angui
+          DATABASE_URL: postgres://angui:angui@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/angui
         run: |
           target/release/migration up
           target/release/migration status
@@ -85,7 +87,7 @@ jobs:
 
       - name: Exercise release migrations against MySQL
         env:
-          DATABASE_URL: mysql://angui:angui@127.0.0.1:13306/angui
+          DATABASE_URL: mysql://angui:angui@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/angui
         run: |
           target/release/migration up
           target/release/migration status
@@ -214,12 +216,14 @@ jobs:
           PREVIEW_ROOT: ${{ vars.PREVIEW_ROOT || '/var/github-runner/angui/previews' }}
           PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
           PREVIEW_SCHEME: ${{ vars.PREVIEW_SCHEME || 'https' }}
+          PREVIEW_PUBLIC_IP: ${{ vars.PREVIEW_PUBLIC_IP }}
           PREVIEW_PROXY_NETWORK: ${{ vars.PREVIEW_PROXY_NETWORK || 'angui-proxy' }}
           PREVIEW_RUNTIME_IMAGE: ${{ vars.PREVIEW_RUNTIME_IMAGE || 'angui-preview-runtime:bookworm' }}
           PREVIEW_DEMO_PASSWORD: ${{ steps.credentials.outputs.password }}
           RUST_LOG: ${{ vars.RUST_LOG || 'info' }}
           AMAP_WEBSERVICE_KEY: ${{ secrets.AMAP_WEBSERVICE_KEY }}
           AMAP_JSAPI_SECURITY_CODE: ${{ secrets.AMAP_JSAPI_SECURITY_CODE }}
+          ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS: ${{ vars.ANGUI_COLLABORATION_LOCATION_RETENTION_HOURS || '24' }}
           ANGUI_AI_PROVIDERS_JSON: ${{ vars.ANGUI_AI_PROVIDERS_JSON }}
           ANGUI_PREVIEW_AI_ENDPOINT: ${{ secrets.ANGUI_PREVIEW_AI_ENDPOINT }}
           ANGUI_PREVIEW_AI_KEY: ${{ secrets.ANGUI_PREVIEW_AI_KEY }}
@@ -245,7 +249,7 @@ jobs:
           {
             echo "Tag preview deployed at ${PREVIEW_URL}"
             echo
-            echo "Temporary password for family@demo.invalid, commander@demo.invalid, volunteer@demo.invalid, learner@demo.invalid, and admin@demo.invalid: \`${PREVIEW_PASSWORD}\`"
+            echo "Temporary password for family@demo.invalid, commander@demo.invalid, commander2@demo.invalid, volunteer@demo.invalid, volunteer2@demo.invalid, volunteer3@demo.invalid, learner@demo.invalid, admin@demo.invalid, and admin2@demo.invalid: \`${PREVIEW_PASSWORD}\`"
             echo
             echo "The next deployment resets this preview's SQLite database and invalidates these credentials."
           } >> "${GITHUB_STEP_SUMMARY}"
