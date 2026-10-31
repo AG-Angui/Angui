@@ -18,8 +18,8 @@ concurrency:
 jobs:
   rustsec:
     name: RustSec advisories
-    # External forks must not run on the Docker-capable deployment runner.
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
+    # Isolate tool compilation from the shared deployment host's /tmp cleanup.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       RUSTUP_DIST_SERVER: https://rsproxy.cn
@@ -34,13 +34,13 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
-      - name: Install cargo-audit once per runner user
+      - name: Install pinned cargo-audit
         shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-audit-target
         run: |
           set -euo pipefail
-          if ! command -v cargo-audit >/dev/null 2>&1; then
-            cargo install cargo-audit --locked
-          fi
+          cargo install cargo-audit --version 0.22.2 --locked
           cargo-audit --version
 
       - name: Audit Cargo.lock

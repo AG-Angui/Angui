@@ -14,9 +14,8 @@ env:
   ARTIFACT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
 concurrency:
-  # A push and a pull_request event can name the same commit. Serializing by
-  # the head SHA lets the second event observe the first successful full CI and
-  # skip its expensive jobs instead of compiling and testing the same code.
+  # Serialize events for the same head. PR checks still test the merge commit;
+  # a successful push is not proof that the merge with the base branch works.
   group: ci-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 
@@ -32,7 +31,8 @@ jobs:
         id: check
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           EVENT_NAME: ${{ github.event_name }}
         with:
           script: |
@@ -47,13 +47,16 @@ jobs:
                 per_page: 100,
               },
             );
-            // Push runs are the artifact-producing source for preview
-            // deployments. They must execute even when the same SHA already
-            // passed through pull_request CI; otherwise workflow_run preview
-            // jobs receive a successful run with no artifacts to download.
+            // Push checks test a different tree and always produce artifacts
+            // for previews. Reuse a PR result only when the branch head and
+            // merge base match; a changed base needs fresh integration checks.
             const previousSuccess = process.env.EVENT_NAME === 'pull_request'
               ? runs.find(
-                  (run) => run.id !== context.runId && run.conclusion === 'success',
+                  (run) => run.id !== context.runId &&
+                    run.event === 'pull_request' && run.conclusion === 'success' &&
+                    run.pull_requests?.some(
+                      (pullRequest) => pullRequest.base.sha === process.env.BASE_SHA,
+                    ),
                 )
               : undefined;
             const shouldRun = previousSuccess === undefined;
@@ -82,6 +85,12 @@ jobs:
 
       - name: Configure Rust environment
         uses: ./.github/actions/configure-rust
+      - name: Isolate Rust build directory
+        # Trusted runner/run metadata, never pull-request input.
+        # zizmor: ignore[github-env]
+        env:
+          BUILD_TARGET_DIR: ${{ runner.temp }}/angui-backend-${{ github.run_id }}-${{ github.run_attempt }}
+        run: printf 'CARGO_TARGET_DIR=%s\n' "$BUILD_TARGET_DIR" >> "$GITHUB_ENV"
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -93,6 +102,9 @@ jobs:
           workspaces: . -> target
           # Preserve Cargo and rustup binaries on persistent self-hosted runners.
           cache-bin: "false"
+          # Cache downloaded sources only; target fingerprints and executable
+          # build scripts must be produced together on this runner.
+          cache-targets: false
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -110,9 +122,9 @@ jobs:
         with:
           name: angui-linux-${{ env.ARTIFACT_SHA }}
           path: |
-            target/release/angui
-            target/release/angui-admin
-            target/release/migration
+            ${{ env.CARGO_TARGET_DIR }}/release/angui
+            ${{ env.CARGO_TARGET_DIR }}/release/angui-admin
+            ${{ env.CARGO_TARGET_DIR }}/release/migration
           if-no-files-found: error
           retention-days: 7
 
@@ -136,7 +148,7 @@ jobs:
           POSTGRES_USER: angui
           POSTGRES_PASSWORD: angui
         ports:
-          - 5432:5432
+          - 127.0.0.1::5432
         options: >-
           --health-cmd "pg_isready -U angui -d angui"
           --health-interval 5s
@@ -150,7 +162,7 @@ jobs:
           MYSQL_PASSWORD: angui
           MYSQL_ROOT_PASSWORD: root
         ports:
-          - 3306:3306
+          - 127.0.0.1::3306
         options: >-
           --health-cmd "mysqladmin ping --silent"
           --health-interval 5s
@@ -173,7 +185,7 @@ jobs:
           cache-bin: "false"
       - name: Exercise PostgreSQL migrations
         env:
-          DATABASE_URL: postgres://angui:angui@127.0.0.1:5432/angui
+          DATABASE_URL: postgres://angui:angui@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/angui
         run: |
           cargo run --locked -p migration -- up
           cargo run --locked -p migration -- status
@@ -182,7 +194,7 @@ jobs:
 
       - name: Exercise MySQL migrations
         env:
-          DATABASE_URL: mysql://angui:angui@127.0.0.1:3306/angui
+          DATABASE_URL: mysql://angui:angui@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/angui
         run: |
           cargo run --locked -p migration -- up
           cargo run --locked -p migration -- status
@@ -288,8 +300,14 @@ jobs:
       # The self-hosted runner image provides Chromium's Linux libraries.
       # Do not use --with-deps here: it invokes apt through sudo.
       - name: Install Chromium for Playwright
+        if: runner.environment == 'self-hosted'
         working-directory: frontend
         run: yarn playwright install chromium
+
+      - name: Install Chromium and libraries on GitHub-hosted runners
+        if: runner.environment == 'github-hosted'
+        working-directory: frontend
+        run: yarn playwright install --with-deps chromium
 
       - name: Run browser end-to-end tests
         working-directory: frontend

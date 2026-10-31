@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - '.github/workflows/**'
+      - '.github/actions/**'
   push:
     branches: [main]
     paths:
       - '.github/workflows/**'
+      - '.github/actions/**'
   workflow_dispatch:
 
 permissions:
@@ -36,4 +38,4 @@ jobs:
             --persona=regular \
             --no-online-audits \
             --color=never \
-            -- .github/workflows
+            -- .github/workflows .github/actions

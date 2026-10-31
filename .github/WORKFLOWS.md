@@ -2,18 +2,21 @@
 
 ## CI
 
-`ci.yml` runs on every branch push and pull request. Its concurrency identity
-is the head commit SHA rather than the branch or PR number. When `push` and
-`pull_request` refer to the same SHA, the first run performs the full CI while
-the second waits, detects the successful run for that SHA, and skips all
-expensive jobs. New branches therefore still receive CI before a PR exists,
-while a PR update does not compile, test, migrate, or upload artifacts twice.
+`ci.yml` runs on every branch push and pull request. Events for the same head
+SHA are serialized. Push runs always produce artifacts for previews; PR runs
+test GitHub's merge commit, so a passing push cannot skip PR integration checks.
+Only a previously successful PR run for the identical merge commit can be reused.
 Rust formatting, Clippy, tests, and the release build run in parallel with the
 frontend lint/build and live PostgreSQL/MySQL migration checks. The database job
 applies every migration, reports status, performs a full refresh, and checks
-status again for both server databases. Cargo and Yarn caches are enabled, and
-successful binaries/bundles are retained for seven days. The Rust job installs
-`cmake`, `libde265-dev`, and `pkg-config` before its `--all-features` commands.
+status again for both server databases. Cargo source and Yarn caches are enabled,
+and successful binaries/bundles are retained for seven days. Rust checks use a
+run/attempt-specific target directory under `runner.temp` and disable compiled
+target caching. This keeps build-script executables and Cargo fingerprints
+together on the same runner instead of reusing incomplete or incompatible
+`target` state (which can fail with a missing `aws-lc-rs` build script). Backend
+artifacts are uploaded from that isolated target directory. CI runners need
+`cmake`, `libde265-dev`, and `pkg-config` for their `--all-features` commands.
 The `heic` feature uses the version-pinned embedded libheif source rather than
 the runner image's potentially older `libheif-dev`, so CI compiles and tests the
 controlled HEIC/HEIF decoder rather than silently excluding it.
@@ -30,9 +33,8 @@ review comments.
 It checks dangerous triggers, token permissions, action pinning, template
 injection, and other GitHub Actions security smells.
 
-OpenAPI linting is intentionally not enabled yet because the repository has no
-OpenAPI document or generator. Add it when a committed `openapi.yaml` or
-equivalent generated contract becomes part of the project.
+The repository has an OpenAPI contract at `docs/openapi.yaml`; a dedicated
+OpenAPI lint gate has not yet been added.
 
 CodeQL is intentionally not enabled while the repository remains UNLICENSED.
 GitHub currently supports Rust, JavaScript/TypeScript, and Actions analysis, but
@@ -43,9 +45,17 @@ license for a public repository or enabling the paid product.
 ## Security checks
 
 `security.yml` runs on pull requests, pushes to `main`, manual dispatch, and
-weekly at 03:17 UTC on Monday. It fails on RustSec advisories in `Cargo.lock`,
+at 00:00 UTC on Monday and Thursday. It fails on RustSec advisories in `Cargo.lock`,
 high or critical Yarn advisories in the frontend lockfile, and detected secrets.
 Routine runs scan the working tree; the weekly run scans all Git history.
+
+RustSec runs on an isolated GitHub-hosted runner. It installs cargo-audit
+0.22.2 with a job-local target directory under `runner.temp`, avoiding shared
+self-hosted `/tmp` build directories. Rust installation paths must be absolute
+and contain no newline before being exported to later steps.
+The lockfile contains patched TLS/crypto dependencies. Actix zstd compression
+is disabled while its supported dependency line remains vulnerable; gzip and
+Brotli remain enabled. The existing RSA advisory exception is unchanged.
 
 The frontend lockfile downloads packages through npmmirror, which does not
 implement its advisory endpoint. The workflow intentionally sends only the Yarn
@@ -65,10 +75,11 @@ Google Cloud integration or the custom API reviewer below for a durable setup.
 Official documentation:
 <https://docs.cloud.google.com/gemini/docs/code-review/review-repo-code>
 
-## Custom API reviewer
+## Custom API reviewer (not installed)
 
-`custom-api-review.yml` calls any reachable OpenAI-compatible API. It defaults
-to a GitHub-hosted runner; the API does not need to be local. Configure:
+There is currently no `custom-api-review.yml` in this repository. The following
+configuration is a reference for a future implementation and has no effect on
+the current workflows:
 
 - Secret `CUSTOM_REVIEW_API_BASE`: API base URL, for example
   `https://ai.example.com/v1` or a full `/chat/completions` URL.
@@ -148,8 +159,11 @@ is associated with an internal PR, the same successful push CI supplies the PR
 preview artifacts and the branch preview is skipped.
 They mount the `angui`, `angui-admin`, `migration`, and frontend `dist` files
 into one fixed local runtime image; they never build or push a new application
-image for each commit. The local runtime image is automatically built once as
-`angui-preview-runtime:bookworm` if it does not already exist. Each preview
+image for each commit. The local runtime image is rebuilt using Docker's layer
+cache from `deploy/preview/Dockerfile.runtime` for each deployment. Its default
+name `angui-preview-runtime:bookworm` is retained for configuration compatibility;
+the image now uses Ubuntu 24.04 to match the CI binary runtime. The self-hosted
+Rust build runners must also use Ubuntu 24.04 (or produce compatible binaries). Each preview
 uses a project-local Docker volume containing a SQLite database shared by the
 migration, bootstrap, and API containers; no external database service is
 needed for a complete preview.
@@ -172,7 +186,7 @@ cleanup definition without checking out PR code.
 Every deployment first removes the preview's SQLite volume, then runs
 `migration up` and `angui-admin bootstrap-demo`. The workflow creates a new
 random password and uses it for the five `.invalid` demo accounts. After the
-API health check passes, `pr-preview.yml` posts the preview URL and those
+API and Traefik-to-web/API smoke checks pass, `pr-preview.yml` posts the preview URL and those
 credentials to the PR. A later deployment of that preview invalidates all
 previous login sessions, accounts, data, and passwords; old PR comments are
 therefore informational only and must not be used as credentials. The Preview
@@ -216,6 +230,43 @@ Recommended variables:
 - `PREVIEW_PROXY_NETWORK=angui-proxy`
 - `PREVIEW_RUNTIME_IMAGE=angui-preview-runtime:bookworm`
 - `PREVIEW_ENVIRONMENT=preview`
+
+### Changing the preview base domain
+
+Application hostnames are generated from `PREVIEW_BASE_DOMAIN`; there is no
+deployment-domain literal in the workflow or frontend source. For example, set
+it to `preview.example.com` (a hostname only, without `https://` or a path).
+Changing the GitHub variable is the only application configuration change,
+but it does not configure the external DNS/TLS entry point:
+
+1. Point `*.preview.example.com` at the public parent Nginx host. Add the base
+   domain record too if it should resolve; these workflows only serve subdomains.
+2. Install a certificate covering `*.preview.example.com` and update the parent
+   Nginx `server_name` and certificate paths. Keep forwarding to the VM port 80
+   with the original `Host` header.
+3. Change repository **Settings > Secrets and variables > Actions > Variables >
+   PREVIEW_BASE_DOMAIN**. If the selected GitHub Environment defines the same
+   variable, update that value as well so it cannot override the repository value.
+   Keep `PREVIEW_DEPLOY_ENABLED` and `PREVIEW_ENVIRONMENT` at repository scope
+   because the job-level deployment gates are evaluated before the job starts.
+4. Update the AMap browser-key domain allowlist to include the new hostnames.
+5. Push a commit to the PR branch to trigger push CI, or rerun the matching
+   successful push CI run; rerunning PR CI alone does not deploy the preview.
+   Rerun the relevant release's tag-preview job while its artifacts remain
+   available. Changing a variable alone does not
+   update existing containers or their CORS origins. Expired artifacts require
+   a new build. Redeployment resets the preview database and demo credentials.
+
+The VM's Traefik needs no domain or certificate edits: deployment updates its
+Host routing labels and the API's `ANGUI_FRONTEND_ORIGIN` together. Existing
+tag previews keep their old domain until explicitly redeployed. Updating an
+AMap domain allowlist with the same key does not itself require a frontend
+rebuild; replacing the browser key does, because it is embedded at build time.
+
+Database CI and release jobs publish PostgreSQL/MySQL on random loopback ports
+and read their assigned ports from `job.services`, avoiding conflicts between
+concurrent runs. GitHub-hosted E2E jobs install Chromium's system libraries;
+self-hosted runners must provide those libraries beforehand.
 
 Optional preview secret:
 
