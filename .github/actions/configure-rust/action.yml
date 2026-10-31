@@ -5,10 +5,20 @@ runs:
   steps:
     - name: Configure Cargo and rustup paths
       shell: bash
-      run: |
+      # These values are derived from the trusted runner environment and are
+      # required by later Rust toolchain steps.
+      run: | # zizmor: ignore[github-env]
         set -euo pipefail
         cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
         rustup_home="${RUSTUP_HOME:-${HOME}/.rustup}"
+        # Environment files are line based: reject injected records even when
+        # a runner administrator configured a custom Rust installation path.
+        for rust_path in "${cargo_home}" "${rustup_home}"; do
+          if [[ "${rust_path}" != /* || "${rust_path}" == *$'\n'* || "${rust_path}" == *$'\r'* ]]; then
+            echo '::error::Rust installation paths must be absolute single-line paths'
+            exit 1
+          fi
+        done
         echo "CARGO_HOME=${cargo_home}" >> "${GITHUB_ENV}"
         echo "RUSTUP_HOME=${rustup_home}" >> "${GITHUB_ENV}"
         echo "${cargo_home}/bin" >> "${GITHUB_PATH}"
