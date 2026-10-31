@@ -11,6 +11,9 @@ require() {
 }
 
 ensure_preview_dir() {
+  [[ "${PREVIEW_ROOT}" == /* && "${PREVIEW_ROOT}" != / ]] || die "PREVIEW_ROOT must be an absolute non-root path"
+  [[ "${PREVIEW_ID}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "PREVIEW_ID must be a single safe directory name"
+  [[ ! -L "${PREVIEW_DIR}" ]] || die "PREVIEW_DIR must not be a symbolic link"
   case "${PREVIEW_DIR}" in
     "${PREVIEW_ROOT}"/*) ;;
     *) die "PREVIEW_DIR must be a child of PREVIEW_ROOT" ;;
@@ -43,12 +46,12 @@ ensure_proxy() {
 }
 
 ensure_runtime_image() {
-  if ! docker image inspect "${PREVIEW_RUNTIME_IMAGE}" >/dev/null 2>&1; then
-    docker build \
+  # Use the same tracked definition for branches, PRs, and tags. Docker's layer
+  # cache makes this cheap; an existing image must not hide Dockerfile updates.
+  docker build \
       --file "${PREVIEW_REPOSITORY_DIR}/deploy/preview/Dockerfile.runtime" \
       --tag "${PREVIEW_RUNTIME_IMAGE}" \
       "${PREVIEW_REPOSITORY_DIR}/deploy/preview"
-  fi
 }
 
 deploy() {
@@ -65,6 +68,12 @@ deploy() {
   require PREVIEW_BACKEND_DIR
   require PREVIEW_FRONTEND_DIR
 
+  [[ "${PREVIEW_HOST}" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || die "PREVIEW_HOST must be a lowercase DNS hostname"
+  [[ "${PREVIEW_HOST}" == *."${PREVIEW_BASE_DOMAIN}" ]] || die "PREVIEW_HOST must be under PREVIEW_BASE_DOMAIN"
+  case "${PREVIEW_ORIGIN}" in
+    "https://${PREVIEW_HOST}"|"http://${PREVIEW_HOST}") ;;
+    *) die "PREVIEW_ORIGIN must be http(s)://PREVIEW_HOST without a path" ;;
+  esac
   # coturn must advertise a numeric relay address. Resolve the public media
   # hostname when an explicit origin IP is not supplied by the deployment.
   if [[ -z "${PREVIEW_PUBLIC_IP:-}" ]]; then
@@ -154,7 +163,7 @@ deploy() {
   [[ -f "${PREVIEW_BACKEND_DIR}/angui" ]] || die "backend artifact angui is missing"
   [[ -f "${PREVIEW_BACKEND_DIR}/angui-admin" ]] || die "backend artifact angui-admin is missing"
   [[ -f "${PREVIEW_BACKEND_DIR}/migration" ]] || die "backend artifact migration is missing"
-  [[ -d "${PREVIEW_FRONTEND_DIR}" ]] || die "frontend artifact directory is missing"
+  [[ -s "${PREVIEW_FRONTEND_DIR}/index.html" ]] || die "frontend artifact index.html is missing"
 
   # GitHub artifact downloads do not reliably preserve executable bits. Restore
   # them before running the configuration-only validation command; install below
@@ -225,12 +234,19 @@ EOF
   for _ in $(seq 1 30); do
     api_id="$(compose ps --quiet api)"
     if [[ -n "${api_id}" ]] && [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${api_id}")" == "healthy" ]]; then
-      return 0
+      # Exercise Traefik -> web -> API as well as the SPA. API health alone
+      # misses failed Nginx startup, bad routing labels, and missing bundles.
+      if curl --fail --silent --show-error --max-time 5 \
+          --header "Host: ${PREVIEW_HOST}" http://127.0.0.1/ -o /dev/null \
+        && curl --fail --silent --show-error --max-time 5 \
+          --header "Host: ${PREVIEW_HOST}" http://127.0.0.1/api/health -o /dev/null; then
+        return 0
+      fi
     fi
     sleep 2
   done
   compose logs
-  die "API did not become healthy"
+  die "preview frontend/API did not become healthy through Traefik"
 }
 
 cleanup() {

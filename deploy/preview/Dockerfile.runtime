@@ -1,6 +1,7 @@
 # This image is intentionally code-free. It is built once on the preview host;
 # branch, PR, and tag artifacts are mounted into it by Compose.
-FROM debian:bookworm-slim
+# Match the Ubuntu 24.04 CI runners' glibc when executing their binaries.
+FROM ubuntu:24.04
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl libde265-0 \
