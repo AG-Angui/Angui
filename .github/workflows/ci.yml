@@ -85,6 +85,12 @@ jobs:
 
       - name: Configure Rust environment
         uses: ./.github/actions/configure-rust
+      - name: Isolate Rust build directory
+        # Trusted runner/run metadata, never pull-request input.
+        # zizmor: ignore[github-env]
+        env:
+          BUILD_TARGET_DIR: ${{ runner.temp }}/angui-backend-${{ github.run_id }}-${{ github.run_attempt }}
+        run: printf 'CARGO_TARGET_DIR=%s\n' "$BUILD_TARGET_DIR" >> "$GITHUB_ENV"
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -96,6 +102,9 @@ jobs:
           workspaces: . -> target
           # Preserve Cargo and rustup binaries on persistent self-hosted runners.
           cache-bin: "false"
+          # Cache downloaded sources only; target fingerprints and executable
+          # build scripts must be produced together on this runner.
+          cache-targets: false
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -113,9 +122,9 @@ jobs:
         with:
           name: angui-linux-${{ env.ARTIFACT_SHA }}
           path: |
-            target/release/angui
-            target/release/angui-admin
-            target/release/migration
+            ${{ env.CARGO_TARGET_DIR }}/release/angui
+            ${{ env.CARGO_TARGET_DIR }}/release/angui-admin
+            ${{ env.CARGO_TARGET_DIR }}/release/migration
           if-no-files-found: error
           retention-days: 7
 

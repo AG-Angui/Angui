@@ -9,8 +9,13 @@ Only a previously successful PR run for the identical merge commit can be reused
 Rust formatting, Clippy, tests, and the release build run in parallel with the
 frontend lint/build and live PostgreSQL/MySQL migration checks. The database job
 applies every migration, reports status, performs a full refresh, and checks
-status again for both server databases. Cargo and Yarn caches are enabled, and
-successful binaries/bundles are retained for seven days. CI runners need
+status again for both server databases. Cargo source and Yarn caches are enabled,
+and successful binaries/bundles are retained for seven days. Rust checks use a
+run/attempt-specific target directory under `runner.temp` and disable compiled
+target caching. This keeps build-script executables and Cargo fingerprints
+together on the same runner instead of reusing incomplete or incompatible
+`target` state (which can fail with a missing `aws-lc-rs` build script). Backend
+artifacts are uploaded from that isolated target directory. CI runners need
 `cmake`, `libde265-dev`, and `pkg-config` for their `--all-features` commands.
 The `heic` feature uses the version-pinned embedded libheif source rather than
 the runner image's potentially older `libheif-dev`, so CI compiles and tests the
