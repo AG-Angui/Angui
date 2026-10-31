@@ -16,7 +16,7 @@
   },
   "resolutions": {
     "postcss": "^8.5.23",
-    "undici": "^7.29.1"
+    "undici": "^7.30.1"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
