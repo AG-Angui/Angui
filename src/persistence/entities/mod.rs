@@ -64,3 +64,4 @@ pub mod users;
 pub mod voice_clue_candidates;
 pub mod voice_reports;
 pub mod voice_transcripts;
+pub mod locations;

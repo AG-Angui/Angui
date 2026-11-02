@@ -63,6 +63,7 @@ mod m0060_link_voice_drafts;
 mod m0061_audio_retention;
 mod m0062_voice_candidate_revision;
 mod m0063_create_space_message_receipts;
+mod m0064_create_locations;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -135,6 +136,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0061_audio_retention::Migration),
             Box::new(m0062_voice_candidate_revision::Migration),
             Box::new(m0063_create_space_message_receipts::Migration),
+            Box::new(m0064_create_locations::Migration),
         ]
     }
 }
@@ -1604,3 +1606,4 @@ mod tests {
         assert!(script.contains("not valid"));
     }
 }
+
