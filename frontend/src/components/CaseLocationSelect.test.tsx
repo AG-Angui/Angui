@@ -15,6 +15,22 @@ const location: CaseLocation = {
 };
 
 describe("existing case location selection", () => {
+  it.each([
+    [null, null, null, "未命名地点"],
+    ["", null, null, "未命名地点"],
+    [null, 120, null, "未命名地点"],
+    [null, null, 30, "未命名地点"],
+    [null, 0, 0, "0, 0"],
+    ["", 120, 30, "120, 30"],
+  ])("labels locations with text %s and coordinates %s, %s", (text, longitude, latitude, expected) => {
+    render(<CaseLocationSelect
+      locations={[{ ...location, location_text: text, longitude, latitude }]}
+      value=""
+      onChange={vi.fn()}
+    />);
+    expect(screen.getByRole("option", { name: expected })).toHaveValue(location.id);
+  });
+
   it("offers one choice for a shared location and switches back to a new location", () => {
     const onChange = vi.fn();
     render(<CaseLocationSelect locations={[location, null, location]} value="" onChange={onChange} />);

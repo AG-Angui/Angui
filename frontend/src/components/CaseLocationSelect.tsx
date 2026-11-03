@@ -30,7 +30,10 @@ export function CaseLocationSelect({
         <option value="">填写新地点</option>
         {unique.map((location) => (
           <option key={location.id} value={location.id}>
-            {location.location_text ?? `${location.longitude}, ${location.latitude}`}
+            {location.location_text ||
+              (location.longitude != null && location.latitude != null
+                ? `${location.longitude}, ${location.latitude}`
+                : "未命名地点")}
           </option>
         ))}
       </select>
