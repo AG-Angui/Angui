@@ -12,6 +12,10 @@ CREATE INDEX idx_clues_location_id ON clues(location_id);
 -- statement-break
 CREATE INDEX idx_tasks_location_id ON tasks(location_id);
 -- statement-break
+CREATE INDEX idx_clues_case_location ON clues(case_id, location_id);
+-- statement-break
+CREATE INDEX idx_tasks_case_location ON tasks(case_id, location_id);
+-- statement-break
 ALTER TABLE clues ADD CONSTRAINT fk_clues_case_location FOREIGN KEY (case_id, location_id) REFERENCES locations(case_id, id);
 -- statement-break
 ALTER TABLE tasks ADD CONSTRAINT fk_tasks_case_location FOREIGN KEY (case_id, location_id) REFERENCES locations(case_id, id);

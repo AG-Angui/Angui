@@ -174,13 +174,7 @@ pub(crate) async fn execute_script(manager: &SchemaManager<'_>, script: &str) ->
         // A later DROP TABLE removes that table's indexes and constraints itself,
         // so skip only that provably redundant index drop and keep all others strict.
         if manager.get_database_backend() == DbBackend::MySql
-            && (mysql_drop_index_is_redundant(statement, &statements[index + 1..])
-                || mysql_unqualified_drop_index_is_redundant(
-                    manager,
-                    statement,
-                    &statements[index + 1..],
-                )
-                .await?)
+            && mysql_drop_index_is_redundant(statement, &statements[index + 1..])
         {
             continue;
         }
@@ -234,51 +228,6 @@ fn mysql_drop_index_is_redundant(statement: &str, later_statements: &[&str]) -> 
     later_statements.iter().any(|later_statement| {
         mysql_drop_table(later_statement).as_deref() == Some(indexed_table.as_str())
     })
-}
-
-// m0064's historical MySQL down script contains a SQLite-style index drop.
-// Resolve the real table from metadata before skipping it; an index name alone
-// is not enough proof because MySQL permits that name on several tables.
-async fn mysql_unqualified_drop_index_is_redundant(
-    manager: &SchemaManager<'_>,
-    statement: &str,
-    later_statements: &[&str],
-) -> Result<bool, DbErr> {
-    let Some(index_name) = mysql_unqualified_drop_index_name(statement) else {
-        return Ok(false);
-    };
-    let rows = manager
-        .get_connection()
-        .query_all_raw(Statement::from_sql_and_values(
-            DbBackend::MySql,
-            "SELECT DISTINCT TABLE_NAME AS indexed_table FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = ?",
-            [index_name.into()],
-        ))
-        .await?;
-    let tables = rows
-        .iter()
-        .map(|row| row.try_get::<String>("", "indexed_table"))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(mysql_index_tables_are_dropped(&tables, later_statements))
-}
-
-fn mysql_unqualified_drop_index_name(statement: &str) -> Option<String> {
-    let normalized = normalize_mysql_statement(statement);
-    let index = normalized.strip_prefix("drop index if exists ")?;
-    let index = normalize_mysql_identifier(index)?;
-    index
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '_')
-        .then_some(index)
-}
-
-fn mysql_index_tables_are_dropped(tables: &[String], later_statements: &[&str]) -> bool {
-    !tables.is_empty()
-        && tables.iter().all(|table| {
-            later_statements
-                .iter()
-                .any(|later| mysql_drop_table(later).as_deref() == Some(table.as_str()))
-        })
 }
 
 fn mysql_drop_index_table(statement: &str) -> Option<String> {
@@ -1648,37 +1597,6 @@ mod tests {
         assert!(!mysql_drop_index_is_redundant(
             "DROP INDEX idx_users_role_status ON users;",
             &["DROP TABLE IF EXISTS cases;"]
-        ));
-    }
-
-    #[test]
-    fn mysql_unqualified_index_drop_requires_metadata_proof_for_every_matching_table() {
-        assert_eq!(
-            super::mysql_unqualified_drop_index_name(
-                "DROP INDEX IF EXISTS idx_locations_case_status;"
-            )
-            .as_deref(),
-            Some("idx_locations_case_status")
-        );
-        assert!(
-            super::mysql_unqualified_drop_index_name("DROP INDEX idx_locations_case_status;")
-                .is_none()
-        );
-        assert!(
-            super::mysql_unqualified_drop_index_name(
-                "DROP INDEX IF EXISTS idx_locations_case_status ON locations;"
-            )
-            .is_none()
-        );
-        let later = ["DROP TABLE IF EXISTS locations;"];
-        assert!(super::mysql_index_tables_are_dropped(
-            &["locations".to_owned()],
-            &later
-        ));
-        assert!(!super::mysql_index_tables_are_dropped(&[], &later));
-        assert!(!super::mysql_index_tables_are_dropped(
-            &["locations".to_owned(), "unrelated_table".to_owned()],
-            &later
         ));
     }
 

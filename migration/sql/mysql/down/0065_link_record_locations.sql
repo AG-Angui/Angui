@@ -18,6 +18,10 @@ ALTER TABLE tasks DROP FOREIGN KEY fk_tasks_case_location;
 -- statement-break
 ALTER TABLE clues DROP FOREIGN KEY fk_clues_case_location;
 -- statement-break
+DROP INDEX idx_tasks_case_location ON tasks;
+-- statement-break
+DROP INDEX idx_clues_case_location ON clues;
+-- statement-break
 DROP INDEX idx_tasks_location_id ON tasks;
 -- statement-break
 DROP INDEX idx_clues_location_id ON clues;
