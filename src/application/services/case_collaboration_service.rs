@@ -1836,19 +1836,19 @@ async fn authorized_center(
     }
     let mut location_clues = clues::Entity::find()
         .filter(clues::Column::CaseId.eq(case_id))
-        .filter(clues::Column::Status.eq("confirmed"))
-        .filter(clues::Column::LocationKind.is_not_null())
-        .filter(clues::Column::Longitude.is_not_null())
-        .filter(clues::Column::Latitude.is_not_null());
+        .filter(clues::Column::Status.eq("confirmed"));
     if role == CaseRole::Volunteer {
         location_clues =
             location_clues.filter(clues::Column::Visibility.is_in(["public", "confirmed"]));
     }
-    if let Some(clue) = location_clues
+    let mut location_clues = location_clues
         .order_by_desc(clues::Column::UpdatedAt)
-        .one(db)
-        .await?
-    {
+        .all(db)
+        .await?;
+    crate::services::location_service::hydrate_clues(db, &mut location_clues).await?;
+    if let Some(clue) = location_clues.into_iter().find(|clue| {
+        clue.location_kind.is_some() && clue.longitude.is_some() && clue.latitude.is_some()
+    }) {
         return Ok(Coordinate {
             longitude: clue.longitude.ok_or(ApiError::Internal)?,
             latitude: clue.latitude.ok_or(ApiError::Internal)?,
@@ -2414,6 +2414,7 @@ pub async fn review_clue_draft(
             auth,
             case_id,
             CreateClueRequest {
+                location_id: None,
                 source: candidate
                     .source_text
                     .clone()

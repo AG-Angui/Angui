@@ -36,6 +36,7 @@ import {
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
+import { CaseLocationSelect } from "../components/CaseLocationSelect";
 import { parseOptionalCoordinatePair } from "../coordinateInput";
 
 const defaultResources: CaseResourceConfiguration = {
@@ -313,6 +314,7 @@ export function FamilyCaseProgressPage() {
     useState<PublicClueSourceType>("manual_report");
   const [clueOccurredAt, setClueOccurredAt] = useState("");
   const [clueLocation, setClueLocation] = useState("");
+  const [clueLocationId, setClueLocationId] = useState("");
   const [clueLocationPrecision, setClueLocationPrecision] = useState<
     LocationPrecision | ""
   >("");
@@ -426,7 +428,7 @@ export function FamilyCaseProgressPage() {
   async function submitClue(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !caseId || !clue.trim()) return;
-    if (clueLocationPrecision && !clueLocation.trim()) {
+    if (!clueLocationId && clueLocationPrecision && !clueLocation.trim()) {
       setError("选择地点精度时，请同时填写地点。");
       return;
     }
@@ -438,8 +440,13 @@ export function FamilyCaseProgressPage() {
         source_type: clueSourceType,
         content: clue.trim(),
         occurred_at: toIsoOrNull(clueOccurredAt),
-        location_text: nullable(clueLocation),
-        location_precision: clueLocationPrecision || null,
+        ...(clueLocationId ? {
+          location_id: clueLocationId,
+          location_text: null,
+        } : {
+          location_text: nullable(clueLocation),
+          location_precision: clueLocationPrecision || null,
+        }),
         raw_record_reference: nullable(clueRawReference),
         next_action: nullable(clueNextAction),
         attachment_ids: linkedAttachmentIds,
@@ -447,6 +454,7 @@ export function FamilyCaseProgressPage() {
       setClue("");
       setClueOccurredAt("");
       setClueLocation("");
+      setClueLocationId("");
       setClueLocationPrecision("");
       setClueRawReference("");
       setClueNextAction("");
@@ -751,12 +759,23 @@ export function FamilyCaseProgressPage() {
                           required
                         />
                       </Field>
+                      <CaseLocationSelect
+                        locations={detail.clues.map((item) => item.location)}
+                        value={clueLocationId}
+                        onChange={(location) => {
+                          setClueLocationId(location?.id ?? "");
+                          setClueLocation(location?.location_text ?? "");
+                          setClueLocationPrecision(location?.location_precision ?? "");
+                        }}
+                      />
                       <LocationConfirmationPicker
                         onConfirm={(location) => {
+                          setClueLocationId("");
                           setClueLocation(location.address);
                           setClueLocationPrecision(location.precision);
                         }}
                         onClear={() => {
+                          setClueLocationId("");
                           setClueLocation("");
                           setClueLocationPrecision("");
                         }}
@@ -795,9 +814,10 @@ export function FamilyCaseProgressPage() {
                           className={inputClass}
                           value={clueLocation}
                           maxLength={500}
-                          onChange={(event) =>
-                            setClueLocation(event.target.value)
-                          }
+                          onChange={(event) => {
+                            setClueLocationId("");
+                            setClueLocation(event.target.value);
+                          }}
                         />
                       </Field>
                       <Field label="地点精度">
@@ -805,11 +825,12 @@ export function FamilyCaseProgressPage() {
                           aria-label="地点精度"
                           className={inputClass}
                           value={clueLocationPrecision}
-                          onChange={(event) =>
+                          onChange={(event) => {
+                            setClueLocationId("");
                             setClueLocationPrecision(
                               event.target.value as LocationPrecision | "",
-                            )
-                          }
+                            );
+                          }}
                         >
                           <option value="">未提供</option>
                           <option value="exact">精确</option>

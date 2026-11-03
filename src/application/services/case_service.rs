@@ -617,7 +617,7 @@ pub(crate) async fn create_clue_in_transaction<C: ConnectionTrait>(
     request: CreateClueRequest,
 ) -> Result<ClueResponse, ApiError> {
     validate_clue_request(&request)?;
-    require_case_role(
+    let case_role = require_case_role(
         db,
         &auth.id,
         case_id,
@@ -644,10 +644,30 @@ pub(crate) async fn create_clue_in_transaction<C: ConnectionTrait>(
         .trim()
         .to_lowercase();
     let location_precision =
-        trim_optional(request.location_precision).map(|value| value.to_lowercase());
+        trim_optional(request.location_precision.clone()).map(|value| value.to_lowercase());
+    let location = crate::services::location_service::resolve(
+        db,
+        auth,
+        case_id,
+        request.location_id.as_deref(),
+        crate::services::location_service::LocationInput {
+            text: trim_optional(request.location_text.clone()),
+            precision: location_precision,
+            kind: request
+                .location_kind
+                .clone()
+                .map(|value| value.trim().to_lowercase()),
+            longitude: request.longitude,
+            latitude: request.latitude,
+            radius_meters: request.location_radius_meters,
+        },
+        &timestamp,
+    )
+    .await?;
     let clue_model = clues::ActiveModel {
         id: Set(clue_id.clone()),
         case_id: Set(case_id.to_owned()),
+        location_id: Set(location.as_ref().map(|value| value.id.clone())),
         status: Set("pending_review".to_owned()),
         source: Set(request.source.trim().to_owned()),
         source_type: Set(source_type),
@@ -656,14 +676,20 @@ pub(crate) async fn create_clue_in_transaction<C: ConnectionTrait>(
         occurred_at: Set(trim_optional(request.occurred_at)),
         reported_at: Set(timestamp.clone()),
         confirmed_at: Set(None),
-        location_text: Set(trim_optional(request.location_text)),
-        location_precision: Set(location_precision),
-        location_kind: Set(request
-            .location_kind
-            .map(|value| value.trim().to_lowercase())),
-        longitude: Set(request.longitude),
-        latitude: Set(request.latitude),
-        location_radius_meters: Set(request.location_radius_meters),
+        location_text: Set(location.as_ref().and_then(|value| {
+            (!value.location_text.is_empty()).then(|| value.location_text.clone())
+        })),
+        location_precision: Set(location
+            .as_ref()
+            .map(|value| value.location_precision.clone())),
+        location_kind: Set(location
+            .as_ref()
+            .and_then(|value| value.location_kind.clone())),
+        longitude: Set(location.as_ref().and_then(|value| value.longitude)),
+        latitude: Set(location.as_ref().and_then(|value| value.latitude)),
+        location_radius_meters: Set(location
+            .as_ref()
+            .and_then(|value| value.location_radius_meters)),
         visibility: Set(request.visibility.map(|value| value.trim().to_lowercase())),
         confidence: Set(request.confidence.map(|value| value.trim().to_lowercase())),
         created_by_user_id: Set(Some(auth.id.clone())),
@@ -723,12 +749,16 @@ pub(crate) async fn create_clue_in_transaction<C: ConnectionTrait>(
     )
     .await?;
 
-    Ok(ClueResponse::new(
+    let mut response = ClueResponse::new(
         clue_model,
         Some(attribution),
         &auth.id,
         request.attachment_ids,
-    ))
+    );
+    if case_role == CaseRole::Family {
+        redact_family_location(&mut response);
+    }
+    Ok(response)
 }
 
 pub async fn list_clues(
@@ -758,7 +788,8 @@ pub async fn list_clues(
     }
     .order_by(clues::Column::Id, query.order.clone());
 
-    let clue_models = clue_query.all(db).await?;
+    let mut clue_models = clue_query.all(db).await?;
+    crate::services::location_service::hydrate_clues(db, &mut clue_models).await?;
     let clue_ids: Vec<_> = clue_models.iter().map(|clue| clue.id.clone()).collect();
     let attributions = clue_attributions_for_clues(db, clue_ids).await?;
     let attachment_links =
@@ -915,6 +946,9 @@ pub async fn review_clue(
     transaction.commit().await?;
     let mut attachment_links = clue_attachment_ids_for_clues(db, vec![clue_id.to_owned()]).await?;
     let attachment_ids = attachment_links.remove(clue_id).unwrap_or_default();
+    let mut updated = updated;
+    crate::services::location_service::hydrate_clues(db, std::slice::from_mut(&mut updated))
+        .await?;
     Ok(ClueResponse::new(
         updated,
         Some(attribution),
@@ -1177,11 +1211,12 @@ async fn load_case_detail(
         .ok_or_else(|| {
             ApiError::Database(sea_orm::DbErr::Custom("elder profile missing".into()))
         })?;
-    let clue_models = clues::Entity::find()
+    let mut clue_models = clues::Entity::find()
         .filter(clues::Column::CaseId.eq(&membership.case_id))
         .order_by_desc(clues::Column::CreatedAt)
         .all(db)
         .await?;
+    crate::services::location_service::hydrate_clues(db, &mut clue_models).await?;
     let clue_ids: Vec<_> = clue_models.iter().map(|clue| clue.id.clone()).collect();
     let attributions = clue_attributions_for_clues(db, clue_ids).await?;
     let attachment_links =
@@ -1289,8 +1324,12 @@ fn visible_clue_response(
         == Some(auth.id.as_str());
     let visible = match case_role {
         CaseRole::Commander => true,
-        CaseRole::Family => clue.status == "confirmed" || own,
-        CaseRole::Volunteer => clue.status == "confirmed" || own,
+        CaseRole::Family => {
+            (clue.status == "confirmed" && clue.visibility.as_deref() != Some("internal")) || own
+        }
+        CaseRole::Volunteer => {
+            (clue.status == "confirmed" && clue.visibility.as_deref() != Some("internal")) || own
+        }
     };
     let can_see_attachment_references = case_role == CaseRole::Commander || own;
     visible.then(|| {
@@ -1315,8 +1354,34 @@ fn visible_clue_response(
             response.related_clue_id = None;
             response.relationship_type = None;
         }
+        if case_role == CaseRole::Family {
+            redact_family_location(&mut response);
+        }
         response
     })
+}
+
+fn redact_family_location(response: &mut ClueResponse) {
+    response.longitude = None;
+    response.latitude = None;
+    response.location_radius_meters = None;
+    if matches!(
+        response.location_precision.as_deref(),
+        Some("exact" | "coordinates" | "address")
+    ) {
+        response.location_precision = Some("unknown".to_owned());
+    }
+    if let Some(location) = &mut response.location {
+        location.longitude = None;
+        location.latitude = None;
+        location.location_radius_meters = None;
+        if matches!(
+            location.location_precision.as_deref(),
+            Some("exact" | "coordinates" | "address")
+        ) {
+            location.location_precision = Some("unknown".to_owned());
+        }
+    }
 }
 
 async fn membership_for_case<C: ConnectionTrait>(
@@ -1591,6 +1656,7 @@ fn validate_clue_request(request: &CreateClueRequest) -> Result<(), ApiError> {
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
         && trim_optional(request.location_text.clone()).is_none()
+        && request.location_id.is_none()
     {
         return Err(ApiError::Validation(
             "location_precision requires location_text".to_owned(),
@@ -1864,6 +1930,7 @@ mod tests {
             &family,
             &case.id,
             CreateClueRequest {
+                location_id: None,
                 source: "family".to_owned(),
                 content: "模拟线索：曾向市场方向步行".to_owned(),
                 source_type: None,

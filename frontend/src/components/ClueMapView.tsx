@@ -132,7 +132,7 @@ export function ClueMapView({
     if (!map || !AMap) return;
 
     // 清除旧标记
-    markersRef.current.forEach((marker) => marker.setMap(null));
+    new Set(markersRef.current.values()).forEach((marker) => marker.setMap(null));
     markersRef.current.clear();
 
     if (itemsWithCoords.length === 0) return;
@@ -145,8 +145,16 @@ export function ClueMapView({
     }
 
     // 添加新标记
+    const locationMarkers = new Map<string, AMapType.Marker>();
     itemsWithCoords.forEach((item) => {
       if (item.longitude === null || item.latitude === null) return;
+      // Keep every authorized timeline entry, but render one marker per shared
+      // location. Alias each entry ID so every card can still focus its marker.
+      const existing = item.location_id ? locationMarkers.get(item.location_id) : undefined;
+      if (existing) {
+        markersRef.current.set(item.id, existing);
+        return;
+      }
 
       const position = new AMap.LngLat(item.longitude, item.latitude);
       const timelineIndex = timelineItems.findIndex(
@@ -187,11 +195,12 @@ export function ClueMapView({
 
       marker.setMap(map);
       markersRef.current.set(item.id, marker);
+      if (item.location_id) locationMarkers.set(item.location_id, marker);
     });
 
     // 自适应显示所有标记
     if (itemsWithCoords.length > 0) {
-      map.setFitView(Array.from(markersRef.current.values()));
+      map.setFitView([...new Set(markersRef.current.values())]);
     }
   }, [map, AMap, itemsWithCoords, timelineItems, createMarkerIcon]);
 
@@ -238,7 +247,7 @@ export function ClueMapView({
   // 重置视图：显示所有标记
   const handleResetView = useCallback(() => {
     if (!map || itemsWithCoords.length === 0) return;
-    map.setFitView(Array.from(markersRef.current.values()));
+    map.setFitView([...new Set(markersRef.current.values())]);
     setActiveItemId(null);
     infoWindowRef.current?.close();
   }, [map, itemsWithCoords.length]);
@@ -264,7 +273,9 @@ export function ClueMapView({
               <MapTimelineCard
                 key={item.id}
                 item={item}
-                index={index}
+                index={item.location_id
+                  ? timelineItems.findIndex((candidate) => candidate.location_id === item.location_id)
+                  : index}
                 isActive={activeItemId === item.id}
                 onClick={() => handleCardClick(item)}
               />

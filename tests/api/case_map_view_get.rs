@@ -63,6 +63,7 @@ async fn get_case_map_view_returns_only_role_necessary_layers_with_text_fallback
         tasks::ActiveModel {
             id: Set(format!("map-extra-task-{index}")),
             case_id: Set(case_id.clone()),
+            location_id: Set(None),
             source_clue_id: Set(Some(clue_id.clone())),
             title: Set(format!("Fictional extra task {index}")),
             objective: Set("Fictional task objective.".to_owned()),

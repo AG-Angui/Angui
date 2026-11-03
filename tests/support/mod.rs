@@ -203,6 +203,7 @@ pub fn create_case_json() -> Value {
 
 pub fn create_clue_request() -> CreateClueRequest {
     CreateClueRequest {
+        location_id: None,
         source: "family".to_owned(),
         content: "测试线索：曾向测试市场方向步行".to_owned(),
         source_type: None,

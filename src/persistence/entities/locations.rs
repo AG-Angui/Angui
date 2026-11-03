@@ -39,7 +39,7 @@ pub enum Relation {
     )]
     CreatedBy,
     #[sea_orm(
-        belongs_to = "super::locations::Entity"
+        belongs_to = "super::locations::Entity",
         from = "Column::MergedIntoId",
         to = "super::locations::Column::Id"
     )]

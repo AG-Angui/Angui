@@ -35,6 +35,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
             )
             .route("/{case_id}/clues", web::get().to(list_clues))
             .route("/{case_id}/clues", web::post().to(create_clue))
+            .route("/{case_id}/locations", web::get().to(list_locations))
             .route("/{case_id}/tasks", web::get().to(list_tasks))
             .route("/{case_id}/tasks", web::post().to(create_task))
             .route("/{case_id}/map-view", web::get().to(get_map_view))
@@ -109,6 +110,15 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{case_id}/members", web::get().to(list_case_members))
             .route("/{case_id}/members", web::post().to(add_case_member)),
     );
+}
+
+async fn list_locations(
+    state: web::Data<AppState>,
+    auth: AuthenticatedUser,
+    case_id: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(crate::services::location_service::list(&state.db, &auth, &case_id).await?))
 }
 
 async fn list_map_areas(
@@ -358,6 +368,7 @@ async fn get_map_view(
         && let Some(location_text) = detail.elder_profile.last_seen_location
     {
         items.push(CaseMapItem {
+            location_id: None,
             id: format!("case:{}:last-seen", detail.id),
             object_type: "last_seen".to_owned(),
             display_name: None,
@@ -389,6 +400,7 @@ async fn get_map_view(
                     && (detail.access_role == CaseRole::Commander || clue.status == "confirmed")
             })
             .map(|clue| CaseMapItem {
+                location_id: clue.location_id.clone(),
                 id: clue.id.clone(),
                 object_type: if clue
                     .raw_record_reference
@@ -418,18 +430,18 @@ async fn get_map_view(
     );
     items.extend(task_items.into_iter().map(|task| {
         CaseMapItem {
+            location_id: task.location_id.clone(),
             id: task.id.clone(),
             object_type: "task".to_owned(),
             display_name: Some(task.title),
             longitude: task.longitude,
             latitude: task.latitude,
             location_text: Some(task.area_text),
-            location_precision: if task.longitude.is_some() {
-                "exact"
-            } else {
-                "unknown"
-            }
-            .to_owned(),
+            location_precision: task
+                .location
+                .as_ref()
+                .and_then(|location| location.location_precision.clone())
+                .unwrap_or_else(|| "unknown".to_owned()),
             source: "task".to_owned(),
             occurred_at: Some(task.due_at),
             reported_at: Some(task.created_at),

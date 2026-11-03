@@ -29,6 +29,7 @@ mod intake_session_profile_draft_get;
 mod intake_sessions_create_post;
 mod knowledge_api;
 mod learning_api;
+mod location_entity;
 mod openapi_intake_contract;
 mod tasks_api;
 mod user_profile;

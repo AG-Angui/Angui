@@ -13,6 +13,7 @@ pub mod intake_photo_service;
 pub mod intake_session_service;
 pub mod knowledge_service;
 pub mod learning_service;
+pub mod location_service;
 pub mod task_service;
 pub mod voice_clue_service;
 pub mod voice_review_service;

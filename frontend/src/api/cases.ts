@@ -6,6 +6,7 @@ import {
   type SseEventListener,
 } from "./client";
 import type { AccountType, GlobalCapability } from "./auth";
+import { getClueLocation } from "../caseLocations";
 
 export type CaseRole = "family" | "commander" | "volunteer";
 export type CaseStatus =
@@ -23,6 +24,22 @@ export type ClueSourceType =
   "manual_report" | "field_report" | "chat_draft" | "ai_draft";
 export type PublicClueSourceType = "manual_report" | "field_report";
 export type LocationPrecision = "exact" | "approximate" | "unknown";
+
+/** A case location is shared by references; visibility follows its linked records. */
+export interface CaseLocation {
+  id: string;
+  case_id: string;
+  location_text: string | null;
+  location_precision: LocationPrecision | null;
+  location_kind: "point" | "area" | null;
+  longitude: number | null;
+  latitude: number | null;
+  location_radius_meters: number | null;
+}
+
+export function listCaseLocations(token: string, caseId: string): Promise<CaseLocation[]> {
+  return apiRequest<CaseLocation[]>(`/cases/${caseId}/locations`, {}, token);
+}
 
 export interface CaseListItem {
   id: string;
@@ -60,6 +77,8 @@ export interface ElderProfile {
 }
 
 export interface Clue {
+  location_id?: string | null;
+  location?: CaseLocation | null;
   id: string;
   case_id: string;
   status: ClueStatus;
@@ -211,6 +230,7 @@ export interface CaseMember {
 }
 
 export interface CreateCluePayload {
+  location_id?: string | null;
   source: string;
   content: string;
   occurred_at: string | null;
@@ -343,6 +363,7 @@ export type CaseMapObjectType =
   "last_seen" | "place" | "location_clue" | "clue" | "task";
 export type MapLocationPrecision = "exact" | "approximate" | "unknown";
 export interface CaseMapItem {
+  location_id?: string | null;
   id: string;
   object_type: CaseMapObjectType;
   display_name: string | null;
@@ -480,6 +501,8 @@ export interface TaskCollaborator {
   assigned_at: string;
 }
 export interface CaseTask {
+  location_id?: string | null;
+  location?: CaseLocation | null;
   id: string;
   case_id: string;
   source_clue_id: string | null;
@@ -528,6 +551,7 @@ export interface TaskListPage {
   total: number;
 }
 export interface CreateTaskPayload {
+  location_id?: string | null;
   source_clue_id: string;
   volunteer_user_id?: string;
   volunteer_user_ids?: string[];
@@ -1163,10 +1187,11 @@ export function reviewCasePlace(
 
 /** Temporary UI adapter while legacy place read models are retired. */
 function locationClueAsPlace(clue: Clue): CasePlace {
+  const location = getClueLocation(clue);
   const separator = clue.content.indexOf(": ");
   const name = separator >= 0 ? clue.content.slice(0, separator) : "地点线索";
   const address =
-    clue.location_text ??
+    location.location_text ??
     (separator >= 0 ? clue.content.slice(separator + 2) : clue.content);
   return {
     id: clue.id,
@@ -1176,8 +1201,8 @@ function locationClueAsPlace(clue: Clue): CasePlace {
       clue.raw_record_reference?.replace(/^location-type:/, "") ??
       "location_clue",
     address,
-    longitude: clue.longitude ?? null,
-    latitude: clue.latitude ?? null,
+    longitude: location.longitude ?? null,
+    latitude: location.latitude ?? null,
     source: "family",
     visibility: clue.visibility ?? "confirmed",
     review_status: clue.status as CasePlace["review_status"],

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import AMapLoader from "@amap/amap-jsapi-loader";
 import { ClueMapView } from "./ClueMapView";
 
 // Mock API
@@ -142,5 +143,36 @@ describe("ClueMapView", () => {
       // 应该显示卡片但标记为仅文字位置
       expect(screen.getByText("测试线索1")).toBeDefined();
     });
+  });
+
+  it("shares a marker between linked records while keeping both timeline cards", async () => {
+    const { getCaseMapView } = await import("../api/cases");
+    const item = {
+      location_id: "shared-location",
+      object_type: "clue" as const,
+      display_name: "模拟目击记录",
+      longitude: 120,
+      latitude: 30,
+      location_text: "模拟公园北门",
+      location_precision: "exact" as const,
+      source: "family",
+      occurred_at: null,
+      reported_at: null,
+      review_status: "confirmed",
+      related_task_id: null,
+      updated_at: "2026-11-03T00:00:00Z",
+    };
+    vi.mocked(getCaseMapView).mockResolvedValueOnce({ items: [
+      { ...item, id: "clue-a" },
+      { ...item, id: "clue-b", display_name: "模拟后续记录" },
+    ], areas: [] });
+    render(<ClueMapView caseId="fictional-case" token="test-token" />);
+    await screen.findByText("模拟后续记录");
+    const amap = await vi.mocked(AMapLoader.load).mock.results.at(-1)!.value;
+    await waitFor(() => expect(amap.Marker).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("模拟目击记录")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("模拟后续记录"));
+    const map = vi.mocked(amap.Map).mock.results[0]!.value;
+    expect(map.setCenter).toHaveBeenCalled();
   });
 });

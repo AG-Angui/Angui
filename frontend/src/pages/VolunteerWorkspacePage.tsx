@@ -51,6 +51,8 @@ import {
   LoadingState,
 } from "../components/ContentState";
 import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
+import { CaseLocationSelect } from "../components/CaseLocationSelect";
+import { getClueLocation, getTaskLocationText } from "../caseLocations";
 import { ApiClientError } from "../api/client";
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -79,6 +81,7 @@ type WorkspaceCase = {
   tasks: CaseTask[];
 };
 type ClueDraft = {
+  locationId?: string | null;
   content: string;
   location: string;
   precision: "exact" | "approximate" | null;
@@ -322,7 +325,7 @@ export function VolunteerWorkspacePage() {
         <dl className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
           <div>
             <dt className="font-medium text-slate-800">任务区域</dt>
-            <dd className="m-0">{task.area_text}</dd>
+            <dd className="m-0">{getTaskLocationText(task)}</dd>
           </div>
           <div>
             <dt className="font-medium text-slate-800">截止时间</dt>
@@ -608,7 +611,7 @@ export function VolunteerWorkspacePage() {
                     const payload = {
                       content: feedback[task.id].trim(),
                       occurred_at: localNow(),
-                      location_text: task.area_text,
+                      location_text: getTaskLocationText(task),
                       location_precision: "approximate" as const,
                     };
                     void run(
@@ -835,12 +838,12 @@ export function VolunteerWorkspacePage() {
                         workspace.detail.clues.slice(0, 8).map((clue) => (
                           <li key={clue.id}>
                             <span>{clue.content}</span>
-                            {clue.location_text && (
+                            {getClueLocation(clue).location_text && (
                               <span className="mt-1 flex items-center gap-1 text-xs text-slate-600">
                                 <MapPin aria-hidden="true" size={14} />
-                                {clue.location_text}
-                                {clue.location_precision &&
-                                  `（${clue.location_precision === "exact" ? "精确地点" : "约略地点"}）`}
+                                {getClueLocation(clue).location_text}
+                                {getClueLocation(clue).location_precision &&
+                                  `（${getClueLocation(clue).location_precision === "exact" ? "精确地点" : "约略地点"}）`}
                               </span>
                             )}
                             {clue.is_own_submission && (
@@ -865,10 +868,15 @@ export function VolunteerWorkspacePage() {
                               source_type: "field_report",
                               content: clueDraft.content.trim(),
                               occurred_at: localNow(),
-                              location_text: clueDraft.location.trim() || null,
-                              location_precision: clueDraft.location.trim()
-                                ? (clueDraft.precision ?? "approximate")
-                                : null,
+                              ...(clueDraft.locationId ? {
+                                location_id: clueDraft.locationId,
+                                location_text: null,
+                              } : {
+                                location_text: clueDraft.location.trim() || null,
+                                location_precision: clueDraft.location.trim()
+                                  ? (clueDraft.precision ?? "approximate")
+                                  : null,
+                              }),
                             });
                             setClueDrafts((value) => ({
                               ...value,
@@ -905,6 +913,22 @@ export function VolunteerWorkspacePage() {
                         }
                         fullWidth
                       />
+                      <CaseLocationSelect
+                        locations={[
+                          ...workspace.detail.clues.map((clue) => clue.location),
+                          ...workspace.tasks.map((task) => task.location),
+                        ]}
+                        value={clueDraft.locationId ?? ""}
+                        onChange={(selected) => setClueDrafts((value) => ({
+                          ...value,
+                          [workspace.detail.id]: {
+                            ...clueDraft,
+                            locationId: selected?.id ?? null,
+                            location: selected?.location_text ?? "",
+                            precision: null,
+                          },
+                        }))}
+                      />
                       <Input
                         aria-label="观察地点"
                         value={clueDraft.location}
@@ -916,6 +940,7 @@ export function VolunteerWorkspacePage() {
                             [workspace.detail.id]: {
                               ...clueDraft,
                               location: event.target.value,
+                              locationId: null,
                               precision: "approximate",
                             },
                           }))
@@ -929,6 +954,7 @@ export function VolunteerWorkspacePage() {
                             [workspace.detail.id]: {
                               ...clueDraft,
                               location: location.address,
+                              locationId: null,
                               precision: location.precision,
                             },
                           }))
@@ -939,6 +965,7 @@ export function VolunteerWorkspacePage() {
                             [workspace.detail.id]: {
                               ...clueDraft,
                               location: "",
+                              locationId: null,
                               precision: null,
                             },
                           }))
