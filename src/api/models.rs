@@ -1304,6 +1304,8 @@ pub struct UpdateElderProfileRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateClueRequest {
+    #[serde(default)]
+    pub location_id: Option<String>,
     pub source: String,
     pub content: String,
     #[serde(default)]
@@ -1400,6 +1402,8 @@ pub struct ReviewClueRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateTaskRequest {
+    #[serde(default)]
+    pub location_id: Option<String>,
     pub source_clue_id: String,
     #[serde(default)]
     pub volunteer_user_id: Option<String>,
@@ -1407,6 +1411,7 @@ pub struct CreateTaskRequest {
     pub volunteer_user_ids: Vec<String>,
     pub title: String,
     pub objective: String,
+    #[serde(default)]
     pub area_text: String,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
@@ -1555,8 +1560,24 @@ pub struct ElderProfileExtendedField {
     pub confidence: String,
 }
 
+/// A case-scoped location. Flattened clue/task position fields remain available
+/// during the migration of existing clients.
+#[derive(Clone, Debug, Serialize)]
+pub struct LocationResponse {
+    pub id: String,
+    pub case_id: String,
+    pub location_text: Option<String>,
+    pub location_precision: Option<String>,
+    pub location_kind: Option<String>,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub location_radius_meters: Option<f64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ClueResponse {
+    pub location_id: Option<String>,
+    pub location: Option<LocationResponse>,
     pub id: String,
     pub case_id: String,
     pub status: String,
@@ -1598,6 +1619,8 @@ pub struct ClueTimelineResponse {
 
 #[derive(Debug, Serialize)]
 pub struct TaskResponse {
+    pub location_id: Option<String>,
+    pub location: Option<LocationResponse>,
     pub id: String,
     pub case_id: String,
     pub source_clue_id: Option<String>,
@@ -1735,6 +1758,7 @@ pub struct ReviewCaseMapAreaRequest {
 
 #[derive(Debug, Serialize)]
 pub struct CaseMapItem {
+    pub location_id: Option<String>,
     pub id: String,
     pub object_type: String,
     pub display_name: Option<String>,
@@ -2205,7 +2229,19 @@ impl ClueResponse {
         viewer_user_id: &str,
         attachment_ids: Vec<String>,
     ) -> Self {
+        let location = model.location_id.as_ref().map(|id| LocationResponse {
+            id: id.clone(),
+            case_id: model.case_id.clone(),
+            location_text: model.location_text.clone(),
+            location_precision: model.location_precision.clone(),
+            location_kind: model.location_kind.clone(),
+            longitude: model.longitude,
+            latitude: model.latitude,
+            location_radius_meters: model.location_radius_meters,
+        });
         Self {
+            location_id: model.location_id,
+            location,
             id: model.id,
             case_id: model.case_id,
             status: model.status,
@@ -2249,8 +2285,27 @@ impl TaskResponse {
         assignments: Vec<task_assignments::Model>,
         include_assignee: bool,
     ) -> Self {
+        let location = model.location_id.as_ref().map(|id| LocationResponse {
+            id: id.clone(),
+            case_id: model.case_id.clone(),
+            location_text: Some(model.area_text.clone()),
+            location_precision: Some(
+                if model.longitude.is_some() {
+                    "exact"
+                } else {
+                    "unknown"
+                }
+                .to_owned(),
+            ),
+            location_kind: None,
+            longitude: model.longitude,
+            latitude: model.latitude,
+            location_radius_meters: None,
+        });
         let first_assignment = assignments.first();
         Self {
+            location_id: model.location_id,
+            location,
             id: model.id,
             case_id: model.case_id,
             source_clue_id: include_assignee.then_some(model.source_clue_id).flatten(),

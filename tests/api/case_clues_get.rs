@@ -41,6 +41,7 @@ async fn get_case_clues_applies_role_cuts_pagination_and_status_filters() {
         &commander,
         &case_id,
         angui::models::CreateClueRequest {
+            location_id: None,
             source: "field responder".to_owned(),
             source_type: Some("field_report".to_owned()),
             content: "A fictional field report for source filtering.".to_owned(),

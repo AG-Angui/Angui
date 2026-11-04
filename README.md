@@ -8,6 +8,8 @@
 
 本仓库目前处于 **MVP 纵向闭环开发阶段**。React 工作台、Rust/Actix Web 后端、SeaORM 数据层、可撤销会话认证、案件级角色授权、版本化迁移，以及案件创建、查询、成员授权、线索提交、人工审核和状态流转已经落地。受控 AI 草稿、地图和任务仍在持续完善；密码找回、多因素认证和生产部署属于后续实现范围。当前实现不能视为已经部署或经过真实搜救验证的产品。
 
+线索和任务的位置统一引用独立的 `locations` 地点实体，表单支持复用已有地点，地图对共享地点合并标记并保留每条来源记录。升级需执行到 `0065_link_record_locations`；旧位置列保留用于兼容过渡，迁移与回滚限制见 [数据库文档](./docs/DATABASE.md)。
+
 - 需求整理入口：[docs/PRODUCT.md](./docs/PRODUCT.md)
 - 文档入口：[docs/README.md](./docs/README.md)
 - 产品范围：[docs/PRODUCT.md](./docs/PRODUCT.md)

@@ -109,15 +109,43 @@ pub async fn create_task(
 
     let timestamp = now();
     let task_id = crate::services::case_service::new_id();
+    let location = crate::services::location_service::resolve(
+        &transaction,
+        auth,
+        case_id,
+        request.location_id.as_deref(),
+        crate::services::location_service::LocationInput {
+            text: Some(request.area_text.clone()),
+            precision: if request.location_id.is_none() {
+                Some(
+                    if request.longitude.is_some() {
+                        "exact"
+                    } else {
+                        "unknown"
+                    }
+                    .to_owned(),
+                )
+            } else {
+                None
+            },
+            longitude: request.longitude,
+            latitude: request.latitude,
+            ..Default::default()
+        },
+        &timestamp,
+    )
+    .await?
+    .ok_or_else(|| ApiError::Validation("task requires a location".to_owned()))?;
     let task = tasks::ActiveModel {
         id: Set(task_id.clone()),
         case_id: Set(case_id.to_owned()),
+        location_id: Set(Some(location.id.clone())),
         source_clue_id: Set(Some(source_clue.id)),
         title: Set(request.title),
         objective: Set(request.objective),
-        area_text: Set(request.area_text),
-        latitude: Set(request.latitude),
-        longitude: Set(request.longitude),
+        area_text: Set(location.location_text),
+        latitude: Set(location.latitude),
+        longitude: Set(location.longitude),
         due_at: Set(request.due_at),
         background: Set(request.background),
         risk_level: Set(request.risk_level),
@@ -180,7 +208,13 @@ pub async fn create_task(
     }
 
     transaction.commit().await?;
-    Ok(TaskResponse::new(task, assignments, true))
+    let mut response = TaskResponse::new(task, assignments, true);
+    crate::services::location_service::hydrate_task_responses(
+        db,
+        std::slice::from_mut(&mut response),
+    )
+    .await?;
+    Ok(response)
 }
 
 pub async fn list_tasks(
@@ -223,7 +257,7 @@ async fn load_visible_tasks(
         return Ok(Vec::new());
     }
 
-    let task_models = tasks::Entity::find()
+    let mut task_models = tasks::Entity::find()
         .filter(tasks::Column::CaseId.eq(case_id))
         .order_by_asc(tasks::Column::DueAt)
         .order_by_asc(tasks::Column::Id)
@@ -231,7 +265,8 @@ async fn load_visible_tasks(
         .await?;
     let assignments =
         assignments_for_tasks(db, task_models.iter().map(|task| task.id.clone())).await?;
-    Ok(task_models
+    crate::services::location_service::hydrate_tasks(db, &mut task_models).await?;
+    let mut responses: Vec<_> = task_models
         .into_iter()
         .map(|task| {
             TaskResponse::new(
@@ -240,7 +275,9 @@ async fn load_visible_tasks(
                 case_role == CaseRole::Commander,
             )
         })
-        .collect())
+        .collect();
+    crate::services::location_service::hydrate_task_responses(db, &mut responses).await?;
+    Ok(responses)
 }
 
 pub async fn list_all_visible_tasks(
@@ -286,7 +323,7 @@ pub async fn list_my_tasks(
         .iter()
         .map(|assignment| assignment.task_id.clone())
         .collect::<Vec<_>>();
-    let task_models = tasks::Entity::find()
+    let mut task_models = tasks::Entity::find()
         .filter(tasks::Column::Id.is_in(task_ids))
         .order_by_asc(tasks::Column::DueAt)
         .order_by_asc(tasks::Column::Id)
@@ -295,7 +332,8 @@ pub async fn list_my_tasks(
 
     let assignments =
         assignments_for_tasks(db, task_models.iter().map(|task| task.id.clone())).await?;
-    Ok(task_models
+    crate::services::location_service::hydrate_tasks(db, &mut task_models).await?;
+    let mut responses: Vec<_> = task_models
         .into_iter()
         .filter(|task| volunteer_case_ids.contains(&task.case_id))
         .map(|task| {
@@ -305,7 +343,9 @@ pub async fn list_my_tasks(
                 false,
             )
         })
-        .collect())
+        .collect();
+    crate::services::location_service::hydrate_task_responses(db, &mut responses).await?;
+    Ok(responses)
 }
 
 pub async fn get_task_safety_briefing(
@@ -381,7 +421,7 @@ async fn load_task_for_assignee_or_commander(
     auth: &AuthenticatedUser,
     task_id: &str,
 ) -> Result<tasks::Model, ApiError> {
-    let task = tasks::Entity::find_by_id(task_id)
+    let mut task = tasks::Entity::find_by_id(task_id)
         .one(db)
         .await?
         .ok_or_else(|| ApiError::NotFound("task was not found".to_owned()))?;
@@ -392,6 +432,7 @@ async fn load_task_for_assignee_or_commander(
         &[CaseRole::Family, CaseRole::Commander, CaseRole::Volunteer],
     )
     .await?;
+    crate::services::location_service::hydrate_tasks(db, std::slice::from_mut(&mut task)).await?;
     if role == CaseRole::Commander {
         return Ok(task);
     }
@@ -477,7 +518,7 @@ pub async fn update_task_status(
             "task status changed before this transition could be applied".to_owned(),
         ));
     }
-    let updated = tasks::Entity::find_by_id(task_id)
+    let mut updated = tasks::Entity::find_by_id(task_id)
         .one(&transaction)
         .await?
         .ok_or_else(|| ApiError::Internal)?;
@@ -494,11 +535,19 @@ pub async fn update_task_status(
     transaction.commit().await?;
 
     let assignments = assignments_for_tasks(db, [updated.id.clone()]).await?;
-    Ok(TaskResponse::new(
+    crate::services::location_service::hydrate_tasks(db, std::slice::from_mut(&mut updated))
+        .await?;
+    let mut response = TaskResponse::new(
         updated.clone(),
         assignments.get(&updated.id).cloned().unwrap_or_default(),
         case_role == CaseRole::Commander,
-    ))
+    );
+    crate::services::location_service::hydrate_task_responses(
+        db,
+        std::slice::from_mut(&mut response),
+    )
+    .await?;
+    Ok(response)
 }
 
 pub async fn submit_location_report(
@@ -987,9 +1036,23 @@ pub async fn submit_task_feedback(
     }
 
     let clue_id = crate::services::case_service::new_id();
+    let location = crate::services::location_service::resolve(
+        &transaction,
+        auth,
+        &task.case_id,
+        None,
+        crate::services::location_service::LocationInput {
+            text: request.location_text.clone(),
+            precision: request.location_precision.clone(),
+            ..Default::default()
+        },
+        &timestamp,
+    )
+    .await?;
     let clue = clues::ActiveModel {
         id: Set(clue_id.clone()),
         case_id: Set(task.case_id.clone()),
+        location_id: Set(location.as_ref().map(|value| value.id.clone())),
         status: Set("pending_review".to_owned()),
         source: Set("task_feedback".to_owned()),
         source_type: Set("field_report".to_owned()),
@@ -1261,6 +1324,7 @@ async fn require_task_reviewer<C: ConnectionTrait>(
 }
 
 struct ValidatedCreateTaskRequest {
+    location_id: Option<String>,
     source_clue_id: String,
     volunteer_user_ids: Vec<String>,
     title: String,
@@ -1293,7 +1357,15 @@ impl TryFrom<CreateTaskRequest> for ValidatedCreateTaskRequest {
         volunteer_user_ids.dedup();
         let title = required_field("title", value.title, 200)?;
         let objective = required_field("objective", value.objective, 4_000)?;
-        let area_text = required_field("area_text", value.area_text, 500)?;
+        let location_id = value
+            .location_id
+            .map(|id| required_field("location_id", id, 64))
+            .transpose()?;
+        let area_text = if location_id.is_some() && value.area_text.trim().is_empty() {
+            String::new()
+        } else {
+            required_field("area_text", value.area_text, 500)?
+        };
         validate_coordinates(value.latitude, value.longitude)?;
         let due_at = parse_due_at(&value.due_at)?;
         let background = required_field("background", value.background, 10_000)?;
@@ -1306,6 +1378,7 @@ impl TryFrom<CreateTaskRequest> for ValidatedCreateTaskRequest {
         let expected_feedback =
             required_field("expected_feedback", value.expected_feedback, 4_000)?;
         Ok(Self {
+            location_id,
             source_clue_id,
             volunteer_user_ids,
             title,

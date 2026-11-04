@@ -1316,6 +1316,27 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/cases/{case_id}/locations:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: listCaseLocations
+      summary: List locations projected from authorized case records
+      description: Deduplicated by location ID. Family responses omit coordinates and radius. Location sharing does not confirm a clue.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Authorized locations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Location" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/cases/{case_id}/clues:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -4377,6 +4398,9 @@ components:
       additionalProperties: false
       required: [source, content]
       properties:
+        location_id:
+          type: [string, "null"]
+          description: Reference an authorized location in the same case. Omit inline position fields when selecting an existing location.
         source:
           type: string
           minLength: 1
@@ -4611,6 +4635,20 @@ components:
         last_seen_location:
           type: [string, "null"]
 
+    Location:
+      type: object
+      additionalProperties: false
+      required: [id, case_id, location_text, location_precision, location_kind, longitude, latitude, location_radius_meters]
+      properties:
+        id: { type: string }
+        case_id: { type: string }
+        location_text: { type: [string, "null"] }
+        location_precision: { type: [string, "null"] }
+        location_kind: { type: [string, "null"] }
+        longitude: { type: [number, "null"] }
+        latitude: { type: [number, "null"] }
+        location_radius_meters: { type: [number, "null"] }
+
     Clue:
       type: object
       additionalProperties: false
@@ -4638,6 +4676,11 @@ components:
         - reviewed_at
         - is_own_submission
       properties:
+        location_id: { type: [string, "null"] }
+        location:
+          anyOf:
+            - $ref: "#/components/schemas/Location"
+            - type: "null"
         id:
           type: string
           format: uuid
@@ -4718,8 +4761,18 @@ components:
     CreateTaskRequest:
       type: object
       additionalProperties: false
-      required: [source_clue_id, title, objective, area_text, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback]
+      required: [source_clue_id, title, objective, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback]
+      anyOf:
+        - required: [area_text]
+          properties:
+            area_text: { type: string, minLength: 1 }
+        - required: [location_id]
+          properties:
+            location_id: { type: string, minLength: 1 }
       properties:
+        location_id:
+          type: [string, "null"]
+          description: Optional authorized same-case location reference; do not supply conflicting inline position values.
         source_clue_id:
           type: string
           format: uuid
@@ -4736,7 +4789,10 @@ components:
           description: Active volunteer members initially assigned to the shared task collaboration space. Omit or provide an empty list to create an open pending-claim task.
         title: { type: string, minLength: 1, maxLength: 200 }
         objective: { type: string, minLength: 1, maxLength: 4000 }
-        area_text: { type: string, minLength: 1, maxLength: 500 }
+        area_text:
+          type: string
+          maxLength: 500
+          description: Required non-empty text when location_id is omitted. May be empty when selecting an existing location.
         latitude:
           type: [number, "null"]
           minimum: -90
@@ -4916,6 +4972,11 @@ components:
       additionalProperties: false
       required: [id, case_id, source_clue_id, title, objective, area_text, latitude, longitude, due_at, background, risk_level, risk_notes, safety_briefing, expected_feedback, status, result_summary, assigned_volunteer_user_id, assigned_at, collaborators, created_at, updated_at]
       properties:
+        location_id: { type: [string, "null"] }
+        location:
+          anyOf:
+            - $ref: "#/components/schemas/Location"
+            - type: "null"
         id: { type: string, format: uuid }
         case_id: { type: string, format: uuid }
         source_clue_id:
@@ -4985,6 +5046,9 @@ components:
       additionalProperties: false
       required: [id, object_type, display_name, longitude, latitude, location_text, location_precision, source, occurred_at, reported_at, review_status, related_task_id, updated_at]
       properties:
+        location_id:
+          type: [string, "null"]
+          description: Shared location reference; clients may group markers by this ID while retaining every source record.
         id: { type: string }
         object_type: { type: string, enum: [last_seen, place, clue, task] }
         display_name:

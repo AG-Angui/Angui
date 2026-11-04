@@ -198,6 +198,9 @@ jobs:
         run: |
           cargo run --locked -p migration -- up
           cargo run --locked -p migration -- status
+          # Verify reapplying the latest migration after rollback leaves no stale indexes.
+          cargo run --locked -p migration -- down -n 1
+          cargo run --locked -p migration -- up
           cargo run --locked -p migration -- refresh
           cargo run --locked -p migration -- status
 

@@ -154,6 +154,7 @@ pub async fn create_place(
         auth,
         case_id,
         CreateClueRequest {
+            location_id: None,
             source: role.to_string(),
             content: format!("{}: {}", request.name.trim(), request.address.trim()),
             source_type: Some("manual_report".to_owned()),
@@ -318,9 +319,7 @@ pub async fn visible_places(
     viewer_id: &str,
     role: CaseRole,
 ) -> Result<Vec<CasePlaceResponse>, ApiError> {
-    let mut query = clues::Entity::find()
-        .filter(clues::Column::CaseId.eq(case_id))
-        .filter(clues::Column::LocationKind.is_not_null());
+    let mut query = clues::Entity::find().filter(clues::Column::CaseId.eq(case_id));
     query = match role {
         CaseRole::Commander => query,
         CaseRole::Family => query.filter(
@@ -336,13 +335,22 @@ pub async fn visible_places(
             .filter(clues::Column::Visibility.is_in(["public", "confirmed"]))
             .filter(clues::Column::Status.eq("confirmed")),
     };
-    let records = query
+    let mut records = query
         .order_by_desc(clues::Column::CreatedAt)
         .all(db)
         .await?;
+    crate::services::location_service::hydrate_clues(db, &mut records).await?;
     Ok(records
         .into_iter()
-        .map(|clue| location_clue_model_response(clue, viewer_id))
+        .filter(|clue| clue.location_kind.is_some())
+        .map(|clue| {
+            let mut response = location_clue_model_response(clue, viewer_id);
+            if role == CaseRole::Family {
+                response.longitude = None;
+                response.latitude = None;
+            }
+            response
+        })
         .collect())
 }
 

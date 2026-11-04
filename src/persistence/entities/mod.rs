@@ -44,6 +44,7 @@ pub mod learning_question_answers;
 pub mod learning_question_resources;
 pub mod learning_questions;
 pub mod learning_resources;
+pub mod locations;
 pub mod message_deliveries;
 pub mod space_events;
 pub mod space_location_consents;

@@ -89,6 +89,8 @@ import {
   LoadingState,
 } from "../components/ContentState";
 import { LocationConfirmationPicker } from "../components/LocationConfirmationPicker";
+import { CaseLocationSelect } from "../components/CaseLocationSelect";
+import { getClueLocation, getTaskLocationText } from "../caseLocations";
 import { CollaborationSpacePanel } from "../components/CollaborationSpacePanel";
 import { ClueMapView } from "../components/ClueMapView";
 import { StatusTag, statusTone } from "../components/StatusTag";
@@ -520,6 +522,7 @@ function CaseDetailView({
   const { token } = useAuth();
   const [clueContent, setClueContent] = useState("");
   const [clueLocation, setClueLocation] = useState("");
+  const [clueLocationId, setClueLocationId] = useState("");
   const [clueCoordinates, setClueCoordinates] = useState<{
     longitude: number;
     latitude: number;
@@ -1201,11 +1204,11 @@ function CaseDetailView({
                     受控原始记录：{clue.raw_record_reference}
                   </p>
                 )}
-                {clue.location_text && (
+                {getClueLocation(clue).location_text && (
                   <p className="m-0 mt-1 text-xs text-slate-500">
-                    地点：{clue.location_text}
-                    {clue.location_precision
-                      ? `（${clue.location_precision === "exact" ? "精确" : clue.location_precision === "approximate" ? "约略" : "精度未知"}）`
+                    地点：{getClueLocation(clue).location_text}
+                    {getClueLocation(clue).location_precision
+                      ? `（${getClueLocation(clue).location_precision === "exact" ? "精确" : getClueLocation(clue).location_precision === "approximate" ? "约略" : "精度未知"}）`
                       : ""}
                   </p>
                 )}
@@ -1450,7 +1453,7 @@ function CaseDetailView({
                   return;
                 }
                 const location = nullable(clueLocation);
-                if (clueLocationPrecision && !location) {
+                if (!clueLocationId && clueLocationPrecision && !location) {
                   setError("选择地点精度时，请同时填写地点。");
                   return;
                 }
@@ -1463,11 +1466,16 @@ function CaseDetailView({
                       source_type: clueSourceType,
                       raw_record_reference: nullable(clueRawReference),
                       occurred_at: toIsoOrNull(clueOccurredAt),
-                      location_text: location,
-                      location_precision: clueLocationPrecision || null,
-                      location_kind: clueCoordinates ? "point" : null,
-                      longitude: clueCoordinates?.longitude ?? null,
-                      latitude: clueCoordinates?.latitude ?? null,
+                      ...(clueLocationId ? {
+                        location_id: clueLocationId,
+                        location_text: null,
+                      } : {
+                        location_text: location,
+                        location_precision: clueLocationPrecision || null,
+                        location_kind: clueCoordinates ? "point" : null,
+                        longitude: clueCoordinates?.longitude ?? null,
+                        latitude: clueCoordinates?.latitude ?? null,
+                      }),
                       next_action: nullable(clueNextAction),
                       attachment_ids: linkedAttachmentIds,
                     }),
@@ -1476,6 +1484,7 @@ function CaseDetailView({
                   if (succeeded) {
                     setClueContent("");
                     setClueLocation("");
+                    setClueLocationId("");
                     setClueCoordinates(null);
                     setClueOccurredAt("");
                     setClueSourceType("manual_report");
@@ -1498,8 +1507,19 @@ function CaseDetailView({
                     required
                   />
                 </Field>
+                <CaseLocationSelect
+                  locations={detail.clues.map((clue) => clue.location)}
+                  value={clueLocationId}
+                  onChange={(location) => {
+                    setClueLocationId(location?.id ?? "");
+                    setClueLocation(location?.location_text ?? "");
+                    setClueLocationPrecision(location?.location_precision ?? "");
+                    setClueCoordinates(null);
+                  }}
+                />
                 <LocationConfirmationPicker
                   onConfirm={(location) => {
+                    setClueLocationId("");
                     setClueLocation(location.address);
                     setClueLocationPrecision(location.precision);
                     setClueCoordinates({
@@ -1508,6 +1528,7 @@ function CaseDetailView({
                     });
                   }}
                   onClear={() => {
+                    setClueLocationId("");
                     setClueLocation("");
                     setClueLocationPrecision("");
                     setClueCoordinates(null);
@@ -1542,6 +1563,7 @@ function CaseDetailView({
                     value={clueLocation}
                     onChange={(event) => {
                       setClueLocation(event.target.value);
+                      setClueLocationId("");
                       setClueCoordinates(null);
                     }}
                     fullWidth
@@ -1551,11 +1573,12 @@ function CaseDetailView({
                   <select
                     className="min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
                     value={clueLocationPrecision}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      setClueLocationId("");
                       setClueLocationPrecision(
                         event.target.value as LocationPrecision | "",
-                      )
-                    }
+                      );
+                    }}
                   >
                     <option value="">未提供</option>
                     <option value="exact">精确</option>
@@ -2227,7 +2250,7 @@ function TaskBoard({
                 {task.objective}
               </p>
               <p className="mb-0 mt-2 text-xs text-slate-500">
-                区域：{task.area_text} · 截止：
+                区域：{getTaskLocationText(task)} · 截止：
                 {formatDate(task.due_at) ?? "待补充"}
               </p>
               <p className="mb-0 mt-1 text-xs text-slate-600">
@@ -2416,9 +2439,25 @@ function TaskBoard({
               fullWidth
             />
           </Field>
-          <Field label="任务区域" required>
+          <CaseLocationSelect
+            label="任务使用已有地点"
+            locations={[
+              ...detail.clues.map((clue) => clue.location),
+              ...tasks.map((task) => task.location),
+            ]}
+            value={draft.location_id ?? ""}
+            onChange={(location) => setDraft({
+              ...draft,
+              location_id: location?.id ?? null,
+              area_text: "",
+              longitude: null,
+              latitude: null,
+            })}
+          />
+          <Field label="任务区域" required={!draft.location_id}>
             <Input
-              required
+              required={!draft.location_id}
+              disabled={!!draft.location_id}
               value={draft.area_text}
               maxLength={500}
               onChange={(event) =>
@@ -4092,7 +4131,7 @@ function RelatedCluePicker({
 
 function clueOptionLabel(clue: Clue) {
   const excerpt = clue.content.replace(/\s+/g, " ").slice(0, 80);
-  const location = clue.location_text ? ` · ${clue.location_text}` : "";
+  const location = getClueLocation(clue).location_text ? ` · ${getClueLocation(clue).location_text}` : "";
   return `${statusLabels[clue.status] ?? clue.status} · ${formatDate(clue.reported_at) ?? "时间未知"} · ${excerpt}${location}`;
 }
 
