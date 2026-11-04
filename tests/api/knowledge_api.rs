@@ -431,7 +431,7 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     )
     .into_bytes();
     body.extend_from_slice(csv.as_bytes());
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body.extend_from_slice(format!("\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"source_metadata\"\r\n\r\n{{\"version\":\"1.0\",\"field_descriptions\":{{\"judgment\":\"Original answer\"}}}}\r\n--{boundary}--\r\n").as_bytes());
 
     let preview = test::call_service(
         &app,
@@ -450,6 +450,7 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     .await;
     assert_eq!(preview.status(), StatusCode::CREATED);
     let preview: Value = test::read_body_json(preview).await;
+    assert_eq!(preview["source_metadata"]["version"], "1.0");
     assert_eq!(preview["status"], "previewed");
     assert_eq!(preview["total_rows"], 4);
     assert_eq!(preview["valid_rows"], 1);
@@ -470,6 +471,7 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     .await;
     assert_eq!(confirm.status(), StatusCode::OK);
     let confirm: Value = test::read_body_json(confirm).await;
+    assert_eq!(confirm["source_metadata"], preview["source_metadata"]);
     assert_eq!(confirm["status"], "confirmed");
     assert_eq!(confirm["rows"][0]["status"], "imported");
     assert_eq!(confirm["rows"][1]["status"], "invalid");
@@ -614,4 +616,108 @@ async fn knowledge_terms_are_governed_per_base_and_archived_with_audit_reason() 
     assert_eq!(disable.status(), StatusCode::OK);
     let disabled: Value = test::read_body_json(disable).await;
     assert_eq!(disabled["status"], "archived");
+}
+
+#[actix_web::test]
+async fn knowledge_experience_fields_round_trip_without_exposing_source_metadata() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let base_id = "learning-materials";
+    let mut terms = Vec::new();
+    for body in [
+        json!({"kind":"category", "name":"Movement", "description":"Behavior patterns"}),
+        json!({"kind":"tag", "name":"Tag"}),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/admin/knowledge-bases/{base_id}/terms"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        terms.push(test::read_body_json::<Value, _>(response).await);
+    }
+    let parent = terms[0]["id"].as_str().unwrap();
+    for (body, status) in [
+        (
+            json!({"kind":"category", "name":"Invalid tag parent", "parent_id":terms[1]["id"]}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"kind":"tag", "name":"Invalid child tag", "parent_id":parent}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/admin/knowledge-bases/{base_id}/terms"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), status);
+    }
+    let response = test::call_service(&app, test::TestRequest::post()
+        .uri(&format!("/api/admin/knowledge-bases/{base_id}/terms"))
+        .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+        .set_json(json!({"kind":"category", "name":"Daily walk", "parent_id":parent, "description":"Routes"})).to_request()).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let child: Value = test::read_body_json(response).await;
+    assert_eq!(child["parent_id"], parent);
+    assert_eq!(child["description"], "Routes");
+    let metadata = json!({"original_answer":"Unedited answer", "priority":null, "verification_note":"Unverified"});
+    let response = test::call_service(&app, test::TestRequest::post()
+        .uri(&format!("/api/admin/knowledge-bases/{base_id}/items"))
+        .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+        .set_json(json!({"title":"Walk experience", "content":"Beacon route guidance", "category_id":child["id"], "category":"Incorrect snapshot", "external_id":"EXP-000001", "metadata":metadata, "visibility":"learner"})).to_request()).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let item: Value = test::read_body_json(response).await;
+    let id = item["knowledge_item_id"].as_str().unwrap();
+    assert_eq!(item["category"], "Daily walk");
+    assert_eq!(item["category_id"], child["id"]);
+    assert_eq!(item["external_id"], "EXP-000001");
+    assert_eq!(item["metadata"], metadata);
+    for (body, status) in [
+        (json!({"metadata": []}), StatusCode::BAD_REQUEST),
+        (
+            json!({"summary":"Updated", "category":"Wrong snapshot"}),
+            StatusCode::OK,
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::patch()
+                .uri(&format!("/api/admin/knowledge-items/{id}"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), status);
+        if status == StatusCode::OK {
+            let updated: Value = test::read_body_json(response).await;
+            assert_eq!(updated["external_id"], "EXP-000001");
+            assert_eq!(updated["metadata"], metadata);
+            assert_eq!(updated["category"], "Daily walk");
+        }
+    }
+    transition!(&app, &context, id, "deidentify", ADMIN);
+    transition!(&app, &context, id, "review", ADMIN2);
+    transition!(&app, &context, id, "publish", ADMIN);
+    let results: Value = search!(&app, &context, base_id, "Beacon", LEARNER);
+    assert_eq!(results["results"].as_array().unwrap().len(), 1);
+    assert!(results["results"][0].get("metadata").is_none());
+    assert!(results["results"][0].get("external_id").is_none());
+    // Source-only corrections must not be discarded as duplicate body text.
+    let response = test::call_service(&app, test::TestRequest::post()
+        .uri(&format!("/api/admin/knowledge-bases/{base_id}/items"))
+        .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+        .set_json(json!({"title":"Walk experience", "summary":"Updated", "content":"Beacon route guidance", "external_id":"EXP-000001", "metadata":{"verification_note":"Independently verified"}, "visibility":"learner", "previous_version_id":id})).to_request()).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
 }

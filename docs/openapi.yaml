@@ -3181,7 +3181,7 @@ paths:
       x-global-capabilities: [admin]
       x-data-classification: restricted-admin
       parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
-      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary }, source_metadata: { type: string, description: Optional JSON object encoded as text; maximum 128 KiB } } } } } }
       responses:
         "201": { description: Import preview, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
@@ -5689,6 +5689,8 @@ components:
         knowledge_base_id: { type: string, format: uuid }
         kind: { type: string, enum: [category, tag] }
         name: { type: string, minLength: 1, maxLength: 160 }
+        parent_id: { type: [string, "null"], description: Active parent category in the same knowledge base; tags cannot have parents }
+        description: { type: string, maxLength: 10000, default: "" }
         status: { type: string, enum: [active, archived] }
         created_by_user_id: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
@@ -5701,6 +5703,8 @@ components:
       properties:
         kind: { type: string, enum: [category, tag] }
         name: { type: string, minLength: 1, maxLength: 160 }
+        parent_id: { type: [string, "null"], description: Active parent category in the same knowledge base; tags cannot have parents }
+        description: { type: string, maxLength: 10000, default: "" }
 
     KnowledgeTermTransitionRequest:
       type: object
@@ -5737,6 +5741,9 @@ components:
       additionalProperties: false
       required: [knowledge_item_id, title, content, score, knowledge_base_id, version, source_name, source_url, images]
       properties:
+        external_id: { type: [string, "null"], maxLength: 191, description: Source experience identifier; an empty string clears it on draft update }
+        metadata: { type: object, description: Administrator-only source and experience fields; maximum serialized size is 128 KiB }
+        category_id: { type: [string, "null"] }
         knowledge_item_id: { type: string, format: uuid }
         title: { type: string }
         content: { type: string }
@@ -5752,6 +5759,8 @@ components:
       additionalProperties: false
       required: [title, content, visibility]
       properties:
+        external_id: { type: [string, "null"], maxLength: 191, description: Source experience identifier; an empty string clears it on draft update }
+        metadata: { type: object, description: Administrator-only source and experience fields; maximum serialized size is 128 KiB }
         title: { type: string, minLength: 1 }
         summary: { type: string, default: "" }
         content: { type: string, minLength: 1 }
@@ -5768,6 +5777,8 @@ components:
       additionalProperties: false
       minProperties: 1
       properties:
+        external_id: { type: [string, "null"], maxLength: 191, description: Source experience identifier; an empty string clears it on draft update }
+        metadata: { type: object, description: Administrator-only source and experience fields; maximum serialized size is 128 KiB }
         title: { type: string, minLength: 1 }
         summary: { type: string }
         content: { type: string, minLength: 1 }
@@ -5796,6 +5807,7 @@ components:
       additionalProperties: false
       required: [id, knowledge_base_id, file_name, status, total_rows, valid_rows, invalid_rows, rows, confirmed_at]
       properties:
+        source_metadata: { type: object, description: Original file version and field descriptions; administrator-only }
         id: { type: string, format: uuid }
         knowledge_base_id: { type: string, format: uuid }
         file_name: { type: string }

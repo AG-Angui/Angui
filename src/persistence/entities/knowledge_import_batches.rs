@@ -6,6 +6,7 @@ pub struct Model {
     pub id: String,
     pub knowledge_base_id: String,
     pub file_name: String,
+    pub source_metadata_json: String,
     pub status: String,
     pub total_rows: i32,
     pub valid_rows: i32,

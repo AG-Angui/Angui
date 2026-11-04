@@ -446,14 +446,16 @@ async fn preview_import(
     mut payload: Multipart,
 ) -> Result<HttpResponse, ApiError> {
     knowledge_service::require_admin(&auth)?;
-    let mut bytes = Vec::new();
+    let mut bytes = None;
+    let mut source_metadata = serde_json::json!({});
+    let mut has_metadata = false;
     let mut file_name = "import.csv".to_owned();
     while let Some(field) = payload.next().await {
         let mut field =
             field.map_err(|_| ApiError::Validation("invalid multipart upload".to_owned()))?;
-        if let Some(disposition) = field.content_disposition()
-            && let Some(name) = disposition.get_filename()
-        {
+        let disposition = field.content_disposition();
+        let is_metadata = disposition.and_then(|d| d.get_name()) == Some("source_metadata");
+        if let Some(name) = disposition.and_then(|d| d.get_filename()) {
             if name.chars().count() > 255 {
                 return Err(ApiError::Validation(
                     "CSV file name must not exceed 255 characters".to_owned(),
@@ -461,19 +463,50 @@ async fn preview_import(
             }
             file_name = name.to_owned();
         }
+        let limit = if is_metadata {
+            128 * 1024
+        } else {
+            5 * 1024 * 1024
+        };
+        let mut field_bytes = Vec::new();
         while let Some(chunk) = field.next().await {
             let chunk =
                 chunk.map_err(|_| ApiError::Validation("invalid multipart upload".to_owned()))?;
-            bytes.extend_from_slice(&chunk);
-            if bytes.len() > 5 * 1024 * 1024 {
+            field_bytes.extend_from_slice(&chunk);
+            if field_bytes.len() > limit {
                 return Err(ApiError::Validation(
-                    "CSV file must not exceed 5 MB".to_owned(),
+                    "import field exceeds its size limit".to_owned(),
                 ));
             }
         }
+        if is_metadata {
+            if has_metadata {
+                return Err(ApiError::Validation(
+                    "only one source_metadata field is allowed".to_owned(),
+                ));
+            }
+            has_metadata = true;
+            source_metadata = serde_json::from_slice(&field_bytes).map_err(|_| {
+                ApiError::Validation("source_metadata must be a JSON object".to_owned())
+            })?;
+        } else if bytes.replace(field_bytes).is_some() {
+            return Err(ApiError::Validation(
+                "only one CSV file is allowed".to_owned(),
+            ));
+        }
     }
-    Ok(HttpResponse::Created()
-        .json(knowledge_service::preview_csv(&state.db, &auth, &id, file_name, bytes).await?))
+    let bytes = bytes.ok_or_else(|| ApiError::Validation("CSV file is required".to_owned()))?;
+    Ok(HttpResponse::Created().json(
+        knowledge_service::preview_csv_with_metadata(
+            &state.db,
+            &auth,
+            &id,
+            file_name,
+            bytes,
+            source_metadata,
+        )
+        .await?,
+    ))
 }
 async fn get_import(
     auth: AuthenticatedUser,
