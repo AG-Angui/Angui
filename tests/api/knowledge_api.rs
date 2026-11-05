@@ -547,6 +547,81 @@ async fn knowledge_csv_preview_rejects_unauthorized_uploads_and_long_file_names(
 }
 
 #[actix_web::test]
+async fn knowledge_csv_import_preserves_separate_source_fields_and_validates_metadata() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let boundary = "structured-experience-import";
+    let mut csv = "knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility,external_id,metadata\n".to_owned();
+    for (external_id, metadata) in [
+        ("EXP-1", r#"{"source_fields":{"原始回答":"First source"}}"#),
+        ("EXP-2", r#"{"source_fields":{"原始回答":"Second source"}}"#),
+        ("EXP-1", r#"{"source_fields":{"原始回答":"First source"}}"#),
+        ("EXP-3", "[]"),
+        ("EXP-4", "invalid json"),
+    ] {
+        let metadata_cell = format!("\"{}\"", metadata.replace('"', "\"\""));
+        csv.push_str(&format!("learning-materials,Support volunteers,Assign a mentor,Training,safety,mentor,Handbook,,learner,{external_id},{metadata_cell}\n"));
+    }
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"experiences.csv\"\r\nContent-Type: text/csv\r\n\r\n{csv}\r\n--{boundary}--\r\n"
+    );
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/learning-materials/imports/preview")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let preview: Value = test::read_body_json(response).await;
+    assert_eq!(preview["valid_rows"], 2);
+    for (row, expected) in preview["rows"].as_array().unwrap().iter().zip([
+        "valid",
+        "valid",
+        "duplicate",
+        "invalid",
+        "invalid",
+    ]) {
+        assert_eq!(row["status"], expected);
+    }
+    let batch_id = preview["id"].as_str().unwrap();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/admin/knowledge-imports/{batch_id}/confirm"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/knowledge-bases/learning-materials/items")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let items: Value = test::read_body_json(response).await;
+    let items = items.as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    for (id, answer) in [("EXP-1", "First source"), ("EXP-2", "Second source")] {
+        let item = items.iter().find(|item| item["external_id"] == id).unwrap();
+        assert_eq!(item["content"], "Assign a mentor");
+        assert_eq!(item["category"], "safety");
+        assert_eq!(item["metadata"]["source_fields"]["原始回答"], answer);
+    }
+}
+
+#[actix_web::test]
 async fn knowledge_terms_are_governed_per_base_and_archived_with_audit_reason() {
     let context = TestContext::new().await;
     let app = crate::init_api_app!(&context);

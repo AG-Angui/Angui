@@ -15,6 +15,10 @@ Suggested metadata keys: `applicable_scenarios`, `elderly_traits`, `trigger_sign
 
 Nonempty metadata participates in content deduplication, allowing source-only corrections. Empty objects preserve existing CSV hash behavior. Metadata is not added to retrieval or chat context; reviewed material needed there belongs in the item body.
 
-CSV preview retains its exact nine-column header and accepts an additional multipart text field `source_metadata`, containing a JSON object string (maximum 128 KiB). Preview, query and confirmation responses return `source_metadata`. This change does not implement the search-and-rescue JSON file parser or import the supplied records.
+CSV preview accepts the original nine-column header (`knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility`) or that header with both `external_id,metadata` appended, in that order. `metadata` must contain a JSON object (maximum 128 KiB); an empty cell defaults to `{}`. Preview and confirmation preserve the identifier and metadata, and include metadata in duplicate detection. Older nine-column files and pending previews remain supported.
+
+For experience records, keep the identifier in `external_id`, classification in `category`, and a concise body in `content`. The export uses metadata keys `primary_category`, `secondary_category` and `source_fields` (the complete original record). The administrator list shows the identifier and category separately, limits body previews to four lines, and provides expandable full content and source details. Previously imported labeled records are split for display without rewriting stored content.
+
+An additional multipart text field `source_metadata` accepts file-level information as a JSON object string (maximum 128 KiB). Preview, query and confirmation responses return `source_metadata`. No source records are imported by this code change.
 
 Rollback refuses to discard populated extension fields. Apply migrations using the existing deployment workflow; this code change does not modify a running business database. PostgreSQL and MySQL scripts require validation against their respective deployed database versions.

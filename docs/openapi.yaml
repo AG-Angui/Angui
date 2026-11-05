@@ -3176,7 +3176,7 @@ paths:
       tags: [Knowledge]
       operationId: previewKnowledgeImport
       summary: Preview a CSV knowledge import
-      description: Accepts one multipart file containing UTF-8 CSV; validates the exact nine-column header and 5 MiB/5000-row limits, then classifies rows without publishing content.
+      description: Accepts one multipart file containing UTF-8 CSV with the nine columns knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility. Optionally append both external_id and metadata (a JSON object) columns, in that order. Validates 5 MiB/5000-row limits and metadata up to 128 KiB, then classifies rows without publishing content.
       security: [{ bearerAuth: [] }]
       x-global-capabilities: [admin]
       x-data-classification: restricted-admin

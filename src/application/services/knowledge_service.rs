@@ -1351,12 +1351,18 @@ pub async fn preview_csv_with_metadata(
         .map_err(|_| ApiError::Validation("CSV must be UTF-8".to_owned()))?;
     let records = parse_csv_records(text)?;
     let headers = records.first().cloned().unwrap_or_default();
-    if headers != CSV_HEADERS {
+    let extended_headers = CSV_HEADERS
+        .iter()
+        .copied()
+        .chain(["external_id", "metadata"])
+        .collect::<Vec<_>>();
+    if headers != CSV_HEADERS && headers != extended_headers {
         return Err(ApiError::Validation(format!(
-            "CSV header must be exactly: {}",
+            "CSV header must be exactly: {}; optionally append external_id,metadata",
             CSV_HEADERS.join(",")
         )));
     }
+    let column_count = headers.len();
     let timestamp = now();
     let batch_id = case_service::new_id();
     let transaction = db.begin().await?;
@@ -1386,9 +1392,9 @@ pub async fn preview_csv_with_metadata(
             ));
         }
         let row_number = (index + 2) as i32;
-        if record.len() != CSV_HEADERS.len() {
+        if record.len() != column_count {
             return Err(ApiError::Validation(format!(
-                "CSV row {row_number} must contain exactly 9 columns"
+                "CSV row {row_number} must contain exactly {column_count} columns"
             )));
         }
         let raw = record.clone();
@@ -1419,24 +1425,32 @@ pub async fn preview_csv_with_metadata(
         } else {
             cell(8)
         };
-        let validated = validated_item(
-            CreateKnowledgeItemRequest {
-                external_id: None,
-                metadata: json!({}),
-                title: title.to_owned(),
-                summary: summary.to_owned(),
-                content: content.to_owned(),
-                category: category.to_owned(),
-                category_id: None,
-                keywords: keywords.clone(),
-                source_name: Some(source_name.to_owned()),
-                source_url: (!source_url.is_empty()).then(|| source_url.to_owned()),
-                visibility: visibility.to_owned(),
-                previous_version_id: None,
-                images: Vec::new(),
-            },
-            &base.visibility,
-        );
+        let metadata = if cell(10).is_empty() {
+            Ok(json!({}))
+        } else {
+            serde_json::from_str::<Value>(cell(10))
+                .map_err(|_| ApiError::Validation("metadata must be a JSON object".to_owned()))
+        };
+        let validated = metadata.and_then(|metadata| {
+            validated_item(
+                CreateKnowledgeItemRequest {
+                    external_id: (!cell(9).is_empty()).then(|| cell(9).to_owned()),
+                    metadata,
+                    title: title.to_owned(),
+                    summary: summary.to_owned(),
+                    content: content.to_owned(),
+                    category: category.to_owned(),
+                    category_id: None,
+                    keywords: keywords.clone(),
+                    source_name: Some(source_name.to_owned()),
+                    source_url: (!source_url.is_empty()).then(|| source_url.to_owned()),
+                    visibility: visibility.to_owned(),
+                    previous_version_id: None,
+                    images: Vec::new(),
+                },
+                &base.visibility,
+            )
+        });
         let normalized = if let Ok(item) = validated.as_ref() {
             json!({
                 "knowledge_base_id": base_value,
@@ -1448,6 +1462,8 @@ pub async fn preview_csv_with_metadata(
                 "source_name": item.source_name,
                 "source_url": item.source_url,
                 "visibility": item.visibility,
+                "external_id": item.external_id,
+                "metadata": item.metadata,
             })
         } else {
             json!({
@@ -1465,7 +1481,13 @@ pub async fn preview_csv_with_metadata(
         let duplicate = if base_value != base_id {
             false
         } else if let Ok(item) = validated.as_ref() {
-            let hash = content_hash(&item.title, &item.summary, &item.content, &item.keywords);
+            let hash = structured_content_hash(
+                &item.title,
+                &item.summary,
+                &item.content,
+                &item.keywords,
+                &item.metadata,
+            );
             !seen_hashes.insert(hash.clone())
                 || knowledge_items::Entity::find()
                     .filter(knowledge_items::Column::KnowledgeBaseId.eq(base_id))
@@ -1655,7 +1677,10 @@ pub async fn confirm_import(
         let content = value["content"].as_str().unwrap_or_default().to_owned();
         let keywords: Vec<String> =
             serde_json::from_value(value["keywords"].clone()).map_err(|_| ApiError::Internal)?;
-        let hash = content_hash(&title, &summary, &content, &keywords);
+        // Older previews have no metadata or external identifier.
+        let metadata = value.get("metadata").cloned().unwrap_or_else(|| json!({}));
+        validate_metadata(&metadata)?;
+        let hash = structured_content_hash(&title, &summary, &content, &keywords, &metadata);
         if knowledge_items::Entity::find()
             .filter(knowledge_items::Column::KnowledgeBaseId.eq(&batch.knowledge_base_id))
             .filter(knowledge_items::Column::ContentHash.eq(&hash))
@@ -1678,14 +1703,14 @@ pub async fn confirm_import(
         knowledge_items::ActiveModel {
             id: Set(item_id.clone()),
             knowledge_base_id: Set(batch.knowledge_base_id.clone()),
-            external_id: Set(None),
+            external_id: Set(value["external_id"].as_str().map(str::to_owned)),
             title: Set(title),
             summary: Set(summary),
             content: Set(content),
             category: Set(value["category"].as_str().unwrap_or_default().to_owned()),
             category_id: Set(None),
             keywords_json: Set(serde_json::to_string(&keywords).map_err(|_| ApiError::Internal)?),
-            metadata_json: Set("{}".to_owned()),
+            metadata_json: Set(metadata.to_string()),
             source_name: Set(value["source_name"]
                 .as_str()
                 .unwrap_or("CSV Import")
