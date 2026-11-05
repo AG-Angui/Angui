@@ -466,11 +466,9 @@ export const uploadKnowledgeImage = (
   token: string,
   itemId: string,
   file: File,
-  sourceMetadata?: Record<string, unknown>,
 ) => {
   const form = new FormData();
   form.append("file", file);
-  if (sourceMetadata) form.append("source_metadata", JSON.stringify(sourceMetadata));
   return apiRequest<KnowledgeImage>(
     `/admin/knowledge-items/${itemId}/images`,
     { method: "POST", body: form },
@@ -492,11 +490,9 @@ export const uploadKnowledgeAttachment = (
   token: string,
   itemId: string,
   file: File,
-  sourceMetadata?: Record<string, unknown>,
 ) => {
   const form = new FormData();
   form.append("file", file);
-  if (sourceMetadata) form.append("source_metadata", JSON.stringify(sourceMetadata));
   return apiRequest<KnowledgeAttachment>(
     `/admin/knowledge-items/${itemId}/attachments`,
     { method: "POST", body: form },

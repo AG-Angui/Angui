@@ -1364,7 +1364,7 @@ pub async fn preview_csv_with_metadata(
         id: Set(batch_id.clone()),
         knowledge_base_id: Set(base_id.to_owned()),
         file_name: Set(file_name),
-        source_metadata_json: Set(source_metadata.to_string()),
+        source_metadata_json: Set(source_metadata),
         status: Set("previewed".to_owned()),
         total_rows: Set(0),
         valid_rows: Set(0),
@@ -1572,8 +1572,7 @@ pub async fn get_import(
         id: batch.id,
         knowledge_base_id: batch.knowledge_base_id,
         file_name: batch.file_name,
-        source_metadata: serde_json::from_str(&batch.source_metadata_json)
-            .map_err(|_| ApiError::Internal)?,
+        source_metadata: batch.source_metadata_json,
         status: batch.status,
         total_rows: batch.total_rows,
         valid_rows: batch.valid_rows,
@@ -2475,6 +2474,16 @@ pub fn build_context(results: &[KnowledgeSearchResultResponse]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_limit_counts_serialized_bytes() {
+        let overhead = json!({"note":""}).to_string().len();
+        let mut metadata = json!({"note":"x".repeat(128 * 1024 - overhead)});
+        assert!(validate_metadata(&metadata).is_ok());
+        metadata["note"] = Value::String("x".repeat(128 * 1024 - overhead + 1));
+        assert!(validate_metadata(&metadata).is_err());
+        assert!(validate_metadata(&json!([])).is_err());
+    }
     #[test]
     fn imported_content_preserves_paragraphs_and_original_spacing() {
         let content =
