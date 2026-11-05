@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthContextValue } from "../auth/auth-context";
 import { LoginPage } from "./LoginPage";
@@ -27,7 +28,11 @@ function setAuth(
 describe("LoginPage", () => {
   it("shows field errors and returns focus to the first missing field", () => {
     setAuth();
-    render(<LoginPage />);
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
@@ -40,7 +45,11 @@ describe("LoginPage", () => {
 
   it("lets people reveal or conceal their password while typing", () => {
     setAuth();
-    render(<LoginPage />);
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    );
 
     const passwordInput = screen.getByLabelText("密码");
     expect(passwordInput).toHaveAttribute("type", "password");
@@ -57,7 +66,11 @@ describe("LoginPage", () => {
       .fn()
       .mockRejectedValue(new Error("邮箱或密码错误，请重新输入。"));
     setAuth(login);
-    render(<LoginPage />);
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    );
 
     fireEvent.change(screen.getByLabelText("邮箱"), {
       target: { value: " family@demo.invalid " },
@@ -87,9 +100,13 @@ describe("LoginPage", () => {
 
   it("shows the unified role guide and access request entry", () => {
     setAuth();
-    render(<LoginPage />);
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    );
     expect(
-      screen.getByText("面向失智老人走失搜救的协同入口"),
+      screen.getByRole("heading", { name: /帮助失联老人/ }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /家属/ })).toHaveAttribute(
       "aria-pressed",
@@ -102,7 +119,7 @@ describe("LoginPage", () => {
     );
     expect(screen.getByRole("link", { name: "申请访问" })).toHaveAttribute(
       "href",
-      "/access-request",
+      "/access-request?role=volunteer",
     );
   });
 });

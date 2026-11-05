@@ -7,6 +7,21 @@
   --color-brand-600: #176b58;
   --color-brand-700: #125746;
   --color-canvas: #f5f7f8;
+
+  /* Login-only semantic palette; existing workspaces keep their brand colors. */
+  --color-login-canvas: #f5f8fc;
+  --color-login-surface: #ffffff;
+  --color-login-ink: #20334b;
+  --color-login-muted: #53657d;
+  --color-login-accent: #245fa6;
+  --color-login-line: #d5dfed;
+  --color-login-soft: #eaf1fa;
+  --color-login-warning: #77510c;
+  --color-login-warning-line: #e5cd9a;
+  --color-login-warning-soft: #fff8e9;
+  --color-login-danger: #a32b37;
+  --color-login-danger-line: #edc7cd;
+  --color-login-danger-soft: #fff2f3;
 }
 
 :root {
@@ -60,4 +75,9 @@ select {
 button,
 a {
   -webkit-tap-highlight-color: transparent;
+}
+
+.login-focus:focus-visible {
+  outline: 3px solid var(--color-login-accent);
+  outline-offset: 3px;
 }

@@ -1,5 +1,5 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import type { AuthContextValue } from "./auth/auth-context";
@@ -108,10 +108,16 @@ function setAuth(
   };
 }
 
-function renderApp(path = "/") {
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="current route">{location.pathname}</output>;
+}
+
+function renderApp(path = "/", observeLocation = false) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <App />
+      {observeLocation && <LocationProbe />}
     </MemoryRouter>,
   );
 }
@@ -126,9 +132,26 @@ describe("application role routing", () => {
     setAuth(null);
     renderApp();
     expect(
-      screen.getByRole("heading", { name: "安归｜身份登录" }),
+      screen.getByRole("heading", { name: /帮助失联老人/ }),
     ).toBeInTheDocument();
   });
+
+  it.each([
+    ["member", [], "/family"],
+    ["member", ["volunteer"], "/volunteer"],
+    ["member", ["commander", "volunteer"], "/command"],
+    ["member", ["admin"], "/"],
+    ["learner", [], "/learning"],
+  ] as const)(
+    "routes an authenticated %s account to its real workspace",
+    (accountType, capabilities, expectedPath) => {
+      setAuth(accountType, capabilities);
+      renderApp("/login", true);
+      expect(screen.getByLabelText("current route")).toHaveTextContent(
+        expectedPath,
+      );
+    },
+  );
 
   it("exposes the public access request page without a session", () => {
     setAuth(null);
