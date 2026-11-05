@@ -2185,11 +2185,13 @@ fn structured_content_hash(
     keywords: &[String],
     metadata: &Value,
 ) -> String {
-    let legacy_hash = content_hash(title, summary, content, keywords);
-    // Preserve deduplication compatibility for legacy and CSV records.
+    // Legacy validation collapsed body whitespace before hashing. Canonicalize
+    // only the hash input, leaving stored content and nonempty metadata unchanged.
     if metadata.as_object().is_some_and(|object| object.is_empty()) {
-        return legacy_hash;
+        let normalized_content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        return content_hash(title, summary, &normalized_content, keywords);
     }
+    let legacy_hash = content_hash(title, summary, content, keywords);
     let mut hash = Sha256::new();
     hash.update(legacy_hash.as_bytes());
     hash.update([0]);
@@ -2515,6 +2517,55 @@ mod tests {
             "Experience ID: EXP-000001\n\nOriginal answer:\nFirst  observation\nSecond observation";
         assert_eq!(validated_content(content).unwrap(), content);
         assert!(validated_content("   ").is_err());
+    }
+
+    #[test]
+    fn empty_metadata_hash_preserves_legacy_whitespace_deduplication() {
+        let keywords = vec!["emergency".to_owned(), "response".to_owned()];
+        for content in [
+            "Call emergency services Share a recent photo.",
+            "Call  emergency services\n\nShare\ta recent photo.",
+            "  Call\r\nemergency\u{00a0}services\u{3000}Share a recent photo.  ",
+        ] {
+            assert_eq!(
+                structured_content_hash(
+                    "Guide",
+                    "Immediate response",
+                    content,
+                    &keywords,
+                    &json!({}),
+                ),
+                "a3348c953d9a0021ead523c3c24d91ec078ce90e59c2abb51ffa8bc24c5ba223",
+            );
+        }
+    }
+
+    #[test]
+    fn nonempty_metadata_hash_keeps_existing_whitespace_behavior() {
+        let keywords = vec!["emergency".to_owned(), "response".to_owned()];
+        let content = "Call  emergency services\n\nShare\ta recent photo.";
+        let metadata = json!({"source":"handbook"});
+        let hash = structured_content_hash(
+            "Guide",
+            "Immediate response",
+            content,
+            &keywords,
+            &metadata,
+        );
+        assert_eq!(
+            hash,
+            "d49e935cca592e91009e9e9eacf18616e515ddee996c9f4eda4178f343aaf393",
+        );
+        assert_ne!(
+            hash,
+            structured_content_hash(
+                "Guide",
+                "Immediate response",
+                "Call emergency services Share a recent photo.",
+                &keywords,
+                &metadata,
+            ),
+        );
     }
 
     #[test]

@@ -497,6 +497,102 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     assert_eq!(learner_search["results"], json!([]));
 }
 #[actix_web::test]
+async fn knowledge_csv_import_preserves_legacy_hashes_and_original_spacing() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let canonical_content = "Call emergency services Share a recent photo.";
+    let original_content = "Call  emergency services\n\nShare\ta recent photo.";
+
+    // A canonical body produces the same stored hash as before whitespace was preserved.
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/learning-materials/items")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({
+                "title": "Legacy guide",
+                "summary": "Immediate response",
+                "content": canonical_content,
+                "category": "safety",
+                "keywords": ["emergency", "response"],
+                "visibility": "learner"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let mut csv = "knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility\n".to_owned();
+    for (title, content) in [
+        ("Legacy guide", original_content),
+        ("New guide", original_content),
+        ("New guide", canonical_content),
+    ] {
+        csv.push_str(&format!(
+            "learning-materials,{title},\"{content}\",Immediate response,safety,\"emergency,response\",Handbook,,learner\n"
+        ));
+    }
+    let boundary = "legacy-whitespace-import";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"guides.csv\"\r\nContent-Type: text/csv\r\n\r\n{csv}\r\n--{boundary}--\r\n"
+    );
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/learning-materials/imports/preview")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let preview: Value = test::read_body_json(response).await;
+    let rows = preview["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(preview["valid_rows"], 1);
+    assert_eq!(rows[0]["status"], "duplicate");
+    assert_eq!(rows[1]["status"], "valid");
+    assert_eq!(rows[2]["status"], "duplicate");
+
+    let batch_id = preview["id"].as_str().unwrap();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/admin/knowledge-imports/{batch_id}/confirm"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let confirmed: Value = test::read_body_json(response).await;
+    assert_eq!(confirmed["rows"].as_array().unwrap().len(), 3);
+    assert_eq!(confirmed["rows"][0]["status"], "duplicate");
+    assert_eq!(confirmed["rows"][1]["status"], "imported");
+    assert_eq!(confirmed["rows"][2]["status"], "duplicate");
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/knowledge-bases/learning-materials/items")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let items: Value = test::read_body_json(response).await;
+    let items = items.as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    let imported = items.iter().find(|item| item["title"] == "New guide").unwrap();
+    assert_eq!(imported["content"], original_content);
+    assert_eq!(imported["metadata"], json!({}));
+}
+
+#[actix_web::test]
 async fn knowledge_csv_preview_rejects_unauthorized_uploads_and_long_file_names() {
     let context = TestContext::new().await;
     let app = crate::init_api_app!(&context);
