@@ -10,6 +10,7 @@ const mocked = vi.hoisted(() => ({
   listCategories: vi.fn(),
   transitionCategory: vi.fn(),
   listKnowledgeBases: vi.fn().mockResolvedValue([]),
+  previewKnowledgeImport: vi.fn(),
 }));
 
 vi.mock("../auth/useAuth", () => ({
@@ -42,11 +43,17 @@ vi.mock("../api/learning", () => ({
   listKnowledgeBases: (...args: unknown[]) =>
     mocked.listKnowledgeBases(...args),
   createKnowledgeBase: vi.fn(),
-  previewKnowledgeImport: vi.fn(),
+  previewKnowledgeImport: (...args: unknown[]) =>
+    mocked.previewKnowledgeImport(...args),
   confirmKnowledgeImport: vi.fn(),
   cancelKnowledgeImport: vi.fn(),
   createKnowledgeItem: vi.fn(),
   listKnowledgeItems: vi.fn(),
+  listKnowledgeItemsPage: vi
+    .fn()
+    .mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 }),
+  listKnowledgeTerms: vi.fn().mockResolvedValue([]),
+  getKnowledgeOverview: vi.fn().mockResolvedValue(null),
   transitionKnowledgeItem: vi.fn(),
 }));
 
@@ -77,6 +84,8 @@ function submittedResource(submittedBy = "admin-1") {
 
 describe("LearningGovernancePage", () => {
   beforeEach(() => {
+    mocked.listKnowledgeBases.mockResolvedValue([]);
+    mocked.previewKnowledgeImport.mockReset();
     mocked.listResources.mockResolvedValue([submittedResource()]);
     mocked.listQuestions.mockResolvedValue([]);
     mocked.listCategories.mockResolvedValue([]);
@@ -87,6 +96,50 @@ describe("LearningGovernancePage", () => {
       name: "安全基础",
       status: "enabled",
     });
+  });
+
+  it("retries a failed first CSV upload in place and keeps a single file control", async () => {
+    mocked.listKnowledgeBases.mockResolvedValue([
+      {
+        id: "base",
+        name: "Experience base",
+        description: "",
+        status: "enabled",
+      },
+    ]);
+    mocked.previewKnowledgeImport
+      .mockRejectedValueOnce(
+        new ApiClientError(0, "network_error", "解析连接失败"),
+      )
+      .mockResolvedValueOnce({
+        id: "batch",
+        knowledge_base_id: "base",
+        file_name: "test.csv",
+        source_metadata: {},
+        total_rows: 0,
+        valid_rows: 0,
+        invalid_rows: 0,
+        rows: [],
+        status: "previewed",
+        confirmed_at: null,
+      });
+    render(<LearningGovernancePage />);
+    const input = await screen.findByLabelText("导入 CSV");
+    expect(screen.getAllByLabelText("导入 CSV")).toHaveLength(1);
+    const file = new File(["content"], "test.csv", { type: "text/csv" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByRole("button", { name: "重试解析 CSV" });
+    fireEvent.click(screen.getByRole("button", { name: "重试解析 CSV" }));
+    await screen.findByRole("region", { name: "CSV 内容预览" });
+    expect(mocked.previewKnowledgeImport).toHaveBeenCalledTimes(2);
+    expect(mocked.previewKnowledgeImport).toHaveBeenLastCalledWith(
+      "admin-session",
+      "base",
+      file,
+    );
+    expect(
+      screen.queryByRole("button", { name: "重试解析 CSV" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not allow the submitter to confirm de-identification", async () => {
