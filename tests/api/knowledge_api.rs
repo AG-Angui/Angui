@@ -456,6 +456,10 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     assert_eq!(preview["valid_rows"], 1);
     assert_eq!(preview["invalid_rows"], 3);
     assert_eq!(preview["rows"][0]["status"], "valid");
+    assert_eq!(
+        preview["rows"][0]["raw_data"][1],
+        "Imported emergency guide"
+    );
     assert_eq!(preview["rows"][1]["status"], "invalid");
     assert_eq!(preview["rows"][2]["status"], "invalid");
     assert_eq!(preview["rows"][3]["status"], "invalid");
@@ -492,9 +496,10 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     let items: Value = test::read_body_json(items).await;
     assert_eq!(items.as_array().map(Vec::len), Some(1));
     assert_eq!(items[0]["title"], "Imported emergency guide");
+    assert_eq!(items[0]["status"], "published");
 
     let learner_search: Value = search!(&app, &context, &base_id, "emergency", LEARNER);
-    assert_eq!(learner_search["results"], json!([]));
+    assert_eq!(learner_search["results"].as_array().unwrap().len(), 1);
 }
 #[actix_web::test]
 async fn knowledge_csv_preview_rejects_unauthorized_uploads_and_long_file_names() {
@@ -619,6 +624,93 @@ async fn knowledge_csv_import_preserves_separate_source_fields_and_validates_met
         assert_eq!(item["category"], "safety");
         assert_eq!(item["metadata"]["source_fields"]["原始回答"], answer);
     }
+}
+
+#[actix_web::test]
+async fn knowledge_csv_bom_import_publishes_and_lists_only_one_server_page() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let mut csv = "\u{feff}knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility\n".to_owned();
+    for index in 0..23 {
+        csv.push_str(&format!(
+            "learning-materials,Page guide {index},Guidance {index},,Safety,,Handbook,,learner\n"
+        ));
+    }
+    let boundary = "bom-page-import";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"bom.csv\"\r\nContent-Type: text/csv\r\n\r\n{csv}\r\n--{boundary}--\r\n"
+    );
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/learning-materials/imports/preview")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let preview: Value = test::read_body_json(response).await;
+    assert_eq!(preview["valid_rows"], 23);
+    let batch_id = preview["id"].as_str().unwrap();
+    for _ in 0..2 {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/admin/knowledge-imports/{batch_id}/confirm"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let mut identifiers = std::collections::HashSet::new();
+    for (page, count) in [(1, 10), (2, 10), (3, 3)] {
+        let response = test::call_service(&app, test::TestRequest::get()
+            .uri(&format!("/api/admin/knowledge-bases/learning-materials/items/page?page={page}&page_size=10"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}"))).to_request()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let data: Value = test::read_body_json(response).await;
+        assert_eq!(data["total"], 23);
+        assert_eq!(data["page"], page);
+        let items = data["items"].as_array().unwrap();
+        assert_eq!(items.len(), count);
+        for item in items {
+            assert_eq!(item["status"], "published");
+            assert!(identifiers.insert(item["knowledge_item_id"].as_str().unwrap().to_owned()));
+        }
+    }
+    assert_eq!(identifiers.len(), 23);
+    for query in ["page=0&page_size=10", "page=1&page_size=500"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/admin/knowledge-bases/learning-materials/items/page?{query}"
+                ))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/knowledge-bases/learning-materials/items/page")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[actix_web::test]

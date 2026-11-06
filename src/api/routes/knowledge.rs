@@ -24,6 +24,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
                 .route("/{id}/enable", web::post().to(enable_base))
                 .route("/{id}/disable", web::post().to(disable_base))
                 .route("/{id}/items", web::get().to(list_items))
+                .route("/{id}/items/page", web::get().to(list_items_page))
                 .route("/{id}/items", web::post().to(create_item))
                 .route("/{id}/terms", web::get().to(list_terms))
                 .route("/{id}/terms", web::post().to(create_term))
@@ -141,6 +142,15 @@ async fn create_item(
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Created()
         .json(knowledge_service::create_item(&state.db, &auth, &id, request.into_inner()).await?))
+}
+async fn list_items_page(
+    auth: AuthenticatedUser,
+    state: web::Data<AppState>,
+    id: web::Path<String>,
+    query: web::Query<knowledge_service::KnowledgePageQuery>,
+) -> Result<HttpResponse, ApiError> {
+    Ok(HttpResponse::Ok()
+        .json(knowledge_service::list_items_page(&state.db, &auth, &id, query.into_inner()).await?))
 }
 async fn list_terms(
     auth: AuthenticatedUser,

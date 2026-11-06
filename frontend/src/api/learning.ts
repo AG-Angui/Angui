@@ -301,6 +301,7 @@ export interface KnowledgeTerm {
   updated_at: string;
 }
 export interface KnowledgeImportRow {
+  raw_data?: string[];
   id: string;
   row_number: number;
   status: string;
@@ -423,6 +424,17 @@ export const listKnowledgeItems = (token: string, baseId: string) =>
     `/admin/knowledge-bases/${baseId}/items`,
     {},
     token,
+  );
+export interface KnowledgeItemPage {
+  items: KnowledgeItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+export const listKnowledgeItemsPage = (token: string, baseId: string, page: number, pageSize: number) =>
+  apiRequest<KnowledgeItemPage>(
+    `/admin/knowledge-bases/${baseId}/items/page?page=${page}&page_size=${pageSize}`,
+    {}, token,
   );
 export const listKnowledgeTerms = (token: string, baseId: string) =>
   apiRequest<KnowledgeTerm[]>(

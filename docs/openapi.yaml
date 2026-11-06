@@ -3123,6 +3123,36 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/admin/knowledge-bases/{base_id}/items/page:
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeItemsPage
+      summary: Fetch one database page of administrator knowledge items
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters:
+        - { name: base_id, in: path, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, enum: [10, 20, 50, 100], default: 20 } }
+      responses:
+        "200":
+          description: One page ordered by updated_at descending and id ascending; out-of-range pages clamp to the last page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, page, page_size]
+                properties:
+                  items: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/KnowledgeItem" } }
+                  total: { type: integer, minimum: 0 }
+                  page: { type: integer, minimum: 1 }
+                  page_size: { type: integer, enum: [10, 20, 50, 100] }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/admin/knowledge-bases/{base_id}/terms:
     parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
     get:
@@ -3302,6 +3332,7 @@ paths:
       tags: [Knowledge]
       operationId: confirmKnowledgeImport
       summary: Confirm an import batch
+      description: Imports valid preview rows directly as published knowledge items. Repeated confirmation is idempotent. No de-identification or version workflow is required for these imports.
       security: [{ bearerAuth: [] }]
       x-global-capabilities: [admin]
       x-data-classification: restricted-admin
@@ -5793,8 +5824,9 @@ components:
     KnowledgeImportRow:
       type: object
       additionalProperties: false
-      required: [id, row_number, status, error_message, normalized_data, knowledge_item_id]
+      required: [id, row_number, status, error_message, normalized_data, knowledge_item_id, raw_data]
       properties:
+        raw_data: { type: array, items: { type: string }, description: Original CSV cells, including invalid values for temporary editing and revalidation }
         id: { type: string, format: uuid }
         row_number: { type: integer, minimum: 2 }
         status: { type: string, enum: [valid, invalid, duplicate, imported] }

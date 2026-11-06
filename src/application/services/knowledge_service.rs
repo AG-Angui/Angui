@@ -39,7 +39,7 @@ use crate::{
         case_service,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const MAX_QUERY_LENGTH: usize = 1_000;
@@ -225,6 +225,56 @@ pub async fn list_items(
         .all(db)
         .await?;
     admin_results(db, items).await
+}
+
+#[derive(Deserialize)]
+pub struct KnowledgePageQuery {
+    #[serde(default = "first_page")]
+    pub page: u64,
+    #[serde(default = "default_page_size")]
+    pub page_size: u64,
+}
+fn first_page() -> u64 {
+    1
+}
+fn default_page_size() -> u64 {
+    20
+}
+#[derive(Serialize)]
+pub struct KnowledgeItemPage {
+    pub items: Vec<KnowledgeSearchResultResponse>,
+    pub total: u64,
+    pub page: u64,
+    pub page_size: u64,
+}
+
+pub async fn list_items_page(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+    query: KnowledgePageQuery,
+) -> Result<KnowledgeItemPage, ApiError> {
+    require_admin(auth)?;
+    find_base(db, base_id).await?;
+    if query.page == 0 || ![10, 20, 50, 100].contains(&query.page_size) {
+        return Err(ApiError::Validation(
+            "page must be positive and page_size must be 10, 20, 50 or 100".to_owned(),
+        ));
+    }
+    let paginator = knowledge_items::Entity::find()
+        .filter(knowledge_items::Column::KnowledgeBaseId.eq(base_id))
+        .order_by_desc(knowledge_items::Column::UpdatedAt)
+        .order_by_asc(knowledge_items::Column::Id)
+        .paginate(db, query.page_size);
+    let total = paginator.num_items().await?;
+    let page = query.page.min(total.div_ceil(query.page_size).max(1));
+    let items = paginator.fetch_page(page - 1).await?;
+    Ok(KnowledgeItemPage {
+        items: admin_results(db, items).await?,
+        total,
+        page,
+        page_size: query.page_size,
+    })
 }
 
 /// Lists the controlled vocabulary for an administrator. Archived terms are
@@ -1580,6 +1630,8 @@ pub async fn get_import(
         .into_iter()
         .map(|row| {
             Ok(KnowledgeImportRowResponse {
+                raw_data: serde_json::from_str(&row.raw_data_json)
+                    .map_err(|_| ApiError::Internal)?,
                 id: row.id,
                 row_number: row.row_number,
                 status: row.status,
@@ -1717,7 +1769,7 @@ pub async fn confirm_import(
                 .to_owned()),
             source_url: Set(value["source_url"].as_str().map(str::to_owned)),
             visibility: Set(value["visibility"].as_str().unwrap_or("learner").to_owned()),
-            status: Set("draft".to_owned()),
+            status: Set("published".to_owned()),
             effective_at: Set(timestamp.clone()),
             withdrawn_at: Set(None),
             previous_version_id: Set(None),
@@ -2069,6 +2121,7 @@ fn now() -> String {
 }
 
 fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, ApiError> {
+    let input = input.trim_start_matches('\u{feff}');
     let mut records = Vec::new();
     let mut row = Vec::new();
     let mut field = String::new();
