@@ -35,7 +35,7 @@ async fn scalar(db: &DatabaseConnection, query: &str, column: &str) -> String {
 #[tokio::test]
 async fn backfill_preserves_distinct_observations_and_existing_locations() {
     let db = legacy_database().await;
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(1)).await.unwrap();
     assert_eq!(
         scalar(
             &db,
@@ -112,7 +112,7 @@ async fn backfill_preserves_distinct_observations_and_existing_locations() {
 #[tokio::test]
 async fn location_references_reject_cross_case_updates_and_missing_locations() {
     let db = legacy_database().await;
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(1)).await.unwrap();
     for query in [
         "UPDATE clues SET location_id = 'existing' WHERE id = 'first'",
         "UPDATE tasks SET location_id = 'existing' WHERE id = 'synthetic-task'",
@@ -137,7 +137,7 @@ async fn location_references_reject_cross_case_updates_and_missing_locations() {
 #[tokio::test]
 async fn rollback_restores_canonical_edits_and_can_be_upgraded_again() {
     let db = legacy_database().await;
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(1)).await.unwrap();
     db.execute_unprepared("UPDATE locations SET location_text = 'Corrected synthetic square', longitude = 120.5 WHERE id = 'clue:first'; UPDATE locations SET location_text = 'Corrected task area' WHERE id = 'task:synthetic-task'").await.unwrap();
     Migrator::down(&db, Some(1)).await.unwrap();
     assert_eq!(
@@ -168,7 +168,7 @@ async fn rollback_restores_canonical_edits_and_can_be_upgraded_again() {
         .await,
         "existing"
     );
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(1)).await.unwrap();
     assert_eq!(
         scalar(
             &db,
@@ -183,7 +183,7 @@ async fn rollback_restores_canonical_edits_and_can_be_upgraded_again() {
 #[tokio::test]
 async fn rollback_blocks_loss_of_location_lifecycle_information_before_ddl() {
     let db = legacy_database().await;
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(1)).await.unwrap();
     db.execute_unprepared("UPDATE locations SET status = 'retired' WHERE id = 'clue:first'")
         .await
         .unwrap();
@@ -202,7 +202,7 @@ async fn rollback_blocks_loss_of_location_lifecycle_information_before_ddl() {
 #[tokio::test]
 async fn rollback_blocks_new_independent_locations_before_earlier_table_drop() {
     let db = legacy_database().await;
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(1)).await.unwrap();
     db.execute_unprepared("INSERT INTO locations (id, case_id, location_text, location_precision, created_at, updated_at) VALUES ('new-location', 'location-case', 'A new independent synthetic location', 'exact', '2026-02-01', '2026-02-01')").await.unwrap();
     let error = Migrator::down(&db, None).await.unwrap_err();
     assert!(error.to_string().contains("new independent locations"));
@@ -232,7 +232,7 @@ async fn invalid_legacy_coordinates_fail_before_schema_changes() {
     db.execute_unprepared("UPDATE clues SET longitude = 181 WHERE id = 'first'")
         .await
         .unwrap();
-    let error = Migrator::up(&db, None).await.unwrap_err();
+    let error = Migrator::up(&db, Some(1)).await.unwrap_err();
     assert!(error.to_string().contains("legacy clue has invalid"));
     assert!(
         db.execute_unprepared("SELECT location_id FROM clues")

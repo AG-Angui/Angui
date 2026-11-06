@@ -306,6 +306,9 @@ pub struct KnowledgeBaseResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateKnowledgeTermRequest {
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub description: String,
     /// Controlled vocabulary kind. Only `category` and `tag` are accepted.
     pub kind: String,
     pub name: String,
@@ -313,6 +316,8 @@ pub struct CreateKnowledgeTermRequest {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct KnowledgeTermResponse {
+    pub parent_id: Option<String>,
+    pub description: String,
     pub id: String,
     pub knowledge_base_id: String,
     pub kind: String,
@@ -363,6 +368,9 @@ pub struct KnowledgeAttachmentResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateKnowledgeItemRequest {
+    pub external_id: Option<String>,
+    #[serde(default = "empty_json_object")]
+    pub metadata: Value,
     pub title: String,
     #[serde(default)]
     pub summary: String,
@@ -384,6 +392,10 @@ pub struct CreateKnowledgeItemRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateKnowledgeItemRequest {
+    /// An empty string clears the external identifier; omission preserves it.
+    pub external_id: Option<String>,
+    /// Replaces the metadata object; omission preserves it.
+    pub metadata: Option<Value>,
     pub title: Option<String>,
     pub summary: Option<String>,
     pub content: Option<String>,
@@ -414,6 +426,7 @@ pub struct KnowledgeImportRowResponse {
 
 #[derive(Debug, Serialize)]
 pub struct KnowledgeImportBatchResponse {
+    pub source_metadata: Value,
     pub id: String,
     pub knowledge_base_id: String,
     pub file_name: String,
@@ -461,6 +474,12 @@ pub struct KnowledgeOverviewResponse {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct KnowledgeSearchResultResponse {
+    pub category_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    /// Available only in administrator item responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
     pub summary: String,
     pub knowledge_item_id: String,
     pub category: String,

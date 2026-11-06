@@ -65,6 +65,7 @@ mod m0062_voice_candidate_revision;
 mod m0063_create_space_message_receipts;
 mod m0064_create_locations;
 mod m0065_link_record_locations;
+mod m0066_extend_knowledge_schema;
 
 use sea_orm_migration::sea_orm::{DbBackend, Statement};
 
@@ -139,6 +140,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0063_create_space_message_receipts::Migration),
             Box::new(m0064_create_locations::Migration),
             Box::new(m0065_link_record_locations::Migration),
+            Box::new(m0066_extend_knowledge_schema::Migration),
         ]
     }
 }

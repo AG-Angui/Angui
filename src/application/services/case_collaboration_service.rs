@@ -644,6 +644,7 @@ pub async fn review_archive_draft(
         hasher.update(existing.content.as_bytes());
         let content_hash = format!("archive-{}-{:x}", draft_id, hasher.finalize());
         let item = knowledge_items::ActiveModel {
+            external_id: Set(None),
             id: Set(case_service::new_id()),
             knowledge_base_id: Set("learning-materials".to_owned()),
             title: Set("已脱敏案件复盘学习材料".to_owned()),

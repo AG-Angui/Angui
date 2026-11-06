@@ -224,7 +224,7 @@ pub async fn list_items(
         .order_by_desc(knowledge_items::Column::UpdatedAt)
         .all(db)
         .await?;
-    results_with_images(db, items, None).await
+    admin_results(db, items).await
 }
 
 /// Lists the controlled vocabulary for an administrator. Archived terms are
@@ -265,6 +265,18 @@ pub async fn create_term(
             "term kind must be category or tag".to_owned(),
         ));
     }
+    let parent_id = request
+        .parent_id
+        .as_deref()
+        .map(|v| required(v, "parent_id", 191))
+        .transpose()?;
+    if let Some(parent_id) = parent_id.as_deref() {
+        if kind != "category" {
+            return Err(ApiError::Validation("tags cannot have a parent".to_owned()));
+        }
+        ensure_active_category_term(db, base_id, parent_id).await?;
+    }
+    let description = optional(&request.description, 10_000)?;
     let name = required(&request.name, "name", 160)?;
     let existing = knowledge_terms::Entity::find()
         .filter(knowledge_terms::Column::KnowledgeBaseId.eq(base_id))
@@ -283,6 +295,8 @@ pub async fn create_term(
         knowledge_base_id: Set(base_id.to_owned()),
         kind: Set(kind),
         name: Set(name),
+        parent_id: Set(parent_id),
+        description: Set(description),
         status: Set("active".to_owned()),
         created_by_user_id: Set(auth.id.clone()),
         created_at: Set(timestamp.clone()),
@@ -350,7 +364,7 @@ pub async fn get_item(
 ) -> Result<KnowledgeSearchResultResponse, ApiError> {
     require_admin(auth)?;
     let item = find_item(db, id).await?;
-    results_with_images(db, vec![item], None)
+    admin_results(db, vec![item])
         .await?
         .into_iter()
         .next()
@@ -593,15 +607,16 @@ pub async fn create_item(
     } else {
         (None, 1)
     };
-    let input = validated_item(request, &base.visibility)?;
+    let mut input = validated_item(request, &base.visibility)?;
     if let Some(category_id) = input.category_id.as_deref() {
-        ensure_active_category_term(db, base_id, category_id).await?;
+        input.category = selected_category_name(db, base_id, category_id).await?;
     }
-    let content_hash = content_hash(
+    let content_hash = structured_content_hash(
         &input.title,
         &input.summary,
         &input.content,
         &input.keywords,
+        &input.metadata,
     );
     if knowledge_items::Entity::find()
         .filter(knowledge_items::Column::KnowledgeBaseId.eq(base_id))
@@ -620,13 +635,14 @@ pub async fn create_item(
     let item = knowledge_items::ActiveModel {
         id: Set(case_service::new_id()),
         knowledge_base_id: Set(base_id.to_owned()),
+        external_id: Set(input.external_id),
         title: Set(input.title),
         summary: Set(input.summary),
         content: Set(input.content),
         category: Set(input.category),
         category_id: Set(input.category_id),
         keywords_json: Set(serde_json::to_string(&input.keywords).map_err(|_| ApiError::Internal)?),
-        metadata_json: Set("{}".to_owned()),
+        metadata_json: Set(input.metadata.to_string()),
         source_name: Set(input.source_name),
         source_url: Set(input.source_url),
         visibility: Set(input.visibility),
@@ -668,17 +684,22 @@ pub async fn update_item(
         ));
     }
     let base = find_base(db, &existing.knowledge_base_id).await?;
-    let input = merge_item(existing.clone(), request, &base.visibility)?;
+    let mut input = merge_item(existing.clone(), request, &base.visibility)?;
     if input.category_id != existing.category_id
         && let Some(category_id) = input.category_id.as_deref()
     {
-        ensure_active_category_term(db, &existing.knowledge_base_id, category_id).await?;
+        input.category =
+            selected_category_name(db, &existing.knowledge_base_id, category_id).await?;
     }
-    let hash = content_hash(
+    if input.category_id.is_some() && input.category_id == existing.category_id {
+        input.category = existing.category.clone();
+    }
+    let hash = structured_content_hash(
         &input.title,
         &input.summary,
         &input.content,
         &input.keywords,
+        &input.metadata,
     );
     if knowledge_items::Entity::find()
         .filter(knowledge_items::Column::KnowledgeBaseId.eq(&existing.knowledge_base_id))
@@ -701,6 +722,8 @@ pub async fn update_item(
             .await?;
     }
     let mut active: knowledge_items::ActiveModel = existing.into();
+    active.external_id = Set(input.external_id);
+    active.metadata_json = Set(input.metadata.to_string());
     active.title = Set(input.title);
     active.summary = Set(input.summary);
     active.content = Set(input.content);
@@ -1305,7 +1328,19 @@ pub async fn preview_csv(
     file_name: String,
     bytes: Vec<u8>,
 ) -> Result<KnowledgeImportBatchResponse, ApiError> {
+    preview_csv_with_metadata(db, auth, base_id, file_name, bytes, json!({})).await
+}
+
+pub async fn preview_csv_with_metadata(
+    db: &DatabaseConnection,
+    auth: &AuthenticatedUser,
+    base_id: &str,
+    file_name: String,
+    bytes: Vec<u8>,
+    source_metadata: Value,
+) -> Result<KnowledgeImportBatchResponse, ApiError> {
     require_admin(auth)?;
+    validate_metadata(&source_metadata)?;
     let base = find_base(db, base_id).await?;
     if bytes.len() > MAX_IMPORT_BYTES {
         return Err(ApiError::Validation(
@@ -1316,12 +1351,18 @@ pub async fn preview_csv(
         .map_err(|_| ApiError::Validation("CSV must be UTF-8".to_owned()))?;
     let records = parse_csv_records(text)?;
     let headers = records.first().cloned().unwrap_or_default();
-    if headers != CSV_HEADERS {
+    let extended_headers = CSV_HEADERS
+        .iter()
+        .copied()
+        .chain(["external_id", "metadata"])
+        .collect::<Vec<_>>();
+    if headers != CSV_HEADERS && headers != extended_headers {
         return Err(ApiError::Validation(format!(
-            "CSV header must be exactly: {}",
+            "CSV header must be exactly: {}; optionally append external_id,metadata",
             CSV_HEADERS.join(",")
         )));
     }
+    let column_count = headers.len();
     let timestamp = now();
     let batch_id = case_service::new_id();
     let transaction = db.begin().await?;
@@ -1329,6 +1370,7 @@ pub async fn preview_csv(
         id: Set(batch_id.clone()),
         knowledge_base_id: Set(base_id.to_owned()),
         file_name: Set(file_name),
+        source_metadata_json: Set(source_metadata),
         status: Set("previewed".to_owned()),
         total_rows: Set(0),
         valid_rows: Set(0),
@@ -1350,9 +1392,9 @@ pub async fn preview_csv(
             ));
         }
         let row_number = (index + 2) as i32;
-        if record.len() != CSV_HEADERS.len() {
+        if record.len() != column_count {
             return Err(ApiError::Validation(format!(
-                "CSV row {row_number} must contain exactly 9 columns"
+                "CSV row {row_number} must contain exactly {column_count} columns"
             )));
         }
         let raw = record.clone();
@@ -1383,22 +1425,32 @@ pub async fn preview_csv(
         } else {
             cell(8)
         };
-        let validated = validated_item(
-            CreateKnowledgeItemRequest {
-                title: title.to_owned(),
-                summary: summary.to_owned(),
-                content: content.to_owned(),
-                category: category.to_owned(),
-                category_id: None,
-                keywords: keywords.clone(),
-                source_name: Some(source_name.to_owned()),
-                source_url: (!source_url.is_empty()).then(|| source_url.to_owned()),
-                visibility: visibility.to_owned(),
-                previous_version_id: None,
-                images: Vec::new(),
-            },
-            &base.visibility,
-        );
+        let metadata = if cell(10).is_empty() {
+            Ok(json!({}))
+        } else {
+            serde_json::from_str::<Value>(cell(10))
+                .map_err(|_| ApiError::Validation("metadata must be a JSON object".to_owned()))
+        };
+        let validated = metadata.and_then(|metadata| {
+            validated_item(
+                CreateKnowledgeItemRequest {
+                    external_id: (!cell(9).is_empty()).then(|| cell(9).to_owned()),
+                    metadata,
+                    title: title.to_owned(),
+                    summary: summary.to_owned(),
+                    content: content.to_owned(),
+                    category: category.to_owned(),
+                    category_id: None,
+                    keywords: keywords.clone(),
+                    source_name: Some(source_name.to_owned()),
+                    source_url: (!source_url.is_empty()).then(|| source_url.to_owned()),
+                    visibility: visibility.to_owned(),
+                    previous_version_id: None,
+                    images: Vec::new(),
+                },
+                &base.visibility,
+            )
+        });
         let normalized = if let Ok(item) = validated.as_ref() {
             json!({
                 "knowledge_base_id": base_value,
@@ -1410,6 +1462,8 @@ pub async fn preview_csv(
                 "source_name": item.source_name,
                 "source_url": item.source_url,
                 "visibility": item.visibility,
+                "external_id": item.external_id,
+                "metadata": item.metadata,
             })
         } else {
             json!({
@@ -1427,7 +1481,13 @@ pub async fn preview_csv(
         let duplicate = if base_value != base_id {
             false
         } else if let Ok(item) = validated.as_ref() {
-            let hash = content_hash(&item.title, &item.summary, &item.content, &item.keywords);
+            let hash = structured_content_hash(
+                &item.title,
+                &item.summary,
+                &item.content,
+                &item.keywords,
+                &item.metadata,
+            );
             !seen_hashes.insert(hash.clone())
                 || knowledge_items::Entity::find()
                     .filter(knowledge_items::Column::KnowledgeBaseId.eq(base_id))
@@ -1534,6 +1594,7 @@ pub async fn get_import(
         id: batch.id,
         knowledge_base_id: batch.knowledge_base_id,
         file_name: batch.file_name,
+        source_metadata: batch.source_metadata_json,
         status: batch.status,
         total_rows: batch.total_rows,
         valid_rows: batch.valid_rows,
@@ -1616,7 +1677,10 @@ pub async fn confirm_import(
         let content = value["content"].as_str().unwrap_or_default().to_owned();
         let keywords: Vec<String> =
             serde_json::from_value(value["keywords"].clone()).map_err(|_| ApiError::Internal)?;
-        let hash = content_hash(&title, &summary, &content, &keywords);
+        // Older previews have no metadata or external identifier.
+        let metadata = value.get("metadata").cloned().unwrap_or_else(|| json!({}));
+        validate_metadata(&metadata)?;
+        let hash = structured_content_hash(&title, &summary, &content, &keywords, &metadata);
         if knowledge_items::Entity::find()
             .filter(knowledge_items::Column::KnowledgeBaseId.eq(&batch.knowledge_base_id))
             .filter(knowledge_items::Column::ContentHash.eq(&hash))
@@ -1639,13 +1703,14 @@ pub async fn confirm_import(
         knowledge_items::ActiveModel {
             id: Set(item_id.clone()),
             knowledge_base_id: Set(batch.knowledge_base_id.clone()),
+            external_id: Set(value["external_id"].as_str().map(str::to_owned)),
             title: Set(title),
             summary: Set(summary),
             content: Set(content),
             category: Set(value["category"].as_str().unwrap_or_default().to_owned()),
             category_id: Set(None),
             keywords_json: Set(serde_json::to_string(&keywords).map_err(|_| ApiError::Internal)?),
-            metadata_json: Set("{}".to_owned()),
+            metadata_json: Set(metadata.to_string()),
             source_name: Set(value["source_name"]
                 .as_str()
                 .unwrap_or("CSV Import")
@@ -1801,6 +1866,9 @@ async fn results_with_images(
     Ok(items
         .into_iter()
         .map(|item| KnowledgeSearchResultResponse {
+            category_id: item.category_id,
+            external_id: None,
+            metadata: None,
             knowledge_item_id: item.id.clone(),
             title: item.title,
             summary: item.summary,
@@ -1848,21 +1916,83 @@ async fn find_item(db: &DatabaseConnection, id: &str) -> Result<knowledge_items:
         .await?
         .ok_or_else(|| ApiError::NotFound("knowledge item was not found".to_owned()))
 }
+fn validate_metadata(value: &Value) -> Result<(), ApiError> {
+    if !value.is_object() || value.to_string().len() > 128 * 1024 {
+        return Err(ApiError::Validation(
+            "metadata must be an object no larger than 128 KB".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn admin_results(
+    db: &DatabaseConnection,
+    items: Vec<knowledge_items::Model>,
+) -> Result<Vec<KnowledgeSearchResultResponse>, ApiError> {
+    let mut details = HashMap::new();
+    for item in &items {
+        let metadata =
+            serde_json::from_str::<Value>(&item.metadata_json).map_err(|_| ApiError::Internal)?;
+        details.insert(item.id.clone(), (item.external_id.clone(), metadata));
+    }
+    let mut results = results_with_images(db, items, None).await?;
+    for result in &mut results {
+        if let Some((external_id, metadata)) = details.remove(&result.knowledge_item_id) {
+            result.external_id = external_id;
+            result.metadata = Some(metadata);
+        }
+    }
+    Ok(results)
+}
+
+async fn selected_category_name(
+    db: &DatabaseConnection,
+    base_id: &str,
+    term_id: &str,
+) -> Result<String, ApiError> {
+    ensure_active_category_term(db, base_id, term_id).await?;
+    if knowledge_terms::Entity::find()
+        .filter(knowledge_terms::Column::KnowledgeBaseId.eq(base_id))
+        .filter(knowledge_terms::Column::ParentId.eq(term_id))
+        .filter(knowledge_terms::Column::Status.eq("active"))
+        .one(db)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Validation(
+            "select the most specific active category".to_owned(),
+        ));
+    }
+    Ok(knowledge_terms::Entity::find_by_id(term_id)
+        .one(db)
+        .await?
+        .ok_or(ApiError::Internal)?
+        .name)
+}
+
 async fn ensure_active_category_term(
     db: &DatabaseConnection,
     base_id: &str,
     term_id: &str,
 ) -> Result<(), ApiError> {
-    let term = knowledge_terms::Entity::find_by_id(term_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| {
-            ApiError::Validation("category_id does not reference a category term".to_owned())
-        })?;
-    if term.knowledge_base_id != base_id || term.kind != "category" || term.status != "active" {
-        return Err(ApiError::Validation(
-            "category_id must reference an active category in this knowledge base".to_owned(),
-        ));
+    let mut current = Some(term_id.to_owned());
+    let mut seen = HashSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            return Err(ApiError::Validation(
+                "category hierarchy contains a cycle".to_owned(),
+            ));
+        }
+        let term = knowledge_terms::Entity::find_by_id(&id)
+            .one(db)
+            .await?
+            .ok_or_else(|| {
+                ApiError::Validation("category_id does not reference a category term".to_owned())
+            })?;
+        if term.knowledge_base_id != base_id || term.kind != "category" || term.status != "active" {
+            return Err(ApiError::Validation("category_id and its ancestors must reference active categories in this knowledge base".to_owned()));
+        }
+        current = term.parent_id;
     }
     Ok(())
 }
@@ -1883,6 +2013,8 @@ fn term_response(model: knowledge_terms::Model) -> KnowledgeTermResponse {
         knowledge_base_id: model.knowledge_base_id,
         kind: model.kind,
         name: model.name,
+        parent_id: model.parent_id,
+        description: model.description,
         status: model.status,
         created_by_user_id: model.created_by_user_id,
         created_at: model.created_at,
@@ -1993,6 +2125,16 @@ fn required(value: &str, field: &str, max: usize) -> Result<String, ApiError> {
         Ok(value)
     }
 }
+fn validated_content(value: &str) -> Result<String, ApiError> {
+    let content = value.trim();
+    if content.is_empty() || content.chars().count() > 50_000 {
+        return Err(ApiError::Validation(
+            "content must contain between 1 and 50000 characters".to_owned(),
+        ));
+    }
+    Ok(content.to_owned())
+}
+
 fn optional(value: &str, max: usize) -> Result<String, ApiError> {
     let value = value.trim();
     if value.chars().count() > max {
@@ -2036,6 +2178,25 @@ fn validate_limit(value: Option<u32>) -> Result<u32, ApiError> {
 fn review_notice() -> &'static str {
     "Knowledge answers are based only on published materials. Field action remains subject to human review and responsible-person instructions."
 }
+fn structured_content_hash(
+    title: &str,
+    summary: &str,
+    content: &str,
+    keywords: &[String],
+    metadata: &Value,
+) -> String {
+    let legacy_hash = content_hash(title, summary, content, keywords);
+    // Preserve deduplication compatibility for legacy and CSV records.
+    if metadata.as_object().is_some_and(|object| object.is_empty()) {
+        return legacy_hash;
+    }
+    let mut hash = Sha256::new();
+    hash.update(legacy_hash.as_bytes());
+    hash.update([0]);
+    hash.update(metadata.to_string().as_bytes());
+    hex::encode(hash.finalize())
+}
+
 fn content_hash(title: &str, summary: &str, content: &str, keywords: &[String]) -> String {
     let mut hash = Sha256::new();
     hash.update(title.as_bytes());
@@ -2091,6 +2252,8 @@ fn search_terms(query: &str) -> Vec<String> {
 }
 
 struct ValidatedItem {
+    external_id: Option<String>,
+    metadata: Value,
     title: String,
     summary: String,
     content: String,
@@ -2139,10 +2302,18 @@ fn validated_item(
             return Err(ApiError::Validation("image metadata is invalid".to_owned()));
         }
     }
+    validate_metadata(&request.metadata)?;
     Ok(ValidatedItem {
+        external_id: request
+            .external_id
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| required(v, "external_id", 191))
+            .transpose()?,
+        metadata: request.metadata,
         title: required(&request.title, "title", 240)?,
         summary: optional(&request.summary, 2_000)?,
-        content: required(&request.content, "content", 50_000)?,
+        content: validated_content(&request.content)?,
         category: optional(&request.category, 160)?,
         category_id: request
             .category_id
@@ -2177,6 +2348,8 @@ fn validated_item(
 }
 
 struct MergedItem {
+    external_id: Option<String>,
+    metadata: Value,
     title: String,
     summary: String,
     content: String,
@@ -2199,6 +2372,10 @@ fn merge_item(
         .unwrap_or_else(|| serde_json::from_str(&existing.keywords_json).unwrap_or_default());
     let images = request.images;
     let input = CreateKnowledgeItemRequest {
+        external_id: request.external_id.or(existing.external_id),
+        metadata: request.metadata.unwrap_or(
+            serde_json::from_str(&existing.metadata_json).map_err(|_| ApiError::Internal)?,
+        ),
         title: request.title.unwrap_or(existing.title),
         summary: request.summary.unwrap_or(existing.summary),
         content: request.content.unwrap_or(existing.content),
@@ -2213,6 +2390,8 @@ fn merge_item(
     };
     let validated = validated_item(input, default_visibility)?;
     Ok(MergedItem {
+        external_id: validated.external_id,
+        metadata: validated.metadata,
         title: validated.title,
         summary: validated.summary,
         content: validated.content,
@@ -2320,9 +2499,30 @@ pub fn build_context(results: &[KnowledgeSearchResultResponse]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_limit_counts_serialized_bytes() {
+        let overhead = json!({"note":""}).to_string().len();
+        let mut metadata = json!({"note":"x".repeat(128 * 1024 - overhead)});
+        assert!(validate_metadata(&metadata).is_ok());
+        metadata["note"] = Value::String("x".repeat(128 * 1024 - overhead + 1));
+        assert!(validate_metadata(&metadata).is_err());
+        assert!(validate_metadata(&json!([])).is_err());
+    }
+    #[test]
+    fn imported_content_preserves_paragraphs_and_original_spacing() {
+        let content =
+            "Experience ID: EXP-000001\n\nOriginal answer:\nFirst  observation\nSecond observation";
+        assert_eq!(validated_content(content).unwrap(), content);
+        assert!(validated_content("   ").is_err());
+    }
+
     #[test]
     fn context_builder_never_invents_source_ids() {
         let result = KnowledgeSearchResultResponse {
+            category_id: None,
+            external_id: None,
+            metadata: None,
             knowledge_item_id: "item-1".to_owned(),
             title: "Title".to_owned(),
             summary: "Summary".to_owned(),

@@ -8,6 +8,8 @@ pub struct Model {
     pub knowledge_base_id: String,
     pub kind: String,
     pub name: String,
+    pub parent_id: Option<String>,
+    pub description: String,
     pub status: String,
     pub created_by_user_id: String,
     pub created_at: String,
