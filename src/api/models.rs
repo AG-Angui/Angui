@@ -416,6 +416,7 @@ pub struct KnowledgeTransitionRequest {
 
 #[derive(Debug, Serialize)]
 pub struct KnowledgeImportRowResponse {
+    pub raw_data: Vec<String>,
     pub id: String,
     pub row_number: i32,
     pub status: String,
