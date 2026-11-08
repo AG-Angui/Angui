@@ -35,3 +35,6 @@ Thumbs.db
 
 # Local Codex skills
 .codex/skills/
+
+# Local knowledge exports (never commit source data)
+/local-exports/

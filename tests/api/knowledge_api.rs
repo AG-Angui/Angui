@@ -431,7 +431,7 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     )
     .into_bytes();
     body.extend_from_slice(csv.as_bytes());
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body.extend_from_slice(format!("\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"source_metadata\"\r\n\r\n{{\"version\":\"1.0\",\"field_descriptions\":{{\"judgment\":\"Original answer\"}}}}\r\n--{boundary}--\r\n").as_bytes());
 
     let preview = test::call_service(
         &app,
@@ -450,11 +450,16 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     .await;
     assert_eq!(preview.status(), StatusCode::CREATED);
     let preview: Value = test::read_body_json(preview).await;
+    assert_eq!(preview["source_metadata"]["version"], "1.0");
     assert_eq!(preview["status"], "previewed");
     assert_eq!(preview["total_rows"], 4);
     assert_eq!(preview["valid_rows"], 1);
     assert_eq!(preview["invalid_rows"], 3);
     assert_eq!(preview["rows"][0]["status"], "valid");
+    assert_eq!(
+        preview["rows"][0]["raw_data"][1],
+        "Imported emergency guide"
+    );
     assert_eq!(preview["rows"][1]["status"], "invalid");
     assert_eq!(preview["rows"][2]["status"], "invalid");
     assert_eq!(preview["rows"][3]["status"], "invalid");
@@ -470,6 +475,7 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     .await;
     assert_eq!(confirm.status(), StatusCode::OK);
     let confirm: Value = test::read_body_json(confirm).await;
+    assert_eq!(confirm["source_metadata"], preview["source_metadata"]);
     assert_eq!(confirm["status"], "confirmed");
     assert_eq!(confirm["rows"][0]["status"], "imported");
     assert_eq!(confirm["rows"][1]["status"], "invalid");
@@ -490,9 +496,10 @@ async fn knowledge_csv_import_previews_invalid_rows_and_only_imports_valid_rows(
     let items: Value = test::read_body_json(items).await;
     assert_eq!(items.as_array().map(Vec::len), Some(1));
     assert_eq!(items[0]["title"], "Imported emergency guide");
+    assert_eq!(items[0]["status"], "published");
 
     let learner_search: Value = search!(&app, &context, &base_id, "emergency", LEARNER);
-    assert_eq!(learner_search["results"], json!([]));
+    assert_eq!(learner_search["results"].as_array().unwrap().len(), 1);
 }
 #[actix_web::test]
 async fn knowledge_csv_preview_rejects_unauthorized_uploads_and_long_file_names() {
@@ -542,6 +549,168 @@ async fn knowledge_csv_preview_rejects_unauthorized_uploads_and_long_file_names(
     )
     .await;
     assert_error(too_long, StatusCode::BAD_REQUEST, "validation_error").await;
+}
+
+#[actix_web::test]
+async fn knowledge_csv_import_preserves_separate_source_fields_and_validates_metadata() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let boundary = "structured-experience-import";
+    let mut csv = "knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility,external_id,metadata\n".to_owned();
+    for (external_id, metadata) in [
+        ("EXP-1", r#"{"source_fields":{"原始回答":"First source"}}"#),
+        ("EXP-2", r#"{"source_fields":{"原始回答":"Second source"}}"#),
+        ("EXP-1", r#"{"source_fields":{"原始回答":"First source"}}"#),
+        ("EXP-3", "[]"),
+        ("EXP-4", "invalid json"),
+    ] {
+        let metadata_cell = format!("\"{}\"", metadata.replace('"', "\"\""));
+        csv.push_str(&format!("learning-materials,Support volunteers,Assign a mentor,Training,safety,mentor,Handbook,,learner,{external_id},{metadata_cell}\n"));
+    }
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"experiences.csv\"\r\nContent-Type: text/csv\r\n\r\n{csv}\r\n--{boundary}--\r\n"
+    );
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/learning-materials/imports/preview")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let preview: Value = test::read_body_json(response).await;
+    assert_eq!(preview["valid_rows"], 2);
+    for (row, expected) in preview["rows"].as_array().unwrap().iter().zip([
+        "valid",
+        "valid",
+        "duplicate",
+        "invalid",
+        "invalid",
+    ]) {
+        assert_eq!(row["status"], expected);
+    }
+    let batch_id = preview["id"].as_str().unwrap();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/admin/knowledge-imports/{batch_id}/confirm"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/knowledge-bases/learning-materials/items")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let items: Value = test::read_body_json(response).await;
+    let items = items.as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    for (id, answer) in [("EXP-1", "First source"), ("EXP-2", "Second source")] {
+        let item = items.iter().find(|item| item["external_id"] == id).unwrap();
+        assert_eq!(item["content"], "Assign a mentor");
+        assert_eq!(item["category"], "safety");
+        assert_eq!(item["metadata"]["source_fields"]["原始回答"], answer);
+    }
+}
+
+#[actix_web::test]
+async fn knowledge_csv_bom_import_publishes_and_lists_only_one_server_page() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let mut csv = "\u{feff}knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility\n".to_owned();
+    for index in 0..23 {
+        csv.push_str(&format!(
+            "learning-materials,Page guide {index},Guidance {index},,Safety,,Handbook,,learner\n"
+        ));
+    }
+    let boundary = "bom-page-import";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"bom.csv\"\r\nContent-Type: text/csv\r\n\r\n{csv}\r\n--{boundary}--\r\n"
+    );
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/admin/knowledge-bases/learning-materials/imports/preview")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let preview: Value = test::read_body_json(response).await;
+    assert_eq!(preview["valid_rows"], 23);
+    let batch_id = preview["id"].as_str().unwrap();
+    for _ in 0..2 {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/admin/knowledge-imports/{batch_id}/confirm"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let mut identifiers = std::collections::HashSet::new();
+    for (page, count) in [(1, 10), (2, 10), (3, 3)] {
+        let response = test::call_service(&app, test::TestRequest::get()
+            .uri(&format!("/api/admin/knowledge-bases/learning-materials/items/page?page={page}&page_size=10"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}"))).to_request()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let data: Value = test::read_body_json(response).await;
+        assert_eq!(data["total"], 23);
+        assert_eq!(data["page"], page);
+        let items = data["items"].as_array().unwrap();
+        assert_eq!(items.len(), count);
+        for item in items {
+            assert_eq!(item["status"], "published");
+            assert!(identifiers.insert(item["knowledge_item_id"].as_str().unwrap().to_owned()));
+        }
+    }
+    assert_eq!(identifiers.len(), 23);
+    for query in ["page=0&page_size=10", "page=1&page_size=500"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/admin/knowledge-bases/learning-materials/items/page?{query}"
+                ))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/knowledge-bases/learning-materials/items/page")
+            .insert_header((
+                header::AUTHORIZATION,
+                format!("Bearer {}", context.token(LEARNER).await),
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[actix_web::test]
@@ -614,4 +783,164 @@ async fn knowledge_terms_are_governed_per_base_and_archived_with_audit_reason() 
     assert_eq!(disable.status(), StatusCode::OK);
     let disabled: Value = test::read_body_json(disable).await;
     assert_eq!(disabled["status"], "archived");
+}
+
+#[actix_web::test]
+async fn knowledge_experience_fields_round_trip_without_exposing_source_metadata() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let base_id = "learning-materials";
+    let mut terms = Vec::new();
+    for body in [
+        json!({"kind":"category", "name":"Movement", "description":"Behavior patterns"}),
+        json!({"kind":"tag", "name":"Tag"}),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/admin/knowledge-bases/{base_id}/terms"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        terms.push(test::read_body_json::<Value, _>(response).await);
+    }
+    let parent = terms[0]["id"].as_str().unwrap();
+    for (body, status) in [
+        (
+            json!({"kind":"category", "name":"Invalid tag parent", "parent_id":terms[1]["id"]}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"kind":"tag", "name":"Invalid child tag", "parent_id":parent}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/admin/knowledge-bases/{base_id}/terms"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), status);
+    }
+    let response = test::call_service(&app, test::TestRequest::post()
+        .uri(&format!("/api/admin/knowledge-bases/{base_id}/terms"))
+        .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+        .set_json(json!({"kind":"category", "name":"Daily walk", "parent_id":parent, "description":"Routes"})).to_request()).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let child: Value = test::read_body_json(response).await;
+    assert_eq!(child["parent_id"], parent);
+    assert_eq!(child["description"], "Routes");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri(&format!("/api/admin/knowledge-bases/{base_id}/items"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({"title":"Parent category", "content":"Guidance", "category_id":parent, "visibility":"learner"}))
+            .to_request(),
+    ).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let metadata = json!({"original_answer":"Unedited answer", "priority":null, "verification_note":"Unverified"});
+    let response = test::call_service(&app, test::TestRequest::post()
+        .uri(&format!("/api/admin/knowledge-bases/{base_id}/items"))
+        .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+        .set_json(json!({"title":"Walk experience", "content":"Beacon route guidance", "category_id":child["id"], "category":"Incorrect snapshot", "external_id":"EXP-000001", "metadata":metadata, "visibility":"learner"})).to_request()).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let item: Value = test::read_body_json(response).await;
+    let id = item["knowledge_item_id"].as_str().unwrap();
+    assert_eq!(item["category"], "Daily walk");
+    assert_eq!(item["category_id"], child["id"]);
+    assert_eq!(item["external_id"], "EXP-000001");
+    assert_eq!(item["metadata"], metadata);
+    for (body, status) in [
+        (json!({"metadata": []}), StatusCode::BAD_REQUEST),
+        (
+            json!({"summary":"Updated", "category":"Wrong snapshot"}),
+            StatusCode::OK,
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::patch()
+                .uri(&format!("/api/admin/knowledge-items/{id}"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), status);
+        if status == StatusCode::OK {
+            let updated: Value = test::read_body_json(response).await;
+            assert_eq!(updated["external_id"], "EXP-000001");
+            assert_eq!(updated["metadata"], metadata);
+            assert_eq!(updated["category"], "Daily walk");
+        }
+    }
+    transition!(&app, &context, id, "deidentify", ADMIN);
+    transition!(&app, &context, id, "review", ADMIN2);
+    transition!(&app, &context, id, "publish", ADMIN);
+    let results: Value = search!(&app, &context, base_id, "Beacon", LEARNER);
+    assert_eq!(results["results"].as_array().unwrap().len(), 1);
+    assert!(results["results"][0].get("metadata").is_none());
+    assert!(results["results"][0].get("external_id").is_none());
+    // Source-only corrections must not be discarded as duplicate body text.
+    let response = test::call_service(&app, test::TestRequest::post()
+        .uri(&format!("/api/admin/knowledge-bases/{base_id}/items"))
+        .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+        .set_json(json!({"title":"Walk experience", "summary":"Updated", "content":"Beacon route guidance", "external_id":"EXP-000001", "metadata":{"verification_note":"Independently verified"}, "visibility":"learner", "previous_version_id":id})).to_request()).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let correction: Value = test::read_body_json(response).await;
+    let correction_id = correction["knowledge_item_id"].as_str().unwrap();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::patch()
+            .uri(&format!("/api/admin/knowledge-items/{correction_id}"))
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(json!({"external_id":"", "metadata":{}}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let cleared: Value = test::read_body_json(response).await;
+    assert!(cleared["external_id"].is_null());
+    assert_eq!(cleared["metadata"], json!({}));
+}
+
+#[actix_web::test]
+async fn knowledge_import_rejects_invalid_source_metadata() {
+    let context = TestContext::new().await;
+    let app = crate::init_api_app!(&context);
+    let token = context.token(ADMIN).await;
+    let oversized = json!({"note":"x".repeat(128 * 1024)}).to_string();
+    for metadata_fields in [vec!["[]"], vec![oversized.as_str()], vec!["{}", "{}"]] {
+        let boundary = "metadata-validation-boundary";
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.csv\"\r\nContent-Type: text/csv\r\n\r\nknowledge_base_id,title,content\nlearning-materials,Guide,Guidance\r\n"
+        );
+        for metadata in metadata_fields {
+            body.push_str(&format!("--{boundary}\r\nContent-Disposition: form-data; name=\"source_metadata\"\r\n\r\n{metadata}\r\n"));
+        }
+        body.push_str(&format!("--{boundary}--\r\n"));
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/admin/knowledge-bases/learning-materials/imports/preview")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .insert_header((
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }

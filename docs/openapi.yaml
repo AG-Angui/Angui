@@ -3123,6 +3123,36 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/admin/knowledge-bases/{base_id}/items/page:
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeItemsPage
+      summary: Fetch one database page of administrator knowledge items
+      security: [{ bearerAuth: [] }]
+      x-global-capabilities: [admin]
+      x-data-classification: restricted-admin
+      parameters:
+        - { name: base_id, in: path, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, enum: [10, 20, 50, 100], default: 20 } }
+      responses:
+        "200":
+          description: One page ordered by updated_at descending and id ascending; out-of-range pages clamp to the last page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, page, page_size]
+                properties:
+                  items: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/KnowledgeItem" } }
+                  total: { type: integer, minimum: 0 }
+                  page: { type: integer, minimum: 1 }
+                  page_size: { type: integer, enum: [10, 20, 50, 100] }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/admin/knowledge-bases/{base_id}/terms:
     parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
     get:
@@ -3176,12 +3206,12 @@ paths:
       tags: [Knowledge]
       operationId: previewKnowledgeImport
       summary: Preview a CSV knowledge import
-      description: Accepts one multipart file containing UTF-8 CSV; validates the exact nine-column header and 5 MiB/5000-row limits, then classifies rows without publishing content.
+      description: Accepts one multipart file containing UTF-8 CSV with the nine columns knowledge_base_id,title,content,summary,category,keywords,source_name,source_url,visibility. Optionally append both external_id and metadata (a JSON object) columns, in that order. Validates 5 MiB/5000-row limits and metadata up to 128 KiB, then classifies rows without publishing content.
       security: [{ bearerAuth: [] }]
       x-global-capabilities: [admin]
       x-data-classification: restricted-admin
       parameters: [{ name: base_id, in: path, required: true, schema: { type: string, format: uuid } }]
-      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary }, source_metadata: { type: string, description: Optional JSON object encoded as text; maximum 128 KiB } } } } } }
       responses:
         "201": { description: Import preview, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeImportBatch" } } } }
         "400": { $ref: "#/components/responses/ValidationError" }
@@ -3302,6 +3332,7 @@ paths:
       tags: [Knowledge]
       operationId: confirmKnowledgeImport
       summary: Confirm an import batch
+      description: Imports valid preview rows directly as published knowledge items. Repeated confirmation is idempotent. No de-identification or version workflow is required for these imports.
       security: [{ bearerAuth: [] }]
       x-global-capabilities: [admin]
       x-data-classification: restricted-admin
@@ -5689,6 +5720,8 @@ components:
         knowledge_base_id: { type: string, format: uuid }
         kind: { type: string, enum: [category, tag] }
         name: { type: string, minLength: 1, maxLength: 160 }
+        parent_id: { type: [string, "null"], description: Active parent category in the same knowledge base; tags cannot have parents }
+        description: { type: string, maxLength: 10000, default: "" }
         status: { type: string, enum: [active, archived] }
         created_by_user_id: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
@@ -5701,6 +5734,8 @@ components:
       properties:
         kind: { type: string, enum: [category, tag] }
         name: { type: string, minLength: 1, maxLength: 160 }
+        parent_id: { type: [string, "null"], description: Active parent category in the same knowledge base; tags cannot have parents }
+        description: { type: string, maxLength: 10000, default: "" }
 
     KnowledgeTermTransitionRequest:
       type: object
@@ -5737,6 +5772,9 @@ components:
       additionalProperties: false
       required: [knowledge_item_id, title, content, score, knowledge_base_id, version, source_name, source_url, images]
       properties:
+        external_id: { type: [string, "null"], maxLength: 191, description: Source experience identifier; an empty string clears it on draft update }
+        metadata: { type: object, description: Administrator-only source and experience fields; maximum serialized size is 128 KiB }
+        category_id: { type: [string, "null"] }
         knowledge_item_id: { type: string, format: uuid }
         title: { type: string }
         content: { type: string }
@@ -5752,6 +5790,8 @@ components:
       additionalProperties: false
       required: [title, content, visibility]
       properties:
+        external_id: { type: [string, "null"], maxLength: 191, description: Source experience identifier; an empty string clears it on draft update }
+        metadata: { type: object, description: Administrator-only source and experience fields; maximum serialized size is 128 KiB }
         title: { type: string, minLength: 1 }
         summary: { type: string, default: "" }
         content: { type: string, minLength: 1 }
@@ -5768,6 +5808,8 @@ components:
       additionalProperties: false
       minProperties: 1
       properties:
+        external_id: { type: [string, "null"], maxLength: 191, description: Source experience identifier; an empty string clears it on draft update }
+        metadata: { type: object, description: Administrator-only source and experience fields; maximum serialized size is 128 KiB }
         title: { type: string, minLength: 1 }
         summary: { type: string }
         content: { type: string, minLength: 1 }
@@ -5782,8 +5824,9 @@ components:
     KnowledgeImportRow:
       type: object
       additionalProperties: false
-      required: [id, row_number, status, error_message, normalized_data, knowledge_item_id]
+      required: [id, row_number, status, error_message, normalized_data, knowledge_item_id, raw_data]
       properties:
+        raw_data: { type: array, items: { type: string }, description: Original CSV cells, including invalid values for temporary editing and revalidation }
         id: { type: string, format: uuid }
         row_number: { type: integer, minimum: 2 }
         status: { type: string, enum: [valid, invalid, duplicate, imported] }
@@ -5796,6 +5839,7 @@ components:
       additionalProperties: false
       required: [id, knowledge_base_id, file_name, status, total_rows, valid_rows, invalid_rows, rows, confirmed_at]
       properties:
+        source_metadata: { type: object, description: Original file version and field descriptions; administrator-only }
         id: { type: string, format: uuid }
         knowledge_base_id: { type: string, format: uuid }
         file_name: { type: string }

@@ -289,6 +289,8 @@ export interface KnowledgeBase {
   updated_at: string;
 }
 export interface KnowledgeTerm {
+  parent_id: string | null;
+  description: string;
   id: string;
   knowledge_base_id: string;
   kind: "category" | "tag";
@@ -299,6 +301,7 @@ export interface KnowledgeTerm {
   updated_at: string;
 }
 export interface KnowledgeImportRow {
+  raw_data?: string[];
   id: string;
   row_number: number;
   status: string;
@@ -307,6 +310,7 @@ export interface KnowledgeImportRow {
   knowledge_item_id: string | null;
 }
 export interface KnowledgeImportBatch {
+  source_metadata: Record<string, unknown>;
   id: string;
   knowledge_base_id: string;
   file_name: string;
@@ -326,6 +330,9 @@ export interface KnowledgeAttachment {
   created_at: string;
 }
 export interface KnowledgeItem {
+  category_id: string | null;
+  external_id?: string;
+  metadata?: Record<string, unknown>;
   knowledge_item_id: string;
   title: string;
   summary: string;
@@ -383,9 +390,11 @@ export const previewKnowledgeImport = (
   token: string,
   baseId: string,
   file: File,
+  sourceMetadata?: Record<string, unknown>,
 ) => {
   const form = new FormData();
   form.append("file", file);
+  if (sourceMetadata) form.append("source_metadata", JSON.stringify(sourceMetadata));
   return apiRequest<KnowledgeImportBatch>(
     `/admin/knowledge-bases/${baseId}/imports/preview`,
     { method: "POST", body: form },
@@ -416,6 +425,17 @@ export const listKnowledgeItems = (token: string, baseId: string) =>
     {},
     token,
   );
+export interface KnowledgeItemPage {
+  items: KnowledgeItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+export const listKnowledgeItemsPage = (token: string, baseId: string, page: number, pageSize: number) =>
+  apiRequest<KnowledgeItemPage>(
+    `/admin/knowledge-bases/${baseId}/items/page?page=${page}&page_size=${pageSize}`,
+    {}, token,
+  );
 export const listKnowledgeTerms = (token: string, baseId: string) =>
   apiRequest<KnowledgeTerm[]>(
     `/admin/knowledge-bases/${baseId}/terms`,
@@ -425,7 +445,7 @@ export const listKnowledgeTerms = (token: string, baseId: string) =>
 export const createKnowledgeTerm = (
   token: string,
   baseId: string,
-  input: { kind: "category" | "tag"; name: string },
+  input: { kind: "category" | "tag"; name: string; parent_id?: string | null; description?: string },
 ) =>
   apiRequest<KnowledgeTerm>(
     `/admin/knowledge-bases/${baseId}/terms`,
@@ -505,6 +525,8 @@ export const createKnowledgeItem = (
   token: string,
   baseId: string,
   input: {
+    external_id?: string | null;
+    metadata?: Record<string, unknown>;
     title: string;
     summary: string;
     content: string;
@@ -533,6 +555,8 @@ export const updateKnowledgeItem = (
   token: string,
   itemId: string,
   input: {
+    external_id?: string | null;
+    metadata?: Record<string, unknown>;
     title?: string;
     summary?: string;
     content?: string;
