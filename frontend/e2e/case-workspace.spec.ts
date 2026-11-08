@@ -9,10 +9,15 @@ import {
 
 async function login(page: Page, email: string) {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "邮箱" }).fill(email);
-  await page.getByRole("textbox", { name: "密码" }).fill(demoPassword);
-  await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByRole("heading", { name: "行动总览" })).toBeVisible();
+  await page.getByRole("button", { name: /家属 \/ 知情人/ }).click();
+  const loginDialog = page.getByRole("dialog", { name: "家属 / 知情人登录" });
+  await expect(loginDialog).toBeVisible();
+  await loginDialog.getByRole("textbox", { name: "邮箱" }).fill(email);
+  await loginDialog.getByRole("textbox", { name: "密码" }).fill(demoPassword);
+  await loginDialog.getByRole("button", { name: "登录" }).click();
+  await expect(
+    page.getByRole("heading", { name: "说清楚情况，安心看进展" }),
+  ).toBeVisible();
 }
 
 test("a case created through the live API is visible only in its member workspaces", async ({

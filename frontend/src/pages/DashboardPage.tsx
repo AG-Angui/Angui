@@ -1,29 +1,22 @@
 import { Button, Card, Chip, Input, TextArea } from "@heroui/react";
-import {
-  ClipboardCheck,
-  FileSearch,
-  RadioTower,
-  RefreshCw,
-  UsersRound,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowRight, BookOpen, ClipboardCheck, Clock3, FileSearch, HeartHandshake, ListChecks, Navigation, RadioTower, RefreshCw, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
+import { Link } from "react-router";
+import { workspaceAccess, workspaceIdentity } from "../workspaceNavigation";
+import { useDashboardData } from "./useDashboardData";
+import "./DashboardPage.css";
+import { useCallback, useEffect, useState } from "react";
 import {
   deidentifyArchiveDraft,
   diffArchiveReviewMaterials,
-  getCase,
   listArchiveReviewMaterials,
-  listAdminArchiveDrafts,
-  listCases,
-  listCommandIntake,
   reviewArchiveDraft,
   restoreArchiveReviewMaterial,
 } from "../api/cases";
 import type {
   ArchiveReviewMaterial,
   ArchiveDraft,
-  CaseDetail,
   CaseListItem,
-  CommandIntakeCase,
 } from "../api/cases";
 import { useAuth } from "../auth/useAuth";
 import {
@@ -31,7 +24,6 @@ import {
   ErrorState,
   LoadingState,
 } from "../components/ContentState";
-import { ServiceStatus } from "../components/ServiceStatus";
 
 const caseStatusLabels: Record<string, string> = {
   active: "进行中",
@@ -42,318 +34,113 @@ const caseStatusLabels: Record<string, string> = {
   closed: "已关闭",
 };
 
+type Entry = { title: string; description: string; to: string; icon: LucideIcon };
+type Todo = { title: string; description: string; to: string; icon: LucideIcon; count: number | null; attention?: boolean };
+
+function DashboardPanel({ title, id, description, children }: { title: string; id: string; description?: string; children: ReactNode }) {
+  return <Card className="dashboard-panel" role="region" aria-labelledby={id}>
+    <Card.Content className="dashboard-panel-content">
+      <header className="dashboard-panel-heading"><h2 id={id}>{title}</h2>{description && <p>{description}</p>}</header>
+      {children}
+    </Card.Content>
+  </Card>;
+}
+
+function displayTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "时间待补充" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+}
+
 export function DashboardPage() {
   const { token, user } = useAuth();
-  const isCommander = user?.global_capabilities.includes("commander") ?? false;
-  const isAdmin = user?.global_capabilities.includes("admin") ?? false;
-  const [cases, setCases] = useState<CaseListItem[]>([]);
-  const [details, setDetails] = useState<CaseDetail[]>([]);
-  const [pendingIntakeCases, setPendingIntakeCases] = useState<
-    CommandIntakeCase[]
-  >([]);
-  const [archiveDrafts, setArchiveDrafts] = useState<ArchiveDraft[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const loadDashboard = useCallback(async () => {
-    if (!token) return;
-    setIsLoading(true);
-    setError("");
-    try {
-      const [items, intakeCases, archives] = await Promise.all([
-        listCases(token),
-        isCommander ? listCommandIntake(token) : Promise.resolve([]),
-        isAdmin ? listAdminArchiveDrafts(token) : Promise.resolve([]),
-      ]);
-      const settledDetails = await Promise.allSettled(
-        items.slice(0, 20).map((item) => getCase(token, item.id)),
-      );
-      const loaded = settledDetails.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-
-      setCases(items);
-      setDetails(loaded);
-      setPendingIntakeCases(intakeCases);
-      setArchiveDrafts(archives);
-      if (loaded.length !== items.length) {
-        setError("部分案件详情暂时不可用，统计数据可能不完整。");
-      }
-    } catch (cause) {
-      setCases([]);
-      setDetails([]);
-      setPendingIntakeCases([]);
-      setArchiveDrafts([]);
-      setError(cause instanceof Error ? cause.message : "无法连接案件服务。");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isAdmin, isCommander, token]);
-
-  useEffect(() => {
-    void loadDashboard();
-  }, [loadDashboard]);
-
-  const pendingClues = useMemo(
-    () =>
-      details
-        .flatMap((item) => item.clues)
-        .filter((clue) => clue.status === "pending_review").length,
-    [details],
-  );
-  const activeCases = cases.filter((item) => item.status === "active").length;
-  const confirmedClues = details
-    .flatMap((item) => item.clues)
-    .filter((clue) => clue.status === "confirmed").length;
-  const statusRecordCount = cases.length + pendingIntakeCases.length;
-  const emptyState =
-    user?.account_type === "learner"
-      ? {
-          title: "新人账号暂未获得案件权限",
-          description:
-            "当前后端只会返回你作为案件成员可访问的案件；学习模块尚未提供接口。",
-        }
-      : user?.global_capabilities.includes("admin")
-        ? {
-            title: "管理员账号不自动拥有案件权限",
-            description:
-              "管理员需要先被授予具体案件成员关系，才能查看案件内容。",
-          }
-        : {
-            title: "当前没有可访问案件",
-            description: "创建案件或由案件成员邀请后，案件会显示在这里。",
-          };
-
-  const metrics = [
-    {
-      label: "活动案件",
-      value: activeCases,
-      icon: RadioTower,
-      iconClass: "bg-red-50 text-red-700",
-    },
-    ...(isCommander
-      ? [
-          {
-            label: "待受理案件",
-            value: pendingIntakeCases.length,
-            icon: RadioTower,
-            iconClass: "bg-violet-50 text-violet-700",
-          },
-        ]
-      : []),
-    {
-      label: "待审核线索",
-      value: pendingClues,
-      icon: FileSearch,
-      iconClass: "bg-amber-50 text-amber-700",
-    },
-    {
-      label: "已确认线索",
-      value: confirmedClues,
-      icon: ClipboardCheck,
-      iconClass: "bg-blue-50 text-blue-700",
-    },
-    {
-      label: "可访问案件",
-      value: cases.length,
-      icon: UsersRound,
-      iconClass: "bg-emerald-50 text-emerald-700",
-    },
+  const access = workspaceAccess(user);
+  const data = useDashboardData();
+  const entries: Entry[] = [
+    ...(access.family ? [
+      { title: "发起求助", description: "登记走失信息，继续未完成的求助。", to: "/family/intake", icon: HeartHandshake },
+      { title: "公开进展", description: "查看关联案件的已确认进展与联系提醒。", to: "/family", icon: RadioTower },
+    ] : []),
+    ...(access.commander ? [{ title: "案件与线索", description: "受理案件、审核线索，查看任务安全提示。", to: "/command", icon: RadioTower }] : []),
+    ...(access.volunteer ? [{ title: "我的任务", description: "查看分派与协作任务，按安全提示参与行动。", to: "/volunteer", icon: Navigation }] : []),
+    ...(access.admin ? [
+      { title: "账号审核", description: "审核已验证邮箱的访问申请。", to: "/admin/access-requests", icon: ShieldCheck },
+      { title: "内容治理", description: "维护学习资料、题库与知识内容。", to: "/admin/learning", icon: BookOpen },
+      { title: "归档审核", description: "核对脱敏材料、审核与发布案例草稿。", to: "#archive-review", icon: FileSearch },
+    ] : []),
+    ...(access.learning ? [{ title: "学习中心", description: "阅读业务资料、练习题目，回顾个人学习。", to: "/learning", icon: BookOpen }] : []),
+    { title: "个人资料", description: "维护个人信息与工作偏好。", to: "/profile", icon: UserRound },
   ];
+  const activeTasks = data.tasks.items.filter((task) => ["assigned", "accepted", "active", "blocked"].includes(task.status));
+  const reviewCount = data.reviews.items.flatMap((item) => item.clues).filter((clue) => clue.status === "pending_review").length;
+  const firstReviewCase = data.reviews.items.find((item) => item.clues.some((clue) => clue.status === "pending_review"));
+  const todos: Todo[] = [
+    ...(access.family ? [{ title: "继续求助登记", description: data.sessions.error || "本人尚未完成的登记与信息确认。", to: data.sessions.items[0] ? `/family/intake?session_id=${encodeURIComponent(data.sessions.items[0].id)}` : "/family/intake", icon: HeartHandshake, count: data.sessions.error ? null : data.sessions.items.length }] : []),
+    ...(access.commander ? [
+      { title: "待受理案件", description: data.intake.error || "尚未有指挥人员受理的案件，进入指挥端处理。", to: "/command", icon: RadioTower, count: data.intake.error ? null : data.intake.items.length, attention: true },
+      { title: "待审核线索", description: data.reviews.error || (data.reviews.partial ? "仅已加载的前20个指挥成员案件，非全量统计。" : "仅统计本人具有指挥成员权限的案件。"), to: firstReviewCase ? `/command/cases/${firstReviewCase.id}#case-clues` : "/command", icon: FileSearch, count: data.reviews.error ? null : reviewCount, attention: true },
+    ] : []),
+    ...(access.volunteer ? [{ title: "待处理任务", description: data.tasks.error || "包含本人分派及协作任务；不含已完成或已取消任务。", to: "/volunteer", icon: ListChecks, count: data.tasks.error ? null : activeTasks.length }] : []),
+    ...(access.admin ? [
+      { title: "待审核账号", description: data.requests.error || "已完成邮箱验证、等待管理员审核的申请。", to: "/admin/access-requests", icon: ShieldCheck, count: data.requests.error ? null : data.requests.items.filter((item) => item.status === "pending_review").length, attention: true },
+      { title: "待处理归档", description: data.archives.error || "待脱敏或待审核的案例草稿，不含已发布材料。", to: "#archive-review", icon: ClipboardCheck, count: data.archives.error ? null : data.archives.items.filter((item) => item.status === "draft" || item.status === "pending_review").length },
+    ] : []),
+  ];
+  const caseHref = (item: CaseListItem) => access.family && item.access_role === "family" ? `/family/cases/${item.id}` : access.commander && item.access_role === "commander" ? `/command/cases/${item.id}` : access.volunteer && item.access_role === "volunteer" ? "/volunteer" : undefined;
+  const caseDescription = user?.account_type === "learner" ? "新人账号暂未获得案件权限" : access.admin ? "管理员账号不自动拥有案件权限" : "当前没有可访问案件";
+  const sourceErrors = [data.cases.error, data.intake.error, data.sessions.error, data.tasks.error, data.archives.error, data.requests.error, data.reviews.error].filter(Boolean);
+  const recent = [
+    ...data.cases.items.map((item) => ({ key: `case-${item.id}`, title: item.case_code, description: `案件更新 · ${caseStatusLabels[item.status] ?? item.status}`, at: item.updated_at, to: caseHref(item) })),
+    ...data.tasks.items.map((item) => ({ key: `task-${item.id}`, title: item.title, description: "任务记录更新", at: item.updated_at, to: "/volunteer" })),
+    ...data.sessions.items.filter((item) => item.updated_at).map((item) => ({ key: `session-${item.id}`, title: "求助登记", description: "尚未完成的登记记录更新", at: item.updated_at!, to: `/family/intake?session_id=${encodeURIComponent(item.id)}` })),
+  ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 5);
 
-  return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 lg:px-10 lg:py-10">
-      <header className="mb-7 flex min-h-14 flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
-        <div>
-          <span className="mb-1 block text-xs font-semibold text-slate-500">
-            {user?.display_name}
-          </span>
-          <h1 className="m-0 text-2xl font-bold text-slate-950 lg:text-3xl">
-            行动总览
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            isDisabled={isLoading}
-            onPress={() => void loadDashboard()}
-          >
-            <RefreshCw size={16} aria-hidden="true" />
-            刷新
-          </Button>
-          <ServiceStatus />
-        </div>
-      </header>
+  return <div className="dashboard-page">
+    <header className="dashboard-header">
+      <div><div className="dashboard-identity"><span>{workspaceIdentity(user)}</span><span>当前工作区</span></div>
+        <h1>总览首页</h1><p>从当前身份出发，先处理重要事项，再查看工作进展。</p>
+      </div>
+      <Button variant="secondary" className="dashboard-refresh" isDisabled={data.loading} onPress={() => void data.load()}><RefreshCw size={16} aria-hidden="true" />刷新数据</Button>
+    </header>
 
-      {error && !isLoading && cases.length > 0 && (
-        <div
-          className="mb-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-          role="status"
-        >
-          {error}
-        </div>
-      )}
+    <section className="dashboard-core" aria-labelledby="dashboard-core-title">
+      <h2 id="dashboard-core-title" className="dashboard-section-title">核心工作入口</h2>
+      <div className={`dashboard-entry-grid entry-count-${Math.min(entries.length, 4)}`}>
+        {entries.map(({ title, description, to, icon: Icon }, index) => {
+          const content = <><span className="dashboard-entry-icon" aria-hidden="true"><Icon size={22} /></span><div className="dashboard-entry-copy"><h3>{title}</h3><p>{description}</p></div><span className="dashboard-entry-action">{index === 0 ? "开始处理" : "进入"}<ArrowRight size={16} aria-hidden="true" /></span></>;
+          return to.startsWith("#") ? <a key={title} href={to} className={`dashboard-entry ${index === 0 ? "is-primary" : ""}`}>{content}</a> : <Link key={title} to={to} className={`dashboard-entry ${index === 0 ? "is-primary" : ""}`}>{content}</Link>;
+        })}
+      </div>
+    </section>
 
-      {isLoading ? (
-        <section
-          className="border-y border-slate-200 bg-white"
-          aria-label="正在加载行动总览"
-        >
-          <LoadingState label="正在加载案件和线索统计" />
-        </section>
-      ) : error && cases.length === 0 ? (
-        <section
-          className="border-y border-slate-200 bg-white"
-          aria-label="行动总览加载失败"
-        >
-          <ErrorState message={error} onRetry={() => void loadDashboard()} />
-        </section>
-      ) : (
-        <>
-          <section
-            className="mb-7 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 lg:gap-3"
-            aria-label="行动指标"
-          >
-            {metrics.map(({ label, value, icon: Icon, iconClass }) => (
-              <Card
-                key={label}
-                className="min-h-24 rounded-md! border border-slate-200 shadow-none"
-              >
-                <Card.Content className="flex h-full flex-row! items-center! gap-3 p-4">
-                  <span
-                    className={`grid size-10 shrink-0 place-items-center rounded-md ${iconClass}`}
-                    aria-hidden="true"
-                  >
-                    <Icon size={19} />
-                  </span>
-                  <div className="min-w-0">
-                    <span className="block whitespace-nowrap text-xs text-slate-500">
-                      {label}
-                    </span>
-                    <strong className="mt-1 block text-2xl leading-none text-slate-950">
-                      {value}
-                    </strong>
-                  </div>
-                </Card.Content>
-              </Card>
-            ))}
-          </section>
-
-          {isAdmin && (
-            <section
-              className="mb-7 overflow-hidden border-y border-violet-200 bg-violet-50"
-              aria-labelledby="archive-review-title"
-            >
-              <header className="border-b border-violet-200 px-5 py-4">
-                <span className="block text-xs font-semibold text-violet-700">
-                  管理员审核
-                </span>
-                <h2
-                  id="archive-review-title"
-                  className="m-0 mt-1 text-base font-bold text-slate-950"
-                >
-                  案例整理草稿
-                </h2>
-                <p className="mb-0 mt-1 text-xs leading-5 text-slate-600">
-                  必须先完成脱敏确认，才可发布为学习资源；撤回不影响原案件。
-                </p>
-              </header>
-              {archiveDrafts.length === 0 ? (
-                <p className="m-0 px-5 py-4 text-sm text-slate-600">
-                  暂无需要审核的案例整理草稿。
-                </p>
-              ) : (
-                <div className="grid gap-3 p-5 lg:grid-cols-2">
-                  {archiveDrafts.map((draft) => (
-                    <ArchiveReviewCard
-                      key={draft.id}
-                      draft={draft}
-                      token={token}
-                      onChanged={(updated) =>
-                        setArchiveDrafts((current) =>
-                          current.map((item) =>
-                            item.id === updated.id ? updated : item,
-                          ),
-                        )
-                      }
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-
-          <section
-            className="overflow-hidden border-y border-slate-200 bg-white"
-            aria-labelledby="case-status-title"
-          >
-            <header className="flex min-h-18 items-center justify-between gap-5 border-b border-slate-200 px-5 py-4">
-              <div>
-                <span className="mb-0.5 block text-xs font-semibold text-slate-500">
-                  实时状态
-                </span>
-                <h2
-                  id="case-status-title"
-                  className="m-0 text-base font-bold text-slate-950"
-                >
-                  案件态势
-                </h2>
-              </div>
-              <Chip size="sm" variant="soft">
-                <Chip.Label>{statusRecordCount} 条记录</Chip.Label>
-              </Chip>
-            </header>
-            {statusRecordCount === 0 ? (
-              <EmptyState icon={RadioTower} {...emptyState} />
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {pendingIntakeCases.map((item) => (
-                  <div
-                    key={item.id}
-                    className="grid gap-2 bg-violet-50/50 px-5 py-3 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center"
-                  >
-                    <strong className="text-sm text-slate-950">
-                      {item.case_code}
-                    </strong>
-                    <span className="text-sm text-slate-600">
-                      地区：{item.area_hint ?? "待补充"} · 走失时间：
-                      {item.last_seen_at ?? "待补充"} · 老人年龄：
-                      {item.elder_age == null
-                        ? "待补充"
-                        : `${item.elder_age} 岁`}
-                    </span>
-                    <Chip size="sm" variant="soft">
-                      <Chip.Label>待受理</Chip.Label>
-                    </Chip>
-                  </div>
-                ))}
-                {cases.slice(0, 6).map((item) => (
-                  <div
-                    key={item.id}
-                    className="grid gap-2 px-5 py-3 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center"
-                  >
-                    <strong className="text-sm text-slate-950">
-                      {item.case_code}
-                    </strong>
-                    <span className="truncate text-sm text-slate-600">
-                      {item.display_name} ·{" "}
-                      {item.last_seen_location ?? "地点待补充"}
-                    </span>
-                    <Chip size="sm" variant="soft">
-                      <Chip.Label>
-                        {caseStatusLabels[item.status] ?? item.status}
-                      </Chip.Label>
-                    </Chip>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        </>
-      )}
+    <div className="dashboard-work-grid">
+      <DashboardPanel title="我的待办" id="dashboard-todo-title" description="数量来自当前账号获授权的接口返回范围。">
+        {data.loading ? <LoadingState label="正在加载工作待办" /> : <>
+          {sourceErrors.length > 0 && <div className="dashboard-warning" role="status">部分数据暂时不可用，未加载的数量以“—”显示。可刷新数据重试。</div>}
+          {todos.length === 0 ? <EmptyState icon={BookOpen} title="暂无业务待办" description="学习账号可前往学习中心阅读资料与练习；当前没有分派学习待办的接口。" /> : <div className="dashboard-todo-list">{todos.map(({ title, description, to, icon: Icon, count, attention }) => {
+            const content = <><span className="dashboard-todo-icon" aria-hidden="true"><Icon size={19} /></span><span className="dashboard-todo-copy"><strong>{title}</strong><span>{description}</span></span><span className={`dashboard-todo-count ${attention && count && count > 0 ? "needs-attention" : ""}`} aria-label={count === null ? "数量未加载" : `${count} 项`}>{count ?? "—"}</span><ArrowRight size={16} aria-hidden="true" /></>;
+            return to.startsWith("#") ? <a key={title} href={to} className="dashboard-todo-row">{content}</a> : <Link key={title} to={to} className="dashboard-todo-row">{content}</Link>;
+          })}</div>}
+        </>}
+      </DashboardPanel>
+      <aside className="dashboard-summary" aria-labelledby="dashboard-summary-title">
+        <div className="dashboard-summary-heading"><span aria-hidden="true"><ShieldCheck size={20} /></span><h2 id="dashboard-summary-title">当前工作摘要</h2></div>
+        <p>{user?.display_name}，以下仅包含当前账号可见的工作范围。</p>
+        {data.loading ? <p role="status">正在读取案件范围…</p> : data.cases.error ? <p role="status">{data.cases.error}</p> : data.cases.items.length > 0 ? <dl><div><dt>可访问案件</dt><dd>{data.cases.items.length} 件</dd></div><div><dt>其中进行中</dt><dd>{data.cases.items.filter((item) => item.status === "active").length} 件</dd></div></dl> : <p className="dashboard-scope-note">{caseDescription}</p>}
+        <div className="dashboard-role-note"><strong>{access.commander || access.volunteer ? "安全与权限提醒" : "工作提醒"}</strong><p>{access.commander ? "线索审核仅限已加入的指挥案件。任务风险与安全提示请进入案件查看；本页没有独立安全告警统计。" : access.volunteer ? "行动前查看任务安全提示；受阻时及时反馈，不以任务数量代替风险判断。" : access.admin ? "治理权限不等于案件访问权限。案例发布前仍须完成脱敏与审核。" : access.family ? "公开进展以已确认信息为准。需要补充的信息请进入对应案件查看。" : "学习中心已接入资料与练习功能，学习权限不代表案件访问权限。"}</p></div>
+      </aside>
     </div>
-  );
+
+    {access.commander && !data.loading && data.intake.items.length > 0 && <DashboardPanel title="待受理案件摘要" id="dashboard-intake-title" description="仅展示受理前可见的基本信息；进入指挥端受理后查看详情。"><div className="dashboard-intake-list">{data.intake.items.slice(0, 3).map((item) => <Link to="/command" key={item.id}><span><strong>{item.case_code}</strong><span>地区：{item.area_hint ?? "待补充"} · 走失时间：{item.last_seen_at ?? "待补充"} · 老人年龄：{item.elder_age == null ? "待补充" : `${item.elder_age} 岁`}</span></span><span className="dashboard-status-tag">待受理</span></Link>)}</div></DashboardPanel>}
+
+    <DashboardPanel title="最近更新" id="dashboard-recent-title" description="按返回记录的更新时间排列，最多展示5条；不是操作日志。">
+      {data.loading ? <LoadingState label="正在加载最近更新" /> : recent.length > 0 ? <ul className="dashboard-recent-list">{recent.map((item) => <li key={item.key}><Clock3 size={17} aria-hidden="true" /><div>{item.to ? <Link to={item.to}>{item.title}</Link> : <strong>{item.title}</strong>}<p>{item.description}</p></div><time dateTime={item.at}>{displayTime(item.at)}</time></li>)}</ul> : data.cases.error || data.tasks.error || data.sessions.error ? <ErrorState message="最近更新的数据源暂时不可用。" onRetry={() => void data.load()} /> : <EmptyState icon={Clock3} title="暂无最近更新" description="相关案件、任务或求助登记更新后，会在这里显示。" />}
+    </DashboardPanel>
+
+    {access.admin && <section id="archive-review" className="dashboard-archive" aria-labelledby="archive-review-title">
+      <header className="dashboard-panel-heading"><h2 id="archive-review-title">案例整理草稿</h2><p>保留现有审核流程：先确认脱敏，再审核发布；撤回不影响原案件。</p></header>
+      {data.loading ? <LoadingState label="正在加载归档审核" /> : data.archives.error ? <ErrorState message={data.archives.error} onRetry={() => void data.load()} /> : data.archives.items.length === 0 ? <EmptyState icon={ClipboardCheck} title="暂无案例整理草稿" description="需要审核的归档材料会显示在这里。" /> : <div className="dashboard-archive-list">{data.archives.items.map((draft) => <ArchiveReviewCard key={draft.id} draft={draft} token={token} onChanged={data.updateArchive} />)}</div>}
+    </section>}
+  </div>;
 }
 
 function ArchiveReviewCard({

@@ -12,8 +12,16 @@ async function loginAs(page: Page, email: string) {
   });
   await page.goto("/", { waitUntil: "networkidle" });
 
-  const emailInput = page.getByRole("textbox", { name: "邮箱" });
-  const passwordInput = page.getByRole("textbox", { name: "密码" });
+  const roleName = email.startsWith("family")
+    ? "家属 / 知情人"
+    : email.startsWith("volunteer")
+      ? "志愿者"
+      : "指挥 / 管理人员";
+  await page.getByRole("button", { name: new RegExp(roleName) }).click();
+  const loginDialog = page.getByRole("dialog", { name: `${roleName}登录` });
+  await expect(loginDialog).toBeVisible();
+  const emailInput = loginDialog.getByRole("textbox", { name: "邮箱" });
+  const passwordInput = loginDialog.getByRole("textbox", { name: "密码" });
   await expect(emailInput).toBeVisible({ timeout: 30_000 });
   await emailInput.fill(email);
   await passwordInput.fill(password);
@@ -24,13 +32,13 @@ async function loginAs(page: Page, email: string) {
       response.request().method() === "POST" &&
       response.ok(),
   );
-  await page.getByRole("button", { name: "登录" }).click();
+  await loginDialog.getByRole("button", { name: "登录" }).click();
   await loginResponse;
   const expectedHeading = email.startsWith("family")
     ? "说清楚情况，安心看进展"
     : email.startsWith("commander")
       ? "案件指挥"
-      : "行动总览";
+      : "总览首页";
   await expect(page.getByRole("heading", { name: expectedHeading })).toBeVisible({
     timeout: 30_000,
   });
@@ -53,14 +61,19 @@ test("invalid credentials never establish a browser session", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "邮箱" }).fill("family@demo.invalid");
-  await page.getByRole("textbox", { name: "密码" }).fill("wrong-password");
-  await page.getByRole("button", { name: "登录" }).click();
+  await page.getByRole("button", { name: /家属 \/ 知情人/ }).click();
+  const loginDialog = page.getByRole("dialog", { name: "家属 / 知情人登录" });
+  await expect(loginDialog).toBeVisible();
+  await loginDialog
+    .getByRole("textbox", { name: "邮箱" })
+    .fill("family@demo.invalid");
+  await loginDialog.getByRole("textbox", { name: "密码" }).fill("wrong-password");
+  await loginDialog.getByRole("button", { name: "登录" }).click();
 
   await expect(page.getByRole("alert")).toContainText("邮箱或密码错误");
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: /帮助失联老人/ }),
+    page.getByRole("heading", { name: "安归 · 统一身份入口" }),
   ).toBeVisible();
 });
 
@@ -69,14 +82,16 @@ test("the redesigned login keeps role guidance and submits an access request", a
 }, testInfo) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: /帮助失联老人/ }),
+    page.getByRole("heading", { name: "安归 · 统一身份入口" }),
   ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "邮箱" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "密码" })).toHaveCount(0);
   await page.getByRole("button", { name: /志愿者/ }).click();
-  await expect(page.getByRole("button", { name: /志愿者/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await page.getByRole("link", { name: "申请访问" }).click();
+  const loginDialog = page.getByRole("dialog", { name: "志愿者登录" });
+  await expect(loginDialog).toBeVisible();
+  await expect(loginDialog.getByRole("textbox", { name: "邮箱" })).toBeVisible();
+  await expect(loginDialog.getByRole("textbox", { name: "密码" })).toBeVisible();
+  await loginDialog.getByRole("link", { name: "申请访问" }).click();
   await expect(page).toHaveURL(/\/access-request\?role=volunteer$/);
   await expect(
     page.getByRole("heading", { name: "申请访问安归" }),
@@ -106,11 +121,11 @@ test("a family member can log in and logout, but cannot open the commander works
 
   await page.goto("/command");
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "行动总览" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "总览首页" })).toBeVisible();
 
   await page.getByRole("button", { name: "退出登录" }).first().click();
   await expect(
-    page.getByRole("heading", { name: /帮助失联老人/ }),
+    page.getByRole("heading", { name: "安归 · 统一身份入口" }),
   ).toBeVisible();
 });
 
@@ -130,5 +145,5 @@ test("a commander can open command work but is redirected away from family-only 
 
   await page.goto("/family", { waitUntil: "networkidle" });
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "行动总览" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "总览首页" })).toBeVisible();
 });

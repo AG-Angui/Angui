@@ -8,6 +8,9 @@ import type { GlobalCapability } from "./api/auth";
 const mocked = vi.hoisted(() => ({
   auth: null as AuthContextValue | null,
   listCases: vi.fn().mockResolvedValue([]),
+  listCommandIntake: vi.fn().mockResolvedValue([]),
+  listAdminArchiveDrafts: vi.fn().mockResolvedValue([]),
+  listMyTasks: vi.fn().mockResolvedValue([]),
   getCase: vi.fn(),
   getCaseResourceConfiguration: vi.fn(),
   listLearningResources: vi.fn().mockResolvedValue([]),
@@ -33,7 +36,12 @@ const mocked = vi.hoisted(() => ({
 }));
 
 vi.mock("./auth/useAuth", () => ({ useAuth: () => mocked.auth }));
+vi.mock("./api/intake", () => ({ listIntakeSessions: vi.fn().mockResolvedValue([]) }));
+vi.mock("./api/accessRequests", () => ({ listAccessRequests: vi.fn().mockResolvedValue([]) }));
 vi.mock("./api/cases", () => ({
+  listCommandIntake: (...args: unknown[]) => mocked.listCommandIntake(...args),
+  listAdminArchiveDrafts: (...args: unknown[]) => mocked.listAdminArchiveDrafts(...args),
+  listMyTasks: (...args: unknown[]) => mocked.listMyTasks(...args),
   listCases: (...args: unknown[]) => mocked.listCases(...args),
   getCase: (...args: unknown[]) => mocked.getCase(...args),
   createCase: vi.fn(),
@@ -132,8 +140,18 @@ describe("application role routing", () => {
     setAuth(null);
     renderApp();
     expect(
-      screen.getByRole("heading", { name: /帮助失联老人/ }),
+      screen.getByRole("heading", { name: "安归 · 统一身份入口" }),
     ).toBeInTheDocument();
+    for (const roleName of [/家属 \/ 知情人/, /志愿者/, /指挥 \/ 管理人员/]) {
+      expect(screen.getByRole("button", { name: roleName })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "邮箱" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "密码" }),
+    ).not.toBeInTheDocument();
   });
 
   it.each([
@@ -168,7 +186,7 @@ describe("application role routing", () => {
     setAuth("member", ["commander", "volunteer"]);
     renderApp();
     await waitFor(() =>
-      expect(screen.getByText("行动总览")).toBeInTheDocument(),
+      expect(screen.getByText("总览首页")).toBeInTheDocument(),
     );
     for (const workspace of ["指挥端", "志愿者端"]) {
       expect(screen.getByRole("link", { name: workspace })).toBeInTheDocument();
@@ -181,7 +199,7 @@ describe("application role routing", () => {
   it("redirects a commander away from the family workspace", async () => {
     setAuth("member", ["commander"]);
     renderApp("/family");
-    expect(await screen.findByText("行动总览")).toBeInTheDocument();
+    expect(await screen.findByText("总览首页")).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "家属端" }),
     ).not.toBeInTheDocument();
@@ -212,7 +230,7 @@ describe("application role routing", () => {
     async (_description, capabilities, path) => {
       setAuth("member", capabilities);
       renderApp(path);
-      expect(await screen.findByText("行动总览")).toBeInTheDocument();
+      expect(await screen.findByText("总览首页")).toBeInTheDocument();
       expect(
         screen.queryByRole("link", { name: "指挥端" }),
       ).not.toBeInTheDocument();
@@ -251,7 +269,7 @@ describe("application role routing", () => {
   it("does not expose the learning center to commander-only audiences", async () => {
     setAuth("member", ["commander"]);
     renderApp("/learning");
-    expect(await screen.findByText("行动总览")).toBeInTheDocument();
+    expect(await screen.findByText("总览首页")).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "学习中心" }),
     ).not.toBeInTheDocument();
@@ -268,7 +286,7 @@ describe("application role routing", () => {
     cleanup();
     setAuth("member", ["commander"]);
     renderApp("/admin/learning");
-    expect(await screen.findByText("行动总览")).toBeInTheDocument();
+    expect(await screen.findByText("总览首页")).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "内容治理" }),
     ).not.toBeInTheDocument();

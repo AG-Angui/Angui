@@ -268,7 +268,7 @@ export function CaseWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     return (
       <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="grid gap-6 lg:grid-cols-[248px_minmax(0,1fr)]">
-          <aside className="lg:sticky lg:top-6 lg:self-start">
+          <aside className="lg:sticky lg:top-[88px] lg:self-start">
             <nav
               className="border border-slate-200 bg-white p-4"
               aria-label="案件详情导航"

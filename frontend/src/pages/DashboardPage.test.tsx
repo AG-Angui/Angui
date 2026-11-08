@@ -1,5 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
+import { within } from "@testing-library/react";
+import { ApiClientError } from "../api/client";
+
+function renderDashboard() { return render(<MemoryRouter><DashboardPage /></MemoryRouter>); }
 import { DashboardPage } from "./DashboardPage";
 
 const mocked = vi.hoisted(() => ({
@@ -12,6 +17,10 @@ const mocked = vi.hoisted(() => ({
   restoreArchiveReviewMaterial: vi.fn(),
   listCases: vi.fn(),
   listCommandIntake: vi.fn(),
+  listMyTasks: vi.fn(),
+  listIntakeSessions: vi.fn(),
+  listAccessRequests: vi.fn(),
+  accountType: "member",
   globalCapabilities: [] as string[],
 }));
 
@@ -22,12 +31,15 @@ vi.mock("../auth/useAuth", () => ({
       id: "family-1",
       email: "family@demo.invalid",
       display_name: "模拟家属",
-      account_type: "member",
+      account_type: mocked.accountType,
       global_capabilities: mocked.globalCapabilities,
     },
   }),
 }));
+vi.mock("../api/intake", () => ({ listIntakeSessions: (...args: unknown[]) => mocked.listIntakeSessions(...args) }));
+vi.mock("../api/accessRequests", () => ({ listAccessRequests: (...args: unknown[]) => mocked.listAccessRequests(...args) }));
 vi.mock("../api/cases", () => ({
+  listMyTasks: (...args: unknown[]) => mocked.listMyTasks(...args),
   deidentifyArchiveDraft: (...args: unknown[]) =>
     mocked.deidentifyArchiveDraft(...args),
   reviewArchiveDraft: (...args: unknown[]) =>
@@ -50,7 +62,12 @@ vi.mock("../components/ServiceStatus", () => ({
 
 describe("DashboardPage", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mocked.globalCapabilities = [];
+    mocked.accountType = "member";
+    mocked.listMyTasks.mockResolvedValue([]);
+    mocked.listIntakeSessions.mockResolvedValue([]);
+    mocked.listAccessRequests.mockResolvedValue([]);
     mocked.listCases.mockResolvedValue([]);
     mocked.deidentifyArchiveDraft.mockResolvedValue({});
     mocked.reviewArchiveDraft.mockResolvedValue({});
@@ -66,13 +83,14 @@ describe("DashboardPage", () => {
     mocked.restoreArchiveReviewMaterial.mockResolvedValue({});
   });
 
-  it("warns when the 20-detail statistics limit truncates the visible case list", async () => {
+  it("discloses when the 20-detail limit truncates command review scope", async () => {
+    mocked.globalCapabilities = ["commander"];
     mocked.listCases.mockResolvedValue(
       Array.from({ length: 21 }, (_, index) => ({
         id: `case-${index + 1}`,
         case_code: `AG-${index + 1}`,
         status: "active",
-        access_role: "family",
+        access_role: "commander",
         display_name: `模拟案件 ${index + 1}`,
         last_seen_at: null,
         last_seen_location: null,
@@ -82,10 +100,10 @@ describe("DashboardPage", () => {
     );
     mocked.getCase.mockResolvedValue({ clues: [] });
 
-    render(<DashboardPage />);
+    renderDashboard();
 
     expect(
-      await screen.findByText("部分案件详情暂时不可用，统计数据可能不完整。"),
+      await screen.findByText("仅已加载的前20个指挥成员案件，非全量统计。"),
     ).toBeInTheDocument();
     expect(mocked.getCase).toHaveBeenCalledTimes(20);
   });
@@ -104,9 +122,10 @@ describe("DashboardPage", () => {
       },
     ]);
 
-    render(<DashboardPage />);
+    renderDashboard();
 
-    expect(await screen.findByText("待受理案件")).toBeInTheDocument();
+    expect(await screen.findByText("AG-PENDING")).toBeInTheDocument();
+    expect(screen.getByText("待受理案件")).toBeInTheDocument();
     expect(screen.getByText("AG-PENDING")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -115,6 +134,121 @@ describe("DashboardPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("待受理")).toBeInTheDocument();
     expect(mocked.listCommandIntake).toHaveBeenCalledWith("test-session");
+  });
+
+  it("prioritizes family help, resumes real drafts and never loads operational queues", async () => {
+    mocked.listIntakeSessions.mockResolvedValue([{ id: "draft & one", updated_at: "2026-11-07T08:00:00Z" }]);
+    renderDashboard();
+    expect(await screen.findByRole("link", { name: /继续求助登记/ })).toHaveAttribute("href", "/family/intake?session_id=draft%20%26%20one");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "总览首页" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /发起求助/ })).toHaveAttribute("href", "/family/intake");
+    expect(screen.getByRole("link", { name: /公开进展/ })).toHaveAttribute("href", "/family");
+    expect(mocked.listMyTasks).not.toHaveBeenCalled();
+    expect(mocked.listCommandIntake).not.toHaveBeenCalled();
+    expect(mocked.listAdminArchiveDrafts).not.toHaveBeenCalled();
+    expect(mocked.listAccessRequests).not.toHaveBeenCalled();
+    expect(mocked.getCase).not.toHaveBeenCalled();
+  });
+
+  it("counts assigned and collaborator volunteer work but not terminal or unclaimed tasks", async () => {
+    mocked.globalCapabilities = ["volunteer"];
+    mocked.listMyTasks.mockResolvedValue(["assigned", "accepted", "active", "blocked", "completed", "cancelled", "pending_claim"].map((status) => ({ id: status, title: status, status, updated_at: "2026-11-07T08:00:00Z", assigned_volunteer_user_id: "someone-else", collaborators: [{ volunteer_user_id: "family-1" }] })));
+    renderDashboard();
+    const row = await screen.findByRole("link", { name: /待处理任务/ });
+    expect(within(row).getByLabelText("4 项")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /我的任务.*开始处理/ })).toHaveAttribute("href", "/volunteer");
+    expect(screen.getByRole("link", { name: /学习中心.*进入/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /发起求助/ })).not.toBeInTheDocument();
+    expect(mocked.listIntakeSessions).not.toHaveBeenCalled();
+  });
+
+  it("never treats a command-capable member's family case as command review work", async () => {
+    mocked.globalCapabilities = ["commander"];
+    mocked.listCases.mockResolvedValue([
+      { id: "family-case", case_code: "F", access_role: "family", updated_at: "2026-11-07T08:00:00Z" },
+      { id: "command-case", case_code: "C", access_role: "commander", updated_at: "2026-11-07T08:00:00Z" },
+    ]);
+    mocked.getCase.mockResolvedValue({ id: "command-case", clues: [{ status: "pending_review" }, { status: "needs_verification" }] });
+    renderDashboard();
+    const row = await screen.findByRole("link", { name: /待审核线索/ });
+    expect(within(row).getByLabelText("1 项")).toBeInTheDocument();
+    expect(row).toHaveAttribute("href", "/command/cases/command-case#case-clues");
+    expect(mocked.getCase).toHaveBeenCalledExactlyOnceWith("test-session", "command-case");
+    expect(screen.queryByRole("link", { name: /学习中心/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /发起求助/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps combined capabilities additive without inventing family access", async () => {
+    mocked.globalCapabilities = ["commander", "volunteer"];
+    renderDashboard();
+    await screen.findByRole("link", { name: /待处理任务/ });
+    for (const name of [/案件与线索/, /我的任务.*进入/, /学习中心/]) expect(screen.getByRole("link", { name })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /公开进展/ })).not.toBeInTheDocument();
+    expect(mocked.listMyTasks).toHaveBeenCalledWith("test-session");
+    expect(mocked.listCommandIntake).toHaveBeenCalledWith("test-session");
+  });
+
+  it("shows real admin outstanding counts and no case-membership shortcuts", async () => {
+    mocked.globalCapabilities = ["admin"];
+    mocked.listAccessRequests.mockResolvedValue(["pending_review", "pending_review", "approved", "pending_email_verification", "rejected"].map((status) => ({ status })));
+    renderDashboard();
+    const row = await screen.findByRole("link", { name: /待审核账号/ });
+    expect(within(row).getByLabelText("2 项")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /归档审核.*进入/ })).toHaveAttribute("href", "#archive-review");
+    expect(screen.queryByRole("link", { name: /案件与线索|发起求助|我的任务|学习中心/ })).not.toBeInTheDocument();
+    expect(screen.getByText("管理员账号不自动拥有案件权限")).toBeInTheDocument();
+  });
+
+  it("does not manufacture a personal learning queue or fetch cases for learners", async () => {
+    mocked.accountType = "learner";
+    renderDashboard();
+    expect(await screen.findByText("暂无业务待办")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /学习中心.*开始处理/ })).toBeInTheDocument();
+    expect(screen.getByText("新人账号暂未获得案件权限")).toBeInTheDocument();
+    expect(mocked.listCases).not.toHaveBeenCalled();
+    expect(mocked.listIntakeSessions).not.toHaveBeenCalled();
+  });
+
+  it("isolates a failed task source and retries explicitly without displaying a false zero", async () => {
+    mocked.globalCapabilities = ["commander", "volunteer"];
+    mocked.listMyTasks.mockRejectedValueOnce(new Error("private-detail")).mockResolvedValueOnce([]);
+    mocked.listCommandIntake.mockResolvedValue([{ id: "intake", case_code: "AG-PENDING", area_hint: null }]);
+    renderDashboard();
+    const row = await screen.findByRole("link", { name: /待处理任务/ });
+    expect(within(row).getByLabelText("数量未加载")).toHaveTextContent("—");
+    expect(within(screen.getByRole("link", { name: /待受理案件.*1 项/ })).getByLabelText("1 项")).toBeInTheDocument();
+    expect(screen.queryByText("private-detail")).not.toBeInTheDocument();
+    expect(screen.getByText("AG-PENDING").closest("a")).toHaveAttribute("href", "/command");
+    fireEvent.click(screen.getByRole("button", { name: "刷新数据" }));
+    expect(await screen.findByRole("link", { name: /待处理任务.*0 项/ })).toBeInTheDocument();
+  });
+
+  it("does not report zero pending clues when a detail request fails", async () => {
+    mocked.globalCapabilities = ["commander"];
+    mocked.listCases.mockResolvedValue([{ id: "case", access_role: "commander", case_code: "AG-1", updated_at: "2026-11-07T08:00:00Z" }]);
+    mocked.getCase.mockRejectedValue(new Error("unavailable"));
+    renderDashboard();
+    const row = await screen.findByRole("link", { name: /待审核线索/ });
+    expect(within(row).getByLabelText("数量未加载")).toBeInTheDocument();
+    expect(screen.getByText("AG-1")).toBeInTheDocument();
+  });
+
+  it("distinguishes insufficient permission from an empty queue", async () => {
+    mocked.globalCapabilities = ["volunteer"];
+    mocked.listMyTasks.mockRejectedValue(new ApiClientError(403, "forbidden", "你没有执行此操作的权限。"));
+    renderDashboard();
+    expect(await screen.findByText("当前账号无权读取我的任务。")).toBeInTheDocument();
+    expect(within(screen.getByRole("link", { name: /待处理任务/ })).getByLabelText("数量未加载")).toBeInTheDocument();
+  });
+
+  it("keeps role actions available during initial loading", () => {
+    mocked.listIntakeSessions.mockImplementationOnce(() => new Promise(() => {}));
+    renderDashboard();
+    expect(screen.getByRole("link", { name: /发起求助/ })).toBeInTheDocument();
+    expect(screen.getByText("正在加载工作待办")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新数据" })).toBeDisabled();
+    expect(screen.queryByText("暂无最近更新")).not.toBeInTheDocument();
   });
 
   it("shows administrator material-version state for archive drafts", async () => {
@@ -243,7 +377,7 @@ describe("DashboardPage", () => {
       updated_at: "2026-07-25T08:00:00Z",
     });
 
-    render(<DashboardPage />);
+    renderDashboard();
 
     expect(await screen.findByText("审核材料版本")).toBeInTheDocument();
     expect(

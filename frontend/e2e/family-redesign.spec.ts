@@ -4,10 +4,17 @@ const password = "e2e-demo-password";
 
 async function loginAsFamily(page: Page) {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "邮箱" }).fill("family@demo.invalid");
-  await page.getByRole("textbox", { name: "密码" }).fill(password);
-  await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByRole("heading", { name: "行动总览" })).toBeVisible();
+  await page.getByRole("button", { name: /家属 \/ 知情人/ }).click();
+  const loginDialog = page.getByRole("dialog", { name: "家属 / 知情人登录" });
+  await expect(loginDialog).toBeVisible();
+  await loginDialog
+    .getByRole("textbox", { name: "邮箱" })
+    .fill("family@demo.invalid");
+  await loginDialog.getByRole("textbox", { name: "密码" }).fill(password);
+  await loginDialog.getByRole("button", { name: "登录" }).click();
+  await expect(
+    page.getByRole("heading", { name: "说清楚情况，安心看进展" }),
+  ).toBeVisible();
 }
 
 test.describe("family redesign", () => {
