@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiClientError } from "../api/client";
@@ -137,7 +137,7 @@ describe("PasswordSetupPage", () => {
     render(<PasswordSetupPage />);
     fillPasswords();
     save();
-    expect(await screen.findByRole("alert")).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveFocus());
     expect(screen.getByLabelText("新密码", { exact: true })).toHaveValue(syntheticPassword);
     expect(screen.getByLabelText("确认密码", { exact: true })).toHaveValue(syntheticPassword);
     expect(screen.queryByText("private-server-detail")).not.toBeInTheDocument();
