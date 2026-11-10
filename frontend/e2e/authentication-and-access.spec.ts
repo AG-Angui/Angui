@@ -35,7 +35,7 @@ async function loginAs(page: Page, email: string) {
   await loginDialog.getByRole("button", { name: "登录" }).click();
   await loginResponse;
   const expectedHeading = email.startsWith("family")
-    ? "说清楚情况，安心看进展"
+    ? "老人走失了？"
     : email.startsWith("commander")
       ? "案件指挥"
       : "总览首页";
@@ -114,7 +114,7 @@ test("a family member can log in and logout, but cannot open the commander works
   await loginAs(page, "family@demo.invalid");
 
   await expect(
-    page.getByRole("heading", { name: "说清楚情况，安心看进展" }),
+    page.getByRole("heading", { name: "老人走失了？" }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "家属端" })).toBeVisible();
   await expect(page.getByRole("link", { name: "指挥端" })).toHaveCount(0);

@@ -16,7 +16,7 @@ async function login(page: Page, email: string) {
   await loginDialog.getByRole("textbox", { name: "密码" }).fill(demoPassword);
   await loginDialog.getByRole("button", { name: "登录" }).click();
   await expect(
-    page.getByRole("heading", { name: "说清楚情况，安心看进展" }),
+    page.getByRole("heading", { name: "老人走失了？" }),
   ).toBeVisible();
 }
 
@@ -29,7 +29,7 @@ test("a case created through the live API is visible only in its member workspac
   await login(page, accounts.family);
   await page.goto("/family");
   await expect(
-    page.getByRole("link", { name: new RegExp(fixture.displayName) }),
+    page.getByRole("heading", { level: 3, name: fixture.displayName }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "指挥端" })).toHaveCount(0);
 
