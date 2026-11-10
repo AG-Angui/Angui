@@ -33,12 +33,16 @@ async function loginAs(page: Page, email: string) {
       response.ok(),
   );
   await loginDialog.getByRole("button", { name: "登录" }).click();
-  await loginResponse;
-  const expectedHeading = email.startsWith("family")
-    ? "老人走失了？"
-    : email.startsWith("commander")
-      ? "案件指挥"
-      : "总览首页";
+  const { user } = await (await loginResponse).json() as {
+    user: { global_capabilities: string[] };
+  };
+  const expectedHeading = user.global_capabilities.includes("admin")
+    ? "总览首页"
+    : email.startsWith("family")
+      ? "老人走失了？"
+      : email.startsWith("commander")
+        ? "案件指挥"
+        : "总览首页";
   await expect(page.getByRole("heading", { name: expectedHeading })).toBeVisible({
     timeout: 30_000,
   });
