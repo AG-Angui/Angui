@@ -15,7 +15,7 @@ actix-multipart = "0.7.2"
 # Keep HTTP/2 disabled until Actix HTTP moves to a fixed h2 release.
 # Keep zstd disabled until Actix HTTP supports the patched zstd dependency;
 # Brotli and gzip compression remain available.
-actix-web = { version = "4.14.0", default-features = false, features = [
+actix-web = { version = "4.18.2", default-features = false, features = [
     "macros",
     "compress-brotli",
     "compress-gzip",
