@@ -108,7 +108,7 @@ jobs:
           archive="gitleaks_${version}_linux_x64.tar.gz"
           tool_dir="$(mktemp -d)"
           trap 'rm -rf "${tool_dir}"' EXIT
-          curl -fsSL \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-max-time 120 \
             "https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}" \
             -o "${tool_dir}/${archive}"
           printf '%s  %s\n' \
