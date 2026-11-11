@@ -9,10 +9,15 @@ import {
 
 async function login(page: Page, email: string) {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "邮箱" }).fill(email);
-  await page.getByRole("textbox", { name: "密码" }).fill(demoPassword);
-  await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByRole("heading", { name: "行动总览" })).toBeVisible();
+  await page.getByRole("button", { name: /家属 \/ 知情人/ }).click();
+  const loginDialog = page.getByRole("dialog", { name: "家属 / 知情人登录" });
+  await expect(loginDialog).toBeVisible();
+  await loginDialog.getByRole("textbox", { name: "邮箱" }).fill(email);
+  await loginDialog.getByRole("textbox", { name: "密码" }).fill(demoPassword);
+  await loginDialog.getByRole("button", { name: "登录" }).click();
+  await expect(
+    page.getByRole("heading", { name: "老人走失了？" }),
+  ).toBeVisible();
 }
 
 test("a case created through the live API is visible only in its member workspaces", async ({
@@ -24,7 +29,7 @@ test("a case created through the live API is visible only in its member workspac
   await login(page, accounts.family);
   await page.goto("/family");
   await expect(
-    page.getByRole("link", { name: new RegExp(fixture.displayName) }),
+    page.getByRole("heading", { level: 3, name: fixture.displayName }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "指挥端" })).toHaveCount(0);
 

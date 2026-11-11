@@ -117,6 +117,20 @@ jobs:
       - name: Release build
         run: cargo build --workspace --all-features --release --locked
 
+      - name: Build E2E binaries
+        run: cargo build --workspace --locked --bins
+
+      - name: Upload E2E binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: angui-e2e-${{ env.ARTIFACT_SHA }}
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/debug/angui
+            ${{ env.CARGO_TARGET_DIR }}/debug/angui-admin
+            ${{ env.CARGO_TARGET_DIR }}/debug/migration
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload backend binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -130,7 +144,7 @@ jobs:
 
   database:
     name: PostgreSQL and MySQL migrations
-    needs: deduplicate
+    needs: [deduplicate, backend]
     # External forks never execute on the server that holds deployment access.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
     # The first CI for a SHA must be equivalent to a PR CI. Otherwise a branch
@@ -173,36 +187,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configure Rust environment
-        uses: ./.github/actions/configure-rust
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Download E2E binaries
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
-          workspaces: . -> target
-          cache-bin: "false"
+          name: angui-e2e-${{ env.ARTIFACT_SHA }}
+          path: .e2e/bin
+      - name: Make E2E binaries executable
+        run: chmod +x .e2e/bin/angui .e2e/bin/angui-admin .e2e/bin/migration
       - name: Exercise PostgreSQL migrations
         env:
           DATABASE_URL: postgres://angui:angui@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/angui
         run: |
-          cargo run --locked -p migration -- up
-          cargo run --locked -p migration -- status
-          cargo run --locked -p migration -- refresh
-          cargo run --locked -p migration -- status
+          .e2e/bin/migration up
+          .e2e/bin/migration status
+          .e2e/bin/migration refresh
+          .e2e/bin/migration status
 
       - name: Exercise MySQL migrations
         env:
           DATABASE_URL: mysql://angui:angui@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/angui
         run: |
-          cargo run --locked -p migration -- up
-          cargo run --locked -p migration -- status
+          .e2e/bin/migration up
+          .e2e/bin/migration status
           # Verify reapplying the latest migration after rollback leaves no stale indexes.
-          cargo run --locked -p migration -- down -n 1
-          cargo run --locked -p migration -- up
-          cargo run --locked -p migration -- refresh
-          cargo run --locked -p migration -- status
+          .e2e/bin/migration down -n 1
+          .e2e/bin/migration up
+          .e2e/bin/migration refresh
+          .e2e/bin/migration status
 
   frontend:
     name: Frontend checks
@@ -258,7 +269,7 @@ jobs:
 
   e2e:
     name: Browser end-to-end tests
-    needs: deduplicate
+    needs: [deduplicate, backend]
     if: needs.deduplicate.outputs.should_run == 'true'
     # External forks never execute on the server that holds deployment access.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'angui-ci' }}
@@ -268,23 +279,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configure Rust environment
-        uses: ./.github/actions/configure-rust
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Download E2E binaries
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
-          workspaces: . -> target
-          cache-bin: "false"
-          # The E2E server builds executable build scripts immediately before
-          # Playwright starts. A partial or runner-incompatible `target`
-          # restore makes Cargo reuse a missing build-script binary (for
-          # example aws-lc-rs) and prevents the web server from starting.
-          # Keep the registry/git caches, but always compile this isolated
-          # server target on the runner that will execute it.
-          cache-targets: false
+          name: angui-e2e-${{ env.ARTIFACT_SHA }}
+          path: .e2e/bin
+      - name: Make E2E binaries executable
+        run: chmod +x .e2e/bin/angui .e2e/bin/angui-admin .e2e/bin/migration
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
@@ -314,6 +315,8 @@ jobs:
 
       - name: Run browser end-to-end tests
         working-directory: frontend
+        env:
+          ANGUI_E2E_BIN_DIR: ${{ github.workspace }}/.e2e/bin
         run: yarn test:e2e
 
       - name: Upload Playwright diagnostics

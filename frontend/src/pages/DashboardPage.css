@@ -1,0 +1,88 @@
+.dashboard-page { display: grid; width: 100%; max-width: 1280px; min-width: 0; gap: 24px; margin-inline: auto; padding: 24px; }
+.dashboard-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dashboard-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.dashboard-identity > span:first-child { padding: 3px 8px; border-radius: 4px; background: var(--color-brand-50); color: var(--color-brand-700); font-weight: 550; }
+.dashboard-header h1 { margin: 0; font-size: 26px; font-weight: 650; line-height: 1.4; }
+.dashboard-header p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
+.dashboard-refresh { min-height: 44px; flex-shrink: 0; }
+.dashboard-section-title, .dashboard-panel-heading h2, .dashboard-summary h2 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.6; }
+.dashboard-section-title { margin-bottom: 12px; }
+.dashboard-entry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.dashboard-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr); grid-template-rows: 1fr auto; gap: 16px 12px; min-width: 0; min-height: 176px; padding: 20px; border: 1px solid var(--separator); border-radius: 10px; background: var(--surface); color: var(--foreground); text-decoration: none; transition: border-color 160ms, background-color 160ms; }
+.dashboard-entry.is-primary { border-color: var(--accent); background: var(--color-brand-50); }
+.dashboard-entry:hover { border-color: var(--accent); }
+.dashboard-entry-icon { display: grid; width: 42px; height: 42px; align-self: start; place-items: center; border: 1px solid var(--color-brand-100); border-radius: 10px; background: var(--color-brand-50); color: var(--accent); }
+.dashboard-entry.is-primary .dashboard-entry-icon { background: var(--surface); }
+.dashboard-entry-copy { min-width: 0; }
+.dashboard-entry h3 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.6; }
+.dashboard-entry p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.dashboard-entry-action { grid-column: 2; display: inline-flex; min-height: 24px; align-items: center; gap: 8px; color: var(--accent); font-size: 13px; font-weight: 550; }
+.dashboard-work-grid { display: grid; min-width: 0; grid-template-columns: minmax(0, 1.7fr) minmax(260px, 1fr); align-items: start; gap: 16px; }
+.dashboard-panel { min-width: 0; border: 1px solid var(--separator); border-radius: 10px !important; background: var(--surface); box-shadow: none; }
+.dashboard-panel-content { display: block !important; padding: 0 !important; }
+.dashboard-panel-heading { padding: 20px 24px 16px; }
+.dashboard-panel-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.dashboard-warning { margin: 0 24px 8px; padding: 10px 12px; border-left: 3px solid var(--color-login-warning); border-radius: 4px; background: var(--color-login-warning-soft); color: var(--color-login-warning); font-size: 12px; line-height: 1.7; }
+.dashboard-todo-list { padding: 0 24px 8px; }
+.dashboard-todo-row { display: grid; min-height: 84px; grid-template-columns: 36px minmax(0, 1fr) 40px 16px; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--separator); color: var(--foreground); text-decoration: none; }
+.dashboard-todo-row:hover { background: var(--color-brand-50); }
+.dashboard-todo-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 8px; background: var(--color-brand-50); color: var(--accent); }
+.dashboard-todo-copy { display: grid; min-width: 0; gap: 4px; }
+.dashboard-todo-copy strong { font-size: 14px; font-weight: 600; line-height: 1.6; }
+.dashboard-todo-copy > span { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.dashboard-todo-count { text-align: right; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dashboard-todo-count.needs-attention { color: var(--color-login-danger); }
+.dashboard-todo-row > svg { color: var(--muted); }
+.dashboard-summary { min-width: 0; padding: 24px; border: 1px solid var(--color-brand-100); border-radius: 10px; background: var(--color-brand-50); }
+.dashboard-summary-heading { display: flex; align-items: center; gap: 10px; }
+.dashboard-summary-heading > span { color: var(--accent); }
+.dashboard-summary > p, .dashboard-role-note p { margin: 12px 0 0; color: var(--muted); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.dashboard-summary dl { display: grid; gap: 12px; margin: 20px 0; }
+.dashboard-summary dl > div { display: flex; justify-content: space-between; gap: 16px; font-size: 14px; }
+.dashboard-summary dt { color: var(--muted); }
+.dashboard-summary dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dashboard-scope-note { padding-block: 8px; color: var(--foreground) !important; }
+.dashboard-role-note { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--color-brand-100); }
+.dashboard-role-note > strong { font-size: 13px; font-weight: 600; }
+.dashboard-role-note p { margin-top: 6px; }
+.dashboard-recent-list { margin: 0; padding: 0 24px 8px; list-style: none; }
+.dashboard-recent-list li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 16px 0; border-top: 1px solid var(--separator); }
+.dashboard-recent-list li > svg { margin-top: 3px; color: var(--muted); }
+.dashboard-recent-list a, .dashboard-recent-list strong { color: var(--foreground); font-size: 14px; font-weight: 550; text-decoration: none; overflow-wrap: anywhere; }
+.dashboard-recent-list a:hover { color: var(--accent); text-decoration: underline; }
+.dashboard-recent-list p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.dashboard-recent-list time { color: var(--muted); font-size: 12px; line-height: 24px; font-variant-numeric: tabular-nums; }
+.dashboard-intake-list { padding: 0 24px 8px; }
+.dashboard-intake-list > a { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 72px; padding-block: 12px; border-top: 1px solid var(--separator); color: var(--foreground); text-decoration: none; }
+.dashboard-intake-list > a > span:first-child { display: grid; gap: 6px; font-size: 14px; }
+.dashboard-intake-list > a > span:first-child > span { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.dashboard-status-tag { flex-shrink: 0; padding: 4px 8px; border-radius: 6px; background: var(--color-login-warning-soft); color: var(--color-login-warning); font-size: 12px; }
+.dashboard-archive { min-width: 0; scroll-margin-top: 88px; border-top: 1px solid var(--separator); }
+.dashboard-archive > .dashboard-panel-heading { padding-inline: 0; }
+.dashboard-archive-list { display: grid; gap: 16px; }
+.dashboard-archive-list > article { min-width: 0; overflow-wrap: anywhere; }
+.dashboard-page a:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+@media (min-width: 1280px) {
+  .dashboard-entry-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .dashboard-entry-grid.entry-count-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .dashboard-entry-grid.entry-count-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1199px) { .dashboard-work-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 767px) {
+  .dashboard-page { gap: 24px; padding: 24px 16px; }
+  .dashboard-header { align-items: start; gap: 12px; }
+  .dashboard-header h1 { font-size: 24px; }
+  .dashboard-header p { font-size: 13px; }
+  .dashboard-refresh { min-width: 44px; padding-inline: 10px; font-size: 12px; }
+  .dashboard-entry-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .dashboard-entry { min-height: 128px; grid-template-columns: 42px minmax(0, 1fr); gap: 8px 12px; padding: 16px; }
+  .dashboard-entry-action { margin-top: 0; }
+  .dashboard-panel-heading { padding: 16px; }
+  .dashboard-todo-list, .dashboard-recent-list, .dashboard-intake-list { padding-inline: 16px; }
+  .dashboard-warning { margin-inline: 16px; }
+  .dashboard-todo-row { grid-template-columns: 36px minmax(0, 1fr) 30px 16px; gap: 8px; }
+  .dashboard-summary { padding: 20px; }
+  .dashboard-recent-list li { grid-template-columns: 18px minmax(0, 1fr); gap: 8px; }
+  .dashboard-recent-list time { grid-column: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .dashboard-entry { transition: none; } }

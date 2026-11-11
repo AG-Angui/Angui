@@ -4,10 +4,17 @@ const password = "e2e-demo-password";
 
 async function loginAsFamily(page: Page) {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "邮箱" }).fill("family@demo.invalid");
-  await page.getByRole("textbox", { name: "密码" }).fill(password);
-  await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByRole("heading", { name: "行动总览" })).toBeVisible();
+  await page.getByRole("button", { name: /家属 \/ 知情人/ }).click();
+  const loginDialog = page.getByRole("dialog", { name: "家属 / 知情人登录" });
+  await expect(loginDialog).toBeVisible();
+  await loginDialog
+    .getByRole("textbox", { name: "邮箱" })
+    .fill("family@demo.invalid");
+  await loginDialog.getByRole("textbox", { name: "密码" }).fill(password);
+  await loginDialog.getByRole("button", { name: "登录" }).click();
+  await expect(
+    page.getByRole("heading", { name: "老人走失了？" }),
+  ).toBeVisible();
 }
 
 test.describe("family redesign", () => {
@@ -17,14 +24,14 @@ test.describe("family redesign", () => {
     await loginAsFamily(page);
     await page.goto("/family");
     await expect(
-      page.getByRole("heading", { name: "说清楚情况，安心看进展" }),
+      page.getByRole("heading", { name: "老人走失了？" }),
     ).toBeVisible();
     await page.getByRole("link", { name: /开始求助/ }).click();
     await expect(page).toHaveURL(/\/family\/intake$/);
     await expect(
       page.getByRole("navigation", { name: "建案步骤" }),
     ).toBeVisible();
-    await expect(page.getByText("老人画像预览")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "老人画像预览" }).first()).toBeVisible();
   });
 
   test("family mobile keeps a single-column entry and does not expose command routes", async ({
@@ -36,7 +43,7 @@ test.describe("family redesign", () => {
     await expect(page.getByRole("link", { name: /开始求助/ })).toBeVisible();
     await page.goto("/family/intake");
     await expect(
-      page.getByText("每一步都可标记“不知道”；确认提交前不会创建正式案件。"),
+      page.getByRole("heading", { name: "填写求助信息" }),
     ).toBeVisible();
     await page.goto("/command");
     await expect(page).toHaveURL(/\/$/);

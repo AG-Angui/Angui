@@ -7,7 +7,13 @@ license = "UNLICENSED"
 
 [workspace]
 members = ["migration"]
+exclude = ["vendor/sqlx-sqlite"]
 resolver = "2"
+
+[patch.crates-io]
+# SQLx 0.9.0 caps SQLite below the RUSTSEC-2026-0459 fix.
+# Remove this patch once a published SQLx release supports libsqlite3-sys 0.39.
+sqlx-sqlite = { path = "vendor/sqlx-sqlite" }
 
 [dependencies]
 actix-cors = "0.7.1"
@@ -15,7 +21,7 @@ actix-multipart = "0.7.2"
 # Keep HTTP/2 disabled until Actix HTTP moves to a fixed h2 release.
 # Keep zstd disabled until Actix HTTP supports the patched zstd dependency;
 # Brotli and gzip compression remain available.
-actix-web = { version = "4.14.0", default-features = false, features = [
+actix-web = { version = "4.18.2", default-features = false, features = [
     "macros",
     "compress-brotli",
     "compress-gzip",
@@ -39,13 +45,13 @@ libheif-rs = { version = "2.7.0", default-features = false, features = ["v1_19",
 lettre = { version = "0.11.15", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls", "hostname", "pool"] }
 log = "0.4.29"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "stream"] }
-sea-orm = { version = "2.0.3", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
+sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10.9"
 sha1 = "0.10.6"
 thiserror = "2.0.18"
-tokio = { version = "1.52.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 
 [features]
@@ -54,7 +60,7 @@ heic = ["dep:libheif-rs"]
 
 [dev-dependencies]
 migration = { path = "migration" }
-tokio = { version = "1.52.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
 
 [profile.dev]
 debug = 0

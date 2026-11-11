@@ -84,8 +84,22 @@ function App() {
     );
   }
 
+  // Resolve the unified login entry from the authenticated account, not the
+  // selected identity card. Admins retain the overview; multi-role members
+  // default to command and can switch using the existing workspace navigation.
+  const homePath = user.global_capabilities.includes("admin")
+    ? "/"
+    : user.account_type === "learner"
+      ? "/learning"
+      : user.global_capabilities.includes("commander")
+        ? "/command"
+        : user.global_capabilities.includes("volunteer")
+          ? "/volunteer"
+          : "/family";
+
   return (
     <Routes>
+      <Route path="login" element={<Navigate to={homePath} replace />} />
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
         <Route
